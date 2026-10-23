@@ -20,9 +20,21 @@
 import { fileURLToPath } from "node:url";
 import { HEAVY_GATE_FILES, WALL_CLOCK_HEAVY_FILES } from "./test-partition.mjs";
 import { areAllFailuresEnvironmental, combinePhaseExitCodes, ENVIRONMENTAL_REFUSAL_EXIT } from "./lib/environmental-verdict.mjs";
+import { phaseStatusFor } from "./lib/heavy-receipt.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 export const DEFAULT_HEAVY_GATE_TIMEOUT_MS = 1200_000;
+
+/** The tree this run is attributed to (juubk). Resolved at the START; null if git cannot answer,
+ *  which the receipt writer treats as an unwritable receipt (never a pass). */
+async function currentTreeForReceipt(): Promise<string | null> {
+  try {
+    const mod = await import("./lib/heavy-receipt.mjs");
+    return mod.currentTreeHash();
+  } catch {
+    return null;
+  }
+}
 
 export function filesFor(args: string[] = []): string[] {
   const cliFiles = args.filter((a) => !a.startsWith("-"));
@@ -121,19 +133,37 @@ export async function runHeavyGate(args = Deno.args): Promise<number> {
   const runStart = Date.now();
   const requested = filesFor(args);
   const { parallel, wallClock } = partitionByPhase(requested);
+  // juubk: the tree is captured at the START as well as the end. A worktree that mutated mid-run
+  // cannot attribute these suites to the tree it happens to hold when they finish, so the drift is
+  // recorded and never certifies.
+  const treeStart = await currentTreeForReceipt();
   console.log(`heavy-gate: ${requested.length} heavy test(s) — ${parallel.length} parallel, ${wallClock.length} wall-clock`);
   const timeoutMs = Number(Deno.env.get("CAP_HEAVY_GATE_TIMEOUT_MS") ?? DEFAULT_HEAVY_GATE_TIMEOUT_MS);
 
-  const codes: number[] = [];
+  // Each phase is recorded with the files it ran, so the receipt can name every enumerated suite's
+  // terminal status instead of a bare count (juubk: a 1-suite probe must never certify 19).
+  const phases: { files: string[]; phase: string; code: number }[] = [];
   if (parallel.length) {
-    codes.push(await runPhase("PARALLEL batch", parallel, { parallel: true, timeoutMs, capture: false }));
+    phases.push({
+      files: parallel,
+      phase: "parallel",
+      code: await runPhase("PARALLEL batch", parallel, { parallel: true, timeoutMs, capture: false }),
+    });
   }
   // Wall-clock suites run one at a time, never beside the batch: their assertion is about the box.
   for (const file of wallClock) {
-    codes.push(await runPhase(`WALL-CLOCK ${file}`, [file], { parallel: false, timeoutMs, capture: true }));
+    phases.push({
+      files: [file],
+      phase: "wall-clock",
+      code: await runPhase(`WALL-CLOCK ${file}`, [file], { parallel: false, timeoutMs, capture: true }),
+    });
   }
 
-  const rc = codes.length ? combinePhaseExitCodes(...codes) : 0;
+  const codes = phases.map((p) => p.code);
+  let rc = codes.length ? combinePhaseExitCodes(...codes) : 0;
+  const suites = phases.flatMap((p) =>
+    p.files.map((file) => ({ file, phase: p.phase, status: phaseStatusFor(p.code) }))
+  );
 
   // chrome-agent-platform-upqhp: every tier run writes a receipt for the exact tree it ran on
   // (keyed by TREE hash). The gate-command stage (`node scripts/gate-receipt.mjs`) fails closed without a
@@ -145,24 +175,36 @@ export async function runHeavyGate(args = Deno.args): Promise<number> {
   // run cannot masquerade as a clean class.
   try {
     const mod = await import("./lib/heavy-receipt.mjs");
-    const tree = mod.currentTreeHash();
+    if (!treeStart) throw new Error("could not resolve this tree at the START of the run");
     const argv = ["deno", "run", "-A", "scripts/heavy-gate.ts", ...args];
+    const cliArgs = args.filter((a) => !a.startsWith("-"));
     const written = mod.writeHeavyReceipt({
-      tree,
+      tree: treeStart,
+      treeEnd: mod.currentTreeHash(),
       commit: mod.currentCommitSha(),
       result: rc === 0 ? "pass" : rc === ENVIRONMENTAL_REFUSAL_EXIT ? "refusal" : "fail",
       command: argv.join(" "),
+      args: cliArgs,
       exitCode: rc,
       logPath: Deno.env.get("HEAVY_GATE_LOG_PATH") ?? null,
-      suites: requested.length,
+      suites,
+      dirty: mod.dirtyTrackedPaths(),
       startedAt: runStart,
       finishedAt: Date.now(),
     });
-    console.log(`heavy-gate: receipt ${rc === 0 ? "written" : "recorded (not a pass)"}: ${written.path}`);
+    const recorded = written.receipt.result;
+    console.log(
+      `heavy-gate: receipt ${recorded === "pass" ? "written" : `recorded as ${recorded} (not a pass)`}: ${written.path}` +
+        `${written.preserved ? " — an earlier passing receipt for this tree was preserved" : ""}`,
+    );
+    if (written.preserved) {
+      console.error(`heavy-gate: this run did NOT replace the certifying receipt already on disk for tree ${treeStart.slice(0, 12)} (juubk).`);
+    }
   } catch (error) {
-    // A receipt-write failure must not corrupt a GREEN tier verdict, but it must be loud: the
-    // gate will refuse to certify this tree later, and the operator needs to know why.
-    console.error(`heavy-gate: FAILED TO WRITE HEAVY RECEIPT (${error instanceof Error ? error.message : String(error)}) — the gate will refuse to certify this tree until a receipt exists (upqhp).`);
+    // juubk: a receipt-write failure must not be a successful producer exit. A green tier with no
+    // receipt looks certified to the operator and refuses at the gate, with the reason lost.
+    console.error(`heavy-gate: FAILED TO WRITE HEAVY RECEIPT (${error instanceof Error ? error.message : String(error)}) — the gate will refuse to certify this tree until a receipt exists (upqhp), so this run is reported as a failure rather than a pass.`);
+    if (rc === 0) rc = 1;
   }
 
   if (rc === 0) {

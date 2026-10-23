@@ -1,36 +1,75 @@
-// Heavy-tier receipt tests (chrome-agent-platform-upqhp).
+// Heavy-tier receipt tests (chrome-agent-platform-upqhp + juubk).
 //
-// The gate fails closed without a fresh passing heavy receipt for the exact tree being
-// certified, so these tests pin every branch of checkHeavyReceipt plus the two wirings:
-// heavy-gate writes a receipt for every outcome, and the gate command invokes the check.
+// The gate fails closed without a fresh, COMPLETE, passing heavy receipt for the exact tree being
+// certified, so these tests pin every branch of checkHeavyReceipt and every way the writer can be
+// tricked into minting a certifying receipt for work that did not happen:
 //
-// ISOLATION: receipts are content-addressed by git tree hash, so these tests mint their own
-// RANDOM 40-hex tree per test and remove the files they wrote in a finally. That keeps every
-// test independent (no order, no machine state, no files another lane's concurrent run of this
-// same file is touching) without mutating the parent process's durable root at all — a test
-// that does that races parallel suites, which is why tests/durable-root.test.ts fails the gate
-// on the pattern (bead zuo0i).
+//   upqhp — the receipt exists, is keyed to the tree, and the gate refuses without it;
+//   juubk — completeness (a subset run can never certify), per-suite terminal statuses, tree
+//           fidelity across the run, a dirty worktree, atomic write, immutability of a certifying
+//           receipt, and a write failure that cannot read as a pass.
+//
+// ISOLATION: receipts are content-addressed by git tree hash, so each test mints its own RANDOM
+// 40-hex tree id and removes exactly what it wrote in a finally. That keeps every test independent
+// (no order, no machine state, and two concurrent runs of this file cannot collide on a path)
+// without mutating the parent process's durable root — a test that does that races parallel suites,
+// which is why tests/durable-root.test.ts fails the gate on the pattern (bead zuo0i).
 
 import { assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
-import { rmSync } from "node:fs";
-import { join } from "node:path";
+import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   DEFAULT_RECEIPT_MAX_AGE_MS,
+  RECEIPT_FUTURE_SKEW_MS,
+  RECEIPT_VERSION,
   checkHeavyReceipt,
+  expectedHeavyFiles,
   receiptPath,
   writeHeavyReceipt,
 } from "../scripts/lib/heavy-receipt.mjs";
 
 const ROOT = join(fileURLToPath(import.meta.url), "..", "..");
 
-/** A random 40-hex tree id. Unique per test, so two concurrent runs of this file cannot collide
- *  on a receipt path, and no real commit tree is ever named. */
+/** A random 40-hex tree id. Unique per test, so two concurrent runs of this file cannot collide on
+ *  a receipt path, and no real commit tree is ever named. */
 function randomTree(): string {
   return Array.from(crypto.getRandomValues(new Uint8Array(20)), (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-/** Each test gets as many tree ids as it needs; every receipt file it writes is removed in the
+/** The complete, all-green suite ledger for the tree's enumerated heavy set. */
+function completeSuites(): { file: string; phase: string; status: string }[] {
+  return expectedHeavyFiles().map((file) => ({ file, phase: "parallel", status: "passed" }));
+}
+
+/** A receipt body that WOULD certify if the fields were honest. */
+function certifyingBody(tree: string, overrides: Record<string, unknown> = {}) {
+  return {
+    version: RECEIPT_VERSION,
+    tree,
+    treeEnd: tree,
+    commit: "491316ec6",
+    result: "pass",
+    claimed: "pass",
+    complete: true,
+    exitCode: 0,
+    command: "deno run -A scripts/heavy-gate.ts",
+    args: [],
+    suites: completeSuites(),
+    expected: expectedHeavyFiles(),
+    covered: expectedHeavyFiles(),
+    missing: [],
+    skipped: [],
+    producer: "chrome-agent-platform-imp-rec",
+    host: "test-host",
+    startedAt: NOW - 1000,
+    finishedAt: NOW,
+    logPath: "cap-evidence/logs/heavy-gate.log",
+    ...overrides,
+  };
+}
+
+/** Each test gets as many tree ids as it needs; every receipt file it wrote is removed in the
  *  finally, even when an assertion throws. */
 function withReceipts(fn: (nextTree: () => string) => void | Promise<void>) {
   return async () => {
@@ -43,38 +82,59 @@ function withReceipts(fn: (nextTree: () => string) => void | Promise<void>) {
     try {
       await fn(nextTree);
     } finally {
-      for (const tree of minted) rmSync(receiptPath(tree), { force: true });
+      for (const tree of minted) {
+        rmSync(receiptPath(tree), { force: true, recursive: true });
+        // A killed atomic write must not leave a temp sibling behind either.
+        for (const entry of safeReaddir(dirname(receiptPath(tree)))) {
+          if (entry.startsWith(`${basename(receiptPath(tree))}.`)) rmSync(join(dirname(receiptPath(tree)), entry), { force: true });
+        }
+      }
     }
   };
 }
 
+function safeReaddir(dir: string): string[] {
+  try {
+    return readdirSync(dir);
+  } catch {
+    return [];
+  }
+}
+
+/** The named refusal line a check returns (`line` is absent on the certifying branch by type). */
+function refusalLine(verdict: { line?: string }): string {
+  return verdict.line ?? "";
+}
+
 const NOW = 1_800_000_000_000;
 
-Deno.test("upqhp: a passing receipt for the exact tree certifies it", withReceipts(async (nextTree) => {
+Deno.test("upqhp: a complete passing receipt for the exact tree certifies it", withReceipts(async (nextTree) => {
   const TREE = nextTree();
-  const { path } = writeHeavyReceipt({
+  const { path, receipt } = writeHeavyReceipt({
     tree: TREE,
+    treeEnd: TREE,
     commit: "491316ec6",
     result: "pass",
     command: "deno run -A scripts/heavy-gate.ts",
+    args: [],
     exitCode: 0,
     logPath: "cap-evidence/logs/heavy-gate.log",
-    suites: 19,
-    producer: "chrome-agent-platform-scale2",
+    suites: completeSuites(),
+    producer: "chrome-agent-platform-imp-rec",
     startedAt: NOW - 1000,
     finishedAt: NOW,
   });
   assertEquals(path, receiptPath(TREE));
+  assertEquals(receipt.complete, true);
   const verdict = checkHeavyReceipt(TREE, { now: NOW });
-  assertEquals(verdict.ok, true);
-  const receipt = verdict.receipt as Record<string, unknown>;
-  assertEquals(receipt.result, "pass");
-  assertEquals(receipt.commit, "491316ec6");
-  assertEquals(receipt.producer, "chrome-agent-platform-scale2");
-  assertEquals(receipt.suites, 19);
-  // coord condition (upqhp): the receipt records the EXACT command and result.
-  assertEquals(receipt.command, "deno run -A scripts/heavy-gate.ts");
-  assertEquals(receipt.exitCode, 0);
+  assertEquals(verdict.ok, true, refusalLine(verdict));
+  const stored = verdict.receipt as Record<string, unknown>;
+  // coord condition (upqhp): the receipt records the EXACT command and raw result.
+  assertEquals(stored.command, "deno run -A scripts/heavy-gate.ts");
+  assertEquals(stored.exitCode, 0);
+  assertEquals(stored.version, RECEIPT_VERSION);
+  // juubk: the covered set is enumerated, not a count.
+  assertEquals((stored.covered as string[]).length, expectedHeavyFiles().length);
 }));
 
 Deno.test("upqhp falsifier: a tree with no receipt is refused, never silently skipped", withReceipts(async (nextTree) => {
@@ -83,25 +143,21 @@ Deno.test("upqhp falsifier: a tree with no receipt is refused, never silently sk
   assertEquals(verdict.ok, false);
   assertEquals(verdict.reason, "missing");
   assertEquals(verdict.marker, "HEAVY_RECEIPT_REFUSAL");
-  assertStringIncludes(verdict.line, "HEAVY RECEIPT MISSING");
-  assertStringIncludes(verdict.line, TREE.slice(0, 12));
+  assertStringIncludes(refusalLine(verdict), "HEAVY RECEIPT MISSING");
+  assertStringIncludes(refusalLine(verdict), TREE.slice(0, 12));
 }));
 
 Deno.test("upqhp falsifier: a receipt for a DIFFERENT tree does not certify", withReceipts(async (nextTree) => {
-  // Content addressing: a receipt for another tree simply does not exist at this tree's path,
-  // so the honest refusal is "missing". The tree-mismatch branch guards a hand-mislabeled
-  // file — a receipt whose FILENAME claims tree A but whose contents claim tree B.
+  // Content addressing: a receipt for another tree simply does not exist at this tree's path, so
+  // the honest refusal is "missing". The tree-mismatch branch guards a hand-mislabeled file — a
+  // receipt whose FILENAME claims tree A but whose contents claim tree B.
   const TREE = nextTree();
-  writeHeavyReceipt({ tree: nextTree(), commit: "x", result: "pass", finishedAt: NOW });
+  writeHeavyReceipt({ tree: nextTree(), result: "pass", suites: completeSuites(), finishedAt: NOW });
   const otherTree = checkHeavyReceipt(TREE, { now: NOW });
   assertEquals(otherTree.ok, false);
   assertEquals(otherTree.reason, "missing");
 
-  writeHeavyReceipt({ tree: TREE, commit: "x", result: "pass", finishedAt: NOW });
-  const path = receiptPath(TREE);
-  const mislabeled = JSON.parse(Deno.readTextFileSync(path));
-  mislabeled.tree = nextTree();
-  Deno.writeTextFileSync(path, JSON.stringify(mislabeled));
+  writeFileSync(receiptPath(TREE), JSON.stringify(certifyingBody(TREE, { tree: nextTree() })));
   const mismatch = checkHeavyReceipt(TREE, { now: NOW });
   assertEquals(mismatch.ok, false);
   assertEquals(mismatch.reason, "tree-mismatch");
@@ -109,9 +165,9 @@ Deno.test("upqhp falsifier: a receipt for a DIFFERENT tree does not certify", wi
 }));
 
 Deno.test("upqhp falsifier: a refused or failed tier run does not certify", withReceipts(async (nextTree) => {
-  const TREE = nextTree();
   for (const result of ["refusal", "fail"] as const) {
-    writeHeavyReceipt({ tree: TREE, commit: "x", result, finishedAt: NOW });
+    const TREE = nextTree();
+    writeHeavyReceipt({ tree: TREE, result, suites: completeSuites(), finishedAt: NOW });
     const verdict = checkHeavyReceipt(TREE, { now: NOW });
     assertEquals(verdict.ok, false, `result "${result}" must not certify`);
     assertEquals(verdict.reason, `not-pass:${result}`);
@@ -120,40 +176,188 @@ Deno.test("upqhp falsifier: a refused or failed tier run does not certify", with
 
 Deno.test("upqhp: a receipt older than the window is refused as stale", withReceipts(async (nextTree) => {
   const TREE = nextTree();
-  writeHeavyReceipt({ tree: TREE, commit: "x", result: "pass", finishedAt: NOW - DEFAULT_RECEIPT_MAX_AGE_MS - 1000 });
+  writeHeavyReceipt({ tree: TREE, result: "pass", args: [], exitCode: 0, suites: completeSuites(), finishedAt: NOW - DEFAULT_RECEIPT_MAX_AGE_MS - 1000 });
   const stale = checkHeavyReceipt(TREE, { now: NOW });
   assertEquals(stale.ok, false);
   assertEquals(stale.reason, "stale");
   // And inside the window it certifies.
-  writeHeavyReceipt({ tree: TREE, commit: "x", result: "pass", finishedAt: NOW - 1000 });
+  writeHeavyReceipt({ tree: TREE, result: "pass", args: [], exitCode: 0, suites: completeSuites(), finishedAt: NOW - 1000 });
   assertEquals(checkHeavyReceipt(TREE, { now: NOW }).ok, true);
 }));
 
 Deno.test("upqhp: a MALFORMED receipt is refused and the message names the expected tree", withReceipts(async (nextTree) => {
   const TREE = nextTree();
-  const path = receiptPath(TREE);
-  Deno.writeTextFileSync(path, "{not json at all");
+  writeFileSync(receiptPath(TREE), "{not json at all");
   const verdict = checkHeavyReceipt(TREE, { now: NOW });
   assertEquals(verdict.ok, false);
   assertEquals(verdict.reason, "unreadable");
   assertEquals(verdict.marker, "HEAVY_RECEIPT_REFUSAL");
-  assertStringIncludes(verdict.line, TREE.slice(0, 12));
+  assertStringIncludes(refusalLine(verdict), TREE.slice(0, 12));
 }));
 
 Deno.test("upqhp: an undatable receipt is refused rather than guessed", withReceipts(async (nextTree) => {
   const TREE = nextTree();
-  writeHeavyReceipt({ tree: TREE, commit: "x", result: "pass", finishedAt: NOW });
-  // Corrupt the timestamp the way a half-written file would lose it.
-  const path = receiptPath(TREE);
-  const parsed = JSON.parse(Deno.readTextFileSync(path));
-  delete parsed.finishedAt;
-  Deno.writeTextFileSync(path, JSON.stringify(parsed));
+  const body = certifyingBody(TREE);
+  delete (body as Record<string, unknown>).finishedAt;
+  writeFileSync(receiptPath(TREE), JSON.stringify(body));
   const verdict = checkHeavyReceipt(TREE, { now: NOW });
   assertEquals(verdict.ok, false);
   assertEquals(verdict.reason, "no-timestamp");
 }));
 
-Deno.test("upqhp: the writer refuses to mint a receipt with an invalid result", withReceipts(async (nextTree) => {
+Deno.test("juubk falsifier: a ONE-FILE subset run can never certify, even when it passed", withReceipts(async (nextTree) => {
+  // The measured hole this bead closes: `filesFor()` accepts argv, so a single-file run is legal,
+  // and v1 wrote result:pass for it — a probe could then certify the other enumerated suites.
+  const TREE = nextTree();
+  const probe = expectedHeavyFiles()[0];
+  const { receipt } = writeHeavyReceipt({
+    tree: TREE,
+    result: "pass",
+    args: [probe],
+    exitCode: 0,
+    suites: [{ file: probe, phase: "parallel", status: "passed" }],
+    finishedAt: NOW,
+  });
+  assertEquals(receipt.result, "subset", "a subset run must be recorded as subset, never pass");
+  assertEquals(receipt.complete, false);
+  const verdict = checkHeavyReceipt(TREE, { now: NOW });
+  assertEquals(verdict.ok, false);
+  assertEquals(verdict.reason, "not-pass:subset");
+}));
+
+Deno.test("juubk falsifier: a pass claim with an unrun suite is downgraded and refused", withReceipts(async (nextTree) => {
+  const TREE = nextTree();
+  const short = completeSuites().slice(0, -1); // one enumerated suite never ran
+  const { receipt } = writeHeavyReceipt({ tree: TREE, result: "pass", args: [], exitCode: 0, suites: short, finishedAt: NOW });
+  assertEquals(receipt.complete, false);
+  assertEquals(receipt.missing, [expectedHeavyFiles().at(-1)]);
+  assertEquals(checkHeavyReceipt(TREE, { now: NOW }).ok, false);
+
+  // And a receipt that CLAIMS completion while a suite is unrun is refused at the gate too,
+  // because the gate recomputes the set from the tree's taxonomy rather than trusting the flag.
+  writeFileSync(
+    receiptPath(TREE),
+    JSON.stringify(certifyingBody(TREE, { covered: short, suites: short })),
+  );
+  const verdict = checkHeavyReceipt(TREE, { now: NOW });
+  assertEquals(verdict.ok, false);
+  assertEquals(verdict.reason, "coverage-mismatch");
+  assertStringIncludes(refusalLine(verdict), expectedHeavyFiles().at(-1) as string);
+}));
+
+Deno.test("juubk falsifier: a killed, refused, failed or unknown suite blocks certification", withReceipts(async (nextTree) => {
+  for (const status of ["killed", "refused", "failed", "unknown"]) {
+    const TREE = nextTree();
+    const suites = completeSuites();
+    suites[0] = { ...suites[0], status };
+    writeFileSync(receiptPath(TREE), JSON.stringify(certifyingBody(TREE, { suites })));
+    const verdict = checkHeavyReceipt(TREE, { now: NOW });
+    assertEquals(verdict.ok, false, `a "${status}" suite must not certify`);
+    assertEquals(verdict.reason, "incomplete-suites");
+    assertStringIncludes(refusalLine(verdict), `${suites[0].file} (${status})`);
+  }
+}));
+
+Deno.test("juubk falsifier: a worktree that mutated mid-run is recorded as drift, never a pass", withReceipts(async (nextTree) => {
+  const TREE = nextTree();
+  const { receipt } = writeHeavyReceipt({
+    tree: TREE,
+    treeEnd: nextTree(), // the tree changed while the suites ran
+    result: "pass",
+    args: [],
+    exitCode: 0,
+    suites: completeSuites(),
+    finishedAt: NOW,
+  });
+  assertEquals(receipt.result, "drift");
+  assertEquals(receipt.complete, false);
+  assertEquals(checkHeavyReceipt(TREE, { now: NOW }).reason, "not-pass:drift");
+}));
+
+Deno.test("juubk falsifier: a certifying receipt is never replaced by a weaker run", withReceipts(async (nextTree) => {
+  const TREE = nextTree();
+  writeHeavyReceipt({ tree: TREE, result: "pass", args: [], exitCode: 0, suites: completeSuites(), finishedAt: NOW });
+  assertEquals(checkHeavyReceipt(TREE, { now: NOW }).ok, true);
+
+  const second = writeHeavyReceipt({ tree: TREE, result: "fail", exitCode: 1, suites: completeSuites(), finishedAt: NOW + 1 });
+  assertEquals(second.preserved, true, "the weaker run must not overwrite the certifying receipt");
+  const verdict = checkHeavyReceipt(TREE, { now: NOW + 2 });
+  assertEquals(verdict.ok, true);
+  assertEquals((verdict.receipt as Record<string, unknown>).result, "pass");
+}));
+
+Deno.test("juubk falsifier: an unwritable receipt throws and leaves no temp file behind", withReceipts(async (nextTree) => {
+  const TREE = nextTree();
+  // A DIRECTORY at the receipt path makes the atomic rename fail, which is how a full disk or a
+  // permission change surfaces here. The write must throw (the producer then exits non-zero) and
+  // must not leave a half-written temp sibling that a later reader could parse.
+  mkdirSync(receiptPath(TREE), { recursive: true });
+  let threw: unknown = null;
+  try {
+    writeHeavyReceipt({ tree: TREE, result: "pass", args: [], exitCode: 0, suites: completeSuites(), finishedAt: NOW });
+  } catch (error) {
+    threw = error;
+  }
+  assertEquals(threw !== null, true, "an unwritable receipt must throw, not silently succeed");
+  const leftovers = safeReaddir(dirname(receiptPath(TREE))).filter((entry) => entry.startsWith(`${basename(receiptPath(TREE))}.`));
+  assertEquals(leftovers, [], `atomic write left temp file(s) behind: ${leftovers.join(", ")}`);
+  // And the gate refuses this tree rather than reading the directory as a receipt.
+  assertEquals(checkHeavyReceipt(TREE, { now: NOW }).ok, false);
+}));
+
+Deno.test("juubk falsifier: a run from a DIRTY worktree never certifies", withReceipts(async (nextTree) => {
+  const TREE = nextTree();
+  // The suites ran against bytes that are not in the tree hash the gate checks.
+  const { receipt } = writeHeavyReceipt({
+    tree: TREE,
+    result: "pass",
+    args: [],
+    exitCode: 0,
+    suites: completeSuites(),
+    dirty: ["scripts/heavy-gate.ts"],
+    finishedAt: NOW,
+  });
+  assertEquals(receipt.complete, false);
+  assertEquals(receipt.result, "fail");
+  assertEquals(checkHeavyReceipt(TREE, { now: NOW }).ok, false);
+
+  // And a receipt that claims completion while recording uncommitted content is refused by name.
+  writeFileSync(receiptPath(TREE), JSON.stringify(certifyingBody(TREE, { dirty: ["scripts/lib/heavy-receipt.mjs"] })));
+  const verdict = checkHeavyReceipt(TREE, { now: NOW });
+  assertEquals(verdict.ok, false);
+  assertEquals(verdict.reason, "dirty");
+  assertStringIncludes(refusalLine(verdict), "scripts/lib/heavy-receipt.mjs");
+}));
+
+Deno.test("juubk falsifier: a legacy v1 receipt (a suite COUNT, no set) cannot certify", withReceipts(async (nextTree) => {
+  const TREE = nextTree();
+  writeFileSync(
+    receiptPath(TREE),
+    JSON.stringify({ version: 1, tree: TREE, commit: "x", result: "pass", exitCode: 0, suites: 19, finishedAt: NOW }),
+  );
+  const verdict = checkHeavyReceipt(TREE, { now: NOW });
+  assertEquals(verdict.ok, false);
+  assertEquals(verdict.reason, "wrong-version");
+  assertStringIncludes(refusalLine(verdict), TREE.slice(0, 12));
+}));
+
+Deno.test("juubk falsifier: a receipt dated in the FUTURE is refused (unverifiable clock)", withReceipts(async (nextTree) => {
+  const TREE = nextTree();
+  writeFileSync(receiptPath(TREE), JSON.stringify(certifyingBody(TREE, { finishedAt: NOW + RECEIPT_FUTURE_SKEW_MS + 1000 })));
+  const verdict = checkHeavyReceipt(TREE, { now: NOW });
+  assertEquals(verdict.ok, false);
+  assertEquals(verdict.reason, "future");
+}));
+
+Deno.test("juubk falsifier: a certifying receipt must record a raw zero exit", withReceipts(async (nextTree) => {
+  const TREE = nextTree();
+  writeFileSync(receiptPath(TREE), JSON.stringify(certifyingBody(TREE, { exitCode: 1 })));
+  const verdict = checkHeavyReceipt(TREE, { now: NOW });
+  assertEquals(verdict.ok, false);
+  assertEquals(verdict.reason, "raw-rc");
+}));
+
+Deno.test("juubk: the writer refuses to mint a receipt with an invalid result", withReceipts(async (nextTree) => {
   const TREE = nextTree();
   let threw: unknown = null;
   try {
@@ -164,32 +368,38 @@ Deno.test("upqhp: the writer refuses to mint a receipt with an invalid result", 
   assertEquals(threw !== null, true, "invalid result must throw");
 }));
 
-Deno.test("upqhp wiring: the receipt check is a gate-command stage, not an npm-test stage", () => {
+Deno.test("upqhp/juubk wiring: the receipt stays out of npm test, and the producer owns completeness", () => {
   // Learned on 92157a0e5's first fast gate: the fast gate escalates machinery changes (edits to
   // run-tests.mjs) to the FULL suite, so a receipt demand inside npm test turns every machinery
   // change into a 40-minute tier gate. The check therefore lives in scripts/gate-receipt.mjs and
   // is invoked by the gate command directly: `node scripts/gate-receipt.mjs`.
-  const runTests = Deno.readTextFileSync(join(ROOT, "scripts", "run-tests.mjs"));
+  const runTests = readFileSync(join(ROOT, "scripts", "run-tests.mjs"), "utf8");
   assertEquals(runTests.includes("checkHeavyReceipt"), false, "run-tests must not demand receipts (fast-gate escalation would multiply tier cost)");
-  // NOT an npm script, deliberately (measured on 1b1a8d3's fast gate, 2026-10-23): select-tests
-  // FAILS CLOSED on any package.json edit ("release/version JSON belongs to the merger; a lane
-  // change here cannot be subset-certified") and escalates the fast tier to the FULL suite, which
-  // then dies at the lane's bound with no verdict. A one-line npm alias is not worth making every
-  // future receipt change un-certifiable, so the gate command names this file instead.
-  const pkg = JSON.parse(Deno.readTextFileSync(join(ROOT, "package.json")));
+  // NOT an npm script, deliberately: select-tests FAILS CLOSED on any package.json edit
+  // ("release/version JSON belongs to the merger; a lane change here cannot be subset-certified")
+  // and escalates the fast tier to the FULL suite, which then dies at the lane's bound with no
+  // verdict. A one-line npm alias is not worth making every future receipt change un-certifiable.
+  const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
   assertEquals(pkg.scripts["gate:receipt"], undefined, "the receipt stage is invoked by path, not through an npm alias (a package.json edit cannot be fast-certified)");
-  assertEquals(Deno.statSync(join(ROOT, "scripts", "gate-receipt.mjs")).isFile, true);
-  const stage = Deno.readTextFileSync(join(ROOT, "scripts", "gate-receipt.mjs"));
-  assertStringIncludes(stage, "checkHeavyReceipt(tree)");
+  const stage = readFileSync(join(ROOT, "scripts", "gate-receipt.mjs"), "utf8");
+  assertStringIncludes(stage, "checkHeavyReceipt(tree");
   assertStringIncludes(stage, "HEAVY_RECEIPT_REFUSAL");
   assertStringIncludes(stage, "process.exit(2)");
+  assertStringIncludes(stage, "expectedHeavyFiles()");
   // The named refusal contract lives in the library the stage consumes.
-  const receiptLib = Deno.readTextFileSync(join(ROOT, "scripts", "lib", "heavy-receipt.mjs"));
+  const receiptLib = readFileSync(join(ROOT, "scripts", "lib", "heavy-receipt.mjs"), "utf8");
   assertStringIncludes(receiptLib, "HEAVY_RECEIPT_REFUSAL");
-  // The tier run is the producer: every heavy-gate outcome writes its receipt.
-  const heavyGate = Deno.readTextFileSync(join(ROOT, "scripts", "heavy-gate.ts"));
+  assertStringIncludes(receiptLib, "renameSync", "the receipt write must be atomic (juubk)");
+  // The tier run is the producer: every outcome is recorded, the tree is captured at BOTH ends,
+  // and the per-suite ledger comes from the phases that actually ran.
+  const heavyGate = readFileSync(join(ROOT, "scripts", "heavy-gate.ts"), "utf8");
   assertStringIncludes(heavyGate, "writeHeavyReceipt({");
   assertStringIncludes(heavyGate, "result: rc === 0 ? \"pass\" : rc === ENVIRONMENTAL_REFUSAL_EXIT ? \"refusal\" : \"fail\"");
   assertStringIncludes(heavyGate, "command: argv.join(\" \")");
   assertStringIncludes(heavyGate, "exitCode: rc");
+  assertStringIncludes(heavyGate, "treeEnd: mod.currentTreeHash()");
+  assertStringIncludes(heavyGate, "args: cliArgs");
+  assertStringIncludes(heavyGate, "suites,");
+  assertStringIncludes(heavyGate, "dirty: mod.dirtyTrackedPaths()");
+  assertStringIncludes(heavyGate, "if (rc === 0) rc = 1;", "an unwritable receipt must not leave a successful producer exit (juubk)");
 });
