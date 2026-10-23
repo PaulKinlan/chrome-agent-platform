@@ -132,10 +132,13 @@ const REAL_READINESS_TIMERS: AppReadinessTimers = {
 };
 
 /**
- * The TOTAL ceiling used when a caller names none — unchanged from the pre-dnqyt behaviour.
- * dnqyt did not move it: a call site that needs a longer worst case opts in with `maxTotalMs`
- * and measurements (see tests/w51r-create-click.test.ts), so no caller's worst-case latency
- * changes silently.
+ * The TOTAL ceiling used when a caller names none — 10000 ms, unchanged from the pre-dnqyt behaviour.
+ *
+ * It stays the ceiling. A harness that needs to tolerate a loaded machine does NOT get that by opting into a
+ * bigger constant here: it computes its own budget at the wait with `serialFileTimeoutMs({ base, loadPerCpu })`
+ * (see tests/w51r-create-click.test.ts, whose `readyBudget()` is 10000 ms scaled by the load per CPU, up to
+ * MAX_LOAD_SCALE = 4 => 40000 ms), and passes that as `timeoutMs`. So the number a red reports is always the
+ * number the wait actually used, and no caller's worst-case latency changes silently.
  */
 export const DEFAULT_READINESS_TIMEOUT_MS = 10000;
 
@@ -153,9 +156,11 @@ export interface AppReadinessOptions {
    */
   stallMs?: number;
   /**
-   * Explicit opt-in to a LONGER total ceiling than `timeoutMs`, for a call site that has
-   * measurements showing the default ceiling is too tight (w51r does, with numbers). Default:
-   * timeoutMs, i.e. no extension at all.
+   * Explicit opt-in to a LONGER total ceiling than `timeoutMs`. The option exists so a call site CAN raise the
+   * ceiling deliberately, but NO call site uses it today: w51r used to, and now computes a load-aware
+   * `timeoutMs` instead (see DEFAULT_READINESS_TIMEOUT_MS above). Raising the ceiling for a real worst case is a
+   * decision for the operator with measurements behind it, not a harness constant. Default: timeoutMs, i.e. no
+   * extension at all.
    */
   maxTotalMs?: number;
   pollIntervalMs?: number;
