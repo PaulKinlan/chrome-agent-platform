@@ -236,4 +236,20 @@ When landing a branch that changes DOM structure, element selectors, or shared c
      `for c in $(git log --format=%H origin/X ^origin/main); do git show --stat $c; done`
      Confirm that each commit's distinctive behavior, helpers, or notes are present on main rather than dropped during union authoring.
 
+---
+
+## 7. The Form of a Clearance: Verdict Comments Are the Wire Format (chrome-agent-platform-im14e)
+
+Three landings on 2026-10-23 stalled on clearance FORM alone, with no code defect involved. A clearance is a machine-parsed record, not prose or a mood — `fleet-land-message` reads the verdict comment's field lines and matches them structurally against the branch it was handed. The rules, each paid for with a round trip:
+
+1. **Verdict comments are the wire format.** Labels are only a cross-check. A verdict comment must contain the field lines, at minimum `Pinned sha: <sha>` and `Delta: <merge-base>..<sha>`.
+2. **The verdict must name the branch that will be merged.** The parser matches the branch string in the verdict against the branch handed to it. A verdict naming `fleet/fixer-dfif5` cannot clear a merge of `fleet/fixer`.
+3. **The pinned sha must equal that branch's tip.** A pinned sha that is an ancestor (a "logical" pin) is refused as tip-moved/STALE: resolution is structural, not historical. If the branch moves after the verdict, the verdict is dead — get a new one naming the new tip.
+4. **A `cleared:` label must not name a sha the branch tip does not have.** If clearance will be given against a future UNION tree, post no `cleared:` label at all — the union gate produces the tree, and the verdict on the branch supplies the delta.
+5. **Renaming or splitting a branch invalidates every verdict that names the old name.** When a branch is split, each new branch needs its own verdict naming the new branch string, even if the commits are unchanged. This is the 3li6g/dfif5 split case: a verdict naming `fleet/fixer` died the moment `fleet/fixer` pointed at a different tip, although the pinned commit itself was correct.
+
+Worked examples that resolved first try: b9dtq's `Pinned sha: 73f6809c6` on `fleet/reach2-b9dtq` (tip match), and dfif5's `Pinned sha: 21f836950` on `fleet/fixer-dfif5` (tip match). When writing a verdict, re-read rules 2 and 3 against the CURRENT branch state at the moment of landing — pins are checked structurally at merge time, not at review time.
+
+---
+
 
