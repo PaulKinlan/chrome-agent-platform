@@ -16,8 +16,9 @@
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { certificationGaps, parallelPlan } from "../scripts/lib/parallel-plan.mjs";
 import { fullTierManifestFields } from "../scripts/lib/gate-manifest.mjs";
+import { fileURLToPath } from "node:url";
 
-const ROOT = new URL("../", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("../", import.meta.url));
 
 function runChild(env: Record<string, string>, cli: string[] = []) {
   const command = new Deno.Command(Deno.execPath(), {
