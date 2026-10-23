@@ -4,7 +4,7 @@
   "version": "0.3.739",
   "private": true,
   "type": "module",
-  "description": "Chrome as the agent platform — agent hub, WebMCP tool directory, sites-as-sub-agents, OPFS memory, alarms.",
+  "description": "Chrome as the agent platform \u2014 agent hub, WebMCP tool directory, sites-as-sub-agents, OPFS memory, alarms.",
   "scripts": {
     "build": "node build.mjs --target=developer",
     "build:debug": "node build.mjs --target=developer",
@@ -24,6 +24,7 @@
     "test:heavy": "deno run -A scripts/heavy-gate.ts",
     "test:changed": "node scripts/select-tests.mjs",
     "gate:fast": "node scripts/select-tests.mjs --build-if-needed",
+    "gate:receipt": "node scripts/gate-receipt.mjs",
     "test:file": "CAP_TEST_RUNNER=1 deno test -A --config deno.runner.jsonc",
     "test:chrome": "deno run -A scripts/chrome-journeys.ts",
     "test:agent-access": "deno run -A scripts/agent-access-journeys.ts",
