@@ -783,3 +783,112 @@ Deno.test("z4tzw: APP_READY_EXPRESSION tests default providers section hydration
   assertEquals(readyRes.ready, true);
   assertEquals(readyRes.signal, "options-hydrated");
 });
+
+// ---------------------------------------------------------------------------
+// dnqyt: the readiness budget is a NO-PROGRESS bound, not a stopwatch on the whole wait.
+//
+// Measured on this VM with the real extension (scratch probe, not committed): NTP hydration
+// reports `jobsBoard` at ~3.8s and `namedHydrated` at ~7.2s on an idle box; with six competing
+// busy loops the same two steps land at ~6.2s and ~12.3s. A fixed 10s budget therefore reds a
+// page that is hydrating perfectly well, and that is exactly the w51r:397 full-gate red. These
+// tests replay the LOADED trace on a driven clock, so they are the same measurement every run.
+// ---------------------------------------------------------------------------
+const LOADED_NTP_TRACE = (nowMs: number) => {
+  if (nowMs >= 12300) return { ready: true, signal: "ntp-hydrated" };
+  if (nowMs >= 6200) {
+    return { ready: false, reason: "ntp hydration pending", jobsBoard: true, namedHydrated: false };
+  }
+  return { ready: false, reason: "ntp hydration pending", jobsBoard: false, namedHydrated: false };
+};
+
+Deno.test("dnqyt: a slow-but-hydrating NTP page passes past the old fixed 10s stopwatch (loaded trace)", async () => {
+  const timers = fakeTimers();
+  const startedAt = timers.now();
+  const res = await onFakeClock(
+    () => waitForAppReady(() => Promise.resolve(LOADED_NTP_TRACE(timers.now())), {
+      timeoutMs: 10000,
+      pollIntervalMs: 100,
+      surfaceName: "NTP Hub",
+      timers,
+    }),
+    timers,
+  );
+  const elapsed = timers.now() - startedAt;
+
+  assertEquals(res.ready, true);
+  assertEquals(res.signal, "ntp-hydrated");
+  assert(elapsed >= 12300, `the hydrated-in-12.3s trace must not fail at 10000ms (took ${elapsed}ms)`);
+  assert(elapsed < 12600, `must proceed as soon as hydration is observed (took ${elapsed}ms)`);
+});
+
+Deno.test("dnqyt: a never-hydrating page still fails closed after ONE no-progress window, not the cap", async () => {
+  const timers = fakeTimers();
+  // The falsifier that must survive: a page whose readiness state never advances is NOT
+  // excused by the progress rule — it reds after a single no-progress window.
+  const evaluate = () =>
+    Promise.resolve({ ready: false, reason: "ntp hydration pending", jobsBoard: true, namedHydrated: false });
+
+  let caught: any = null;
+  const startedAt = timers.now();
+  try {
+    await onFakeClock(
+      () => waitForAppReady(evaluate, { timeoutMs: 8000, maxTotalMs: 100000, pollIntervalMs: 200, surfaceName: "NTP Hub", timers }),
+      timers,
+    );
+  } catch (e) {
+    caught = e;
+  }
+  const elapsed = timers.now() - startedAt;
+
+  assert(caught !== null, "must fail closed when readiness never advances");
+  assert(caught.message.startsWith(APP_NEVER_BECAME_READY), `named failure expected, got: ${caught.message}`);
+  assert(caught.message.includes("NTP Hub"), `must name the surface, got: ${caught.message}`);
+  assert(elapsed >= 8000 && elapsed < 8600, `must stop after one 8000ms window, not the 100000ms cap (took ${elapsed}ms)`);
+});
+
+Deno.test("dnqyt: a page that flaps between two unready states terminates at the hard cap", async () => {
+  const timers = fakeTimers();
+  // Progress that never becomes readiness must not buy an unbounded wait.
+  let probe = 0;
+  const evaluate = () =>
+    Promise.resolve({ ready: false, reason: "ntp hydration pending", jobsBoard: (probe++ % 2) === 0, namedHydrated: false });
+
+  let caught: any = null;
+  const startedAt = timers.now();
+  try {
+    await onFakeClock(
+      () => waitForAppReady(evaluate, { timeoutMs: 5000, maxTotalMs: 20000, pollIntervalMs: 100, surfaceName: "NTP Hub", timers }),
+      timers,
+    );
+  } catch (e) {
+    caught = e;
+  }
+  const elapsed = timers.now() - startedAt;
+
+  assert(caught !== null, "must fail closed rather than wait forever");
+  assert(caught.message.startsWith(APP_NEVER_BECAME_READY), `named failure expected, got: ${caught.message}`);
+  assert(elapsed >= 20000 && elapsed < 20500, `must stop at the 20000ms cap (took ${elapsed}ms)`);
+});
+
+Deno.test("dnqyt: the probe trace records each observation and which ones advanced", async () => {
+  const timers = fakeTimers();
+  const events: Array<{ atMs: number; advanced: boolean; probe: any }> = [];
+  await onFakeClock(
+    () => waitForAppReady(() => Promise.resolve(LOADED_NTP_TRACE(timers.now())), {
+      timeoutMs: 10000,
+      pollIntervalMs: 100,
+      surfaceName: "NTP Hub",
+      timers,
+      onProbe: (e) => events.push({ atMs: e.atMs, advanced: e.advanced, probe: e.probe }),
+    }),
+    timers,
+  );
+
+  assert(events.length >= 3, `every observation must be traced (got ${events.length})`);
+  assertEquals(events[0].advanced, false, "the first probe is the baseline, not progress");
+  const advances = events.filter((e) => e.advanced);
+  assertEquals(advances.length, 2, `exactly the two hydration steps count as progress (got ${advances.length})`);
+  assert(advances[0].atMs >= 6200, `first advance is observed at the jobsBoard step (got ${advances[0].atMs}ms)`);
+  assert(advances[1].atMs >= 12300, `second advance is the ready step (got ${advances[1].atMs}ms)`);
+  assertEquals(events[events.length - 1].probe.ready, true, "the trace ends on the ready observation");
+});

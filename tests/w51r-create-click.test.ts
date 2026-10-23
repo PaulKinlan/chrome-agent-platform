@@ -159,8 +159,28 @@ export async function runW51rCreateClickJourney(options: {
     const wide = await cdp.open(`chrome-extension://${id}/ntp/ntp.html`);
     // Bring tab to front so Chromium routes input events to an active, focused viewport
     await cdp.send("Page.bringToFront", {}, wide.sessionId);
-    // Wait for app hydration so staged boot (Stage 1, 2A, 2B) and event listeners settle
-    await waitForAppReady((expr) => cdp!.eval(wide.sessionId, expr), { surfaceName: "NTP Hub", timeoutMs: readyBudget() });
+    // Wait for app hydration so staged boot (Stage 1, 2A, 2B) and event listeners settle.
+    // dnqyt: the probe trace is written beside the screenshots on failure, so a red says whether
+    // hydration was still ADVANCING (a loaded box — dnqyt) or had stopped (a product regression).
+    // Before this, the fixture recorded only PNGs and could not tell the two apart.
+    const readinessTrace: Array<{ atMs: number; advanced: boolean; probe: unknown }> = [];
+    try {
+      await waitForAppReady((expr) => cdp!.eval(wide.sessionId, expr), {
+        surfaceName: "NTP Hub",
+        timeoutMs: readyBudget(),
+        onProbe: (e) => readinessTrace.push({ atMs: e.atMs, advanced: e.advanced, probe: e.probe }),
+      });
+    } catch (readinessError) {
+      if (evidence) {
+        try {
+          await Deno.writeTextFile(
+            `${evidence}/readiness-probes.json`,
+            JSON.stringify({ error: String((readinessError as Error)?.message ?? readinessError), probes: readinessTrace }, null, 2),
+          );
+        } catch { /* evidence is best effort; never mask the readiness failure */ }
+      }
+      throw readinessError;
+    }
     const state = `(() => { const b=document.getElementById('new-agent'); const h=[...document.querySelectorAll('body > agent-dialog')].find(h=>h.getAttribute('title')==='Create an agent');
       return { ready: document.readyState==='complete', buttonDisplay: b ? getComputedStyle(b).display : null, open: h?.open===true,
         nativeOpen: h?.shadowRoot?.querySelector('dialog')?.open===true, status: document.getElementById('status')?.textContent??null,

@@ -131,14 +131,45 @@ const REAL_READINESS_TIMERS: AppReadinessTimers = {
   clearTimeout: (handle) => clearTimeout(handle),
 };
 
+/**
+ * The no-progress bound used when a caller names none (dnqyt). The measured NTP-hydration
+ * trace on this VM: idle, `jobsBoard` appears at ~3.8s and `namedHydrated` at ~7.2s; with six
+ * competing busy loops the same two steps land at ~6.2s and ~12.3s. The largest gap between
+ * observed advances is therefore ~6.1s, and this bound keeps ~5x headroom over it while still
+ * failing closed in bounded time on a page whose readiness genuinely stops reporting progress.
+ */
+export const DEFAULT_READINESS_STALL_MS = 30000;
+
 export interface AppReadinessOptions {
+  /**
+   * The NO-PROGRESS bound (dnqyt): how long the observed readiness state may stay unchanged
+   * before the wait fails closed. It is deliberately not a stopwatch on the whole wait — a
+   * page that is still hydrating under load keeps resetting it (see `maxTotalMs`).
+   */
   timeoutMs?: number;
+  /**
+   * Hard cap on the whole wait, so a page whose probe result flaps forever still terminates.
+   * Default: max(timeoutMs * 4, 120000).
+   */
+  maxTotalMs?: number;
   pollIntervalMs?: number;
   surfaceName?: string;
   predicateExpr?: string;
   probeTimeoutMs?: number;
   /** Clock/timer source for the poll loop; defaults to the real one (2y6fr). */
   timers?: AppReadinessTimers;
+  /**
+   * Called once per probe with what was observed and whether it ADVANCED. Harnesses use it to
+   * record a probe trace beside their screenshots, so a red can be classified as stall vs
+   * slow-but-hydrating from the run's own evidence (dnqyt).
+   */
+  onProbe?: (event: AppReadinessProbeEvent) => void;
+}
+
+export interface AppReadinessProbeEvent {
+  atMs: number;
+  probe: any;
+  advanced: boolean;
 }
 
 export interface AppReadinessResult {
@@ -173,23 +204,42 @@ export async function waitForAppReady(
   evaluate: (expression: string) => Promise<any>,
   options: AppReadinessOptions = {},
 ): Promise<AppReadinessResult> {
-  const timeoutMs = options.timeoutMs ?? 10000;
+  const stallMs = options.timeoutMs ?? DEFAULT_READINESS_STALL_MS;
+  const maxTotalMs = Math.max(options.maxTotalMs ?? Math.max(stallMs * 4, 120000), stallMs);
   const pollIntervalMs = options.pollIntervalMs ?? 100;
   const surface = options.surfaceName ? ` for ${options.surfaceName}` : "";
   const expr = options.predicateExpr ?? APP_READY_EXPRESSION;
   const timers = options.timers ?? REAL_READINESS_TIMERS;
-  const deadline = timers.now() + timeoutMs;
   const start = timers.now();
+  const hardDeadline = start + maxTotalMs;
+  // dnqyt: NTP hydration observed on this VM takes ~7.2s cold and ~12.3s with six competing
+  // busy loops, and the readiness expression reports only two coarse transitions on the way
+  // (jobsBoard true, then namedHydrated true). A fixed 10s stopwatch therefore reds a page
+  // that is hydrating perfectly well. The bound now applies to NO PROGRESS: every observed
+  // change in the probe result buys another full stallMs window, and maxTotalMs stops a page
+  // that flaps forever. A genuinely never-hydrating document reports the same result forever,
+  // so it still fails closed after one stallMs window — the falsifier this keeps.
+  let stallDeadline = start + stallMs;
+  let lastKey: string | null = null;
   let lastProbe: any = null;
   let lastTimeoutError: Error | null = null;
 
-  while (timers.now() < deadline) {
-    const remainingMs = deadline - timers.now();
+  const keyOf = (probe: any): string => {
+    try {
+      return JSON.stringify(probe) ?? String(probe);
+    } catch {
+      return String(probe);
+    }
+  };
+
+  while (timers.now() < hardDeadline && timers.now() < stallDeadline) {
+    const remainingMs = Math.min(hardDeadline, stallDeadline) - timers.now();
     if (remainingMs <= 0) break;
     const probeLimit = Math.min(remainingMs, options.probeTimeoutMs ?? 2000);
 
     let probeTimer: any;
     let localProbeTimeoutError: Error | null = null;
+    let observed: any;
     try {
       const probe = await Promise.race([
         evaluate(expr),
@@ -203,7 +253,10 @@ export async function waitForAppReady(
       timers.clearTimeout(probeTimer);
       lastProbe = probe;
       lastTimeoutError = null;
-      if (timers.now() <= deadline && probe && typeof probe === "object" && probe.ready === true) {
+      observed = probe;
+      if (timers.now() <= hardDeadline && probe && typeof probe === "object" && probe.ready === true) {
+        const advanced = keyOf(probe) !== lastKey;
+        options.onProbe?.({ atMs: timers.now() - start, probe, advanced });
         return {
           ready: true,
           signal: typeof probe.signal === "string" ? probe.signal : "custom-predicate",
@@ -215,13 +268,25 @@ export async function waitForAppReady(
       if (localProbeTimeoutError && e === localProbeTimeoutError) {
         lastTimeoutError = e;
         lastProbe = { error: String(e) };
+        // A local probe timeout is NOT progress: its message carries the remaining budget, so
+        // keying off it would make every iteration look like an advance and turn a hung page
+        // into an unbounded wait. Class it, don't quote it.
+        observed = { probeTimedOut: true };
       } else if (isTransportOrEvaluateTimeoutError(e)) {
         throw e;
       } else {
         lastTimeoutError = null;
         lastProbe = { error: String(e) };
+        observed = { evaluateError: true };
       }
     }
+
+    const advanced = lastKey !== null && keyOf(observed) !== lastKey;
+    if (advanced) {
+      stallDeadline = timers.now() + stallMs;
+    }
+    lastKey = keyOf(observed);
+    options.onProbe?.({ atMs: timers.now() - start, probe: observed, advanced });
     await new Promise((r) => timers.setTimeout(r, pollIntervalMs));
   }
 
@@ -229,7 +294,9 @@ export async function waitForAppReady(
     throw lastTimeoutError;
   }
   const detail = lastProbe ? ` (last probe: ${JSON.stringify(lastProbe)})` : "";
-  throw new Error(`${APP_NEVER_BECAME_READY}${surface} within ${timeoutMs}ms${detail}`);
+  throw new Error(
+    `${APP_NEVER_BECAME_READY}${surface} within ${stallMs}ms of no progress (cap ${maxTotalMs}ms)${detail}`,
+  );
 }
 
 /**
