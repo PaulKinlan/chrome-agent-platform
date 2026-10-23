@@ -29,6 +29,8 @@ export interface LockAwareResult {
   lockWaitMs: number;
   /** How long the child ran after the budget clock started. */
   ranMs: number;
+  /** The child's whole lifetime, from the same two instants the segments sum from. */
+  totalMs: number;
   /** Why the child was killed, if it was. */
   killedFor: null | "lock-wait-exceeded" | "budget-exceeded";
 }
@@ -109,5 +111,5 @@ export async function runLockAware(opts: {
   } else if (killedFor === "budget-exceeded") {
     text += `\n[lock-aware] killed: exceeded its own ${opts.budgetMs} ms budget after the browser gate (queue wait ${lockWaitMsActual} ms excluded)\n`;
   }
-  return { code: s.code, text, lockWaitMs: lockWaitMsActual, ranMs, killedFor };
+  return { code: s.code, text, lockWaitMs: lockWaitMsActual, ranMs, totalMs: endedAt - spawnedAt, killedFor };
 }
