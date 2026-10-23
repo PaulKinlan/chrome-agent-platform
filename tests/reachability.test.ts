@@ -30,7 +30,44 @@ const io = {
   },
 };
 
-async function run(root = `${REPO}/extension`, retained = RETAINED) {
+// chrome-agent-platform-8qy5d: this file used to pay a FULL extension/ scan per run() call
+// (two BFS passes reading every reached file each time, ~10 scans across 16 tests = 2-4
+// minutes — the merger measured 46-248s, dying at the 180s serial bound and fail-fasting the
+// whole phase). The scan input is repo CONTENT, so memoize per content state: a cheap stat
+// digest (relative path + size + mtimeMs, sorted) of everything checkReachability reads —
+// extension/, build.mjs, extension/manifest.json — keys the memo. Any content change (the
+// planted-module falsifier writes and removes a file) changes the digest and forces a fresh
+// scan; identical content hits the memo regardless of test order, so the file stays
+// order-independent. The mock-io checker tests below never touch this path.
+const SCAN_DIGEST_FILES = ["build.mjs", "extension/manifest.json"];
+
+function scanDigest() {
+  const parts: string[] = [];
+  const stack = [""];
+  while (stack.length) {
+    const rel = stack.pop() as string;
+    for (const e of Deno.readDirSync(`${REPO}/extension/${rel}`)) {
+      const child = rel ? `${rel}/${e.name}` : e.name;
+      if (e.isDirectory) stack.push(child);
+      else {
+        const st = Deno.statSync(`${REPO}/extension/${child}`);
+        const mt = st.mtimeMs ?? st.mtime?.getTime?.() ?? 0;
+        parts.push(`${child}:${st.size}:${mt}`);
+      }
+    }
+  }
+  for (const f of SCAN_DIGEST_FILES) {
+    const st = Deno.statSync(`${REPO}/${f}`);
+    const mt = st.mtimeMs ?? st.mtime?.getTime?.() ?? 0;
+    parts.push(`${f}:${st.size}:${mt}`);
+  }
+  parts.sort();
+  return parts.join("\n");
+}
+
+let scanMemo: { digest: string; result: unknown } | null = null;
+
+async function runScan(root: string, retained: Record<string, string>) {
   return await checkReachability({
     root,
     buildSource: await Deno.readTextFile(`${REPO}/build.mjs`),
@@ -38,6 +75,18 @@ async function run(root = `${REPO}/extension`, retained = RETAINED) {
     retained,
     io,
   });
+}
+
+async function run(root = `${REPO}/extension`, retained = RETAINED) {
+  if (root !== `${REPO}/extension` || retained !== RETAINED) {
+    // Non-default arguments are bespoke scenarios: never memoize them.
+    return await runScan(root, retained);
+  }
+  const digest = scanDigest();
+  if (!scanMemo || scanMemo.digest !== digest) {
+    scanMemo = { digest, result: await runScan(root, retained) };
+  }
+  return scanMemo.result;
 }
 
 Deno.test("reachability: zero unlisted unreachable files under extension/", async () => {

@@ -31,8 +31,8 @@ export const SERIAL_REASONS = {
   "tests/build-bootstrap.test.ts": "runs node build.mjs in-place (dist/dist-versions rewrite)",
   "tests/store-doc-denial.test.ts": "runs node build.mjs in-place and reads the built extension/dist bundles (shared build artifacts)",
   "tests/build-debug-mode.test.ts": "runs node build.mjs in-place (debug+store bundles)",
-  "tests/build-tool-bundling.test.ts": "runs build.mjs / the bundled-tool generator in-place and mutates packages/bundled",
   "tests/reachability.test.ts": "asserts the repo tree's generated-artifact state",
+  "tests/build-tool-bundling.test.ts": "runs build.mjs / the bundled-tool generator in-place and mutates packages/bundled",
   "tests/package-extension-freshness.test.ts": "driver packages dist + writes the dist-complete marker",
   // nz2r: writes a stale build stage dir under extension/ to prove the
   // per-change gate is immune to killed-build residue (swept in its finally).
@@ -112,8 +112,8 @@ export const SERIAL_LANES = Object.freeze({
   "tests/build-tool-bundling.test.ts": "build",
   "tests/build-sdk-dedup.test.ts": "build",
   "tests/build-smoke.test.ts": "build",
-  "tests/store-doc-denial.test.ts": "build",
   "tests/reachability.test.ts": "build",
+  "tests/store-doc-denial.test.ts": "build",
   "tests/package-extension-freshness.test.ts": "build",
   "tests/select-tests-residue.test.ts": "build",
   "tests/real-browser-teardown.test.ts": "build",
@@ -337,6 +337,14 @@ function fileWindowMs(file) {
 }
 
 export const SERIAL_FILE_TIMEOUTS = Object.freeze({
+  // chrome-agent-platform-8qy5d: the reachability gate's whole-file wall measured 46-248s across
+  // boxes and loads (merger 2026-10-23; scale2) against the flat 180s base - it died at 180.8s and
+  // its fail-fast hid 698 sibling files. The scan is now memoized per content state
+  // (tests/reachability.test.ts: <=3 scans per file run instead of ~10). Window = 2x the worst
+  // whole-file ever measured (248s), i.e. room for 3 memoized scans at the load that produced the
+  // 248s outlier. NOT the fileWindowMs formula: that one derives from child-build counts, and this
+  // file's work is scanning, not building.
+  "tests/reachability.test.ts": 500_000,
   // 2 builds x 300s + 50s = 650s, against 83.8-84.4s measured work.
   "tests/build-bootstrap.test.ts": fileWindowMs("tests/build-bootstrap.test.ts"),
   // 3 builds x 300s + 50s = 950s, against 57.4-86.8s measured work. RAISED from 550_000, which was
