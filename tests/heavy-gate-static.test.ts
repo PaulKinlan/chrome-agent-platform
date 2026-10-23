@@ -18,8 +18,8 @@ Deno.test("heavy-gate static: exports main and filesFor, matching HEAVY_GATE_FIL
   assertEquals(typeof filesFor, "function");
   assertEquals(filesFor([]), [...HEAVY_GATE_FILES]);
   assertEquals(filesFor(["tests/foo.test.ts", "--flag"]), ["tests/foo.test.ts"]);
-  assertEquals(HEAVY_GATE_FILES.length, 19);
-  assertEquals(DEFAULT_HEAVY_GATE_TIMEOUT_MS, 1200_000);
+  assertEquals(HEAVY_GATE_FILES.length, 21);
+  assertEquals(DEFAULT_HEAVY_GATE_TIMEOUT_MS, 3_600_000);
 });
 
 Deno.test("rvht7: a wall-clock phase that refused environmentally becomes exit 75, not 1", () => {

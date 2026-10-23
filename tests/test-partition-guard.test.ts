@@ -944,8 +944,11 @@ Deno.test("o29c0: every HEAVY_GATE file is enumerated, has a reason, and exists 
   // FULL gate keeps certifying that the hub boots (browser tests that load ntp.html and assert
   // outcomes) without a wall-clock budget that a loaded box cannot honour.
   // chrome-agent-platform-jede4: callexport-admission moved from heavy tier to default gate (20 -> 19).
-  assert(HEAVY_GATE_FILES.length >= 19, `HEAVY_GATE_FILES floor tightened: must enumerate at least 19 heavy tests, got ${HEAVY_GATE_FILES.length}`);
-  assertEquals(HEAVY_GATE_FILES.length, 19, "HEAVY_GATE_FILES floor tightened: exactly 19 heavy tests partitioned (jede4)");
+  // chrome-agent-platform-3hbnd: the two mega-suites moved INTO the heavy tier (19 -> 21) so a quiet box's
+  // parallel phase measures correctness instead of endurance (measured: python-documents-bundle 1416s +
+  // wasm-sync-workspace 894s were ~2/3 of the 1800s parallel bound, starving 350 sibling files of their wall).
+  assert(HEAVY_GATE_FILES.length >= 21, `HEAVY_GATE_FILES floor tightened: must enumerate at least 21 heavy tests, got ${HEAVY_GATE_FILES.length}`);
+  assertEquals(HEAVY_GATE_FILES.length, 21, "HEAVY_GATE_FILES floor tightened: exactly 21 heavy tests partitioned (3hbnd)");
   const reasons = HEAVY_GATE_REASONS as Record<string, string>;
   for (const file of HEAVY_GATE_FILES) {
     assert(typeof reasons[file] === "string" && reasons[file].length > 0, `${file} must have a non-empty reason in HEAVY_GATE_REASONS`);

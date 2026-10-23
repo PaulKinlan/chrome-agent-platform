@@ -4,8 +4,9 @@
 // out of the default npm test parallel phase into a dedicated tier to prevent RAM spikes and CPU starvation.
 //
 // Enumerated coverage:
-//   19 test files in HEAVY_GATE_FILES covering Pyodide in-process execution, image codecs (AVIF, JXL, ZXing, CompressOps,
-//   ImageOps, OxiPNG), WASI preview1 runtime, UNIX tools, CallExport, external sort, and Emscripten schema-2 module audits.
+//   21 test files in HEAVY_GATE_FILES covering Pyodide in-process execution, image codecs (AVIF, JXL, ZXing, CompressOps,
+//   ImageOps, OxiPNG), WASI preview1 runtime, UNIX tools, CallExport, external sort, Emscripten schema-2 module audits,
+//   and the two mega-suites (chrome-agent-platform-3hbnd: python-documents-bundle, wasm-sync-workspace).
 //
 // TWO PHASES since chrome-agent-platform-rvht7, because one of those files does not belong in a parallel batch:
 //   1. PARALLEL — the RAM/CPU-saturating suites, `deno test --parallel` exactly as before.
@@ -15,14 +16,18 @@
 //      box, so a wall-clock budget measured beside it was measuring the neighbours. A window that never
 //      arrives inside its bound is an ENVIRONMENTAL REFUSAL (exit 75 + CAP_ENVIRONMENTAL_REFUSAL), never a
 //      product FAIL.
-// Ceiling: 1200s (20 minutes). Override with CAP_HEAVY_GATE_TIMEOUT_MS. The ceiling covers BOTH phases.
+// Ceiling: 3600s (60 minutes) since chrome-agent-platform-3hbnd. Override with CAP_HEAVY_GATE_TIMEOUT_MS. The ceiling
+// covers BOTH phases. 3hbnd moved the two mega-suites here AFTER measuring them (python-documents-bundle 1416s,
+// wasm-sync-workspace 894s on a849a9b3e): the previous 1200s ceiling covered the pre-3hbnd tier, and 1200 + the
+// measured additions would not fit, so the tier's own ceiling grows to measured-total + headroom. The parallel
+// phase's own 1800s bound is untouched (that raise is fleet config, hub-owned).
 
 import { fileURLToPath } from "node:url";
 import { HEAVY_GATE_FILES, WALL_CLOCK_HEAVY_FILES } from "./test-partition.mjs";
 import { areAllFailuresEnvironmental, combinePhaseExitCodes, ENVIRONMENTAL_REFUSAL_EXIT } from "./lib/environmental-verdict.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
-export const DEFAULT_HEAVY_GATE_TIMEOUT_MS = 1200_000;
+export const DEFAULT_HEAVY_GATE_TIMEOUT_MS = 3_600_000;
 
 export function filesFor(args: string[] = []): string[] {
   const cliFiles = args.filter((a) => !a.startsWith("-"));
@@ -118,6 +123,7 @@ async function runPhase(
 }
 
 export async function runHeavyGate(args = Deno.args): Promise<number> {
+  const runStart = Date.now();
   const requested = filesFor(args);
   const { parallel, wallClock } = partitionByPhase(requested);
   console.log(`heavy-gate: ${requested.length} heavy test(s) — ${parallel.length} parallel, ${wallClock.length} wall-clock`);
@@ -133,6 +139,31 @@ export async function runHeavyGate(args = Deno.args): Promise<number> {
   }
 
   const rc = codes.length ? combinePhaseExitCodes(...codes) : 0;
+
+  // chrome-agent-platform-upqhp: every tier run writes a receipt for the exact tree it ran on
+  // (keyed by TREE hash). The main gate fails closed without a fresh passing receipt for the
+  // tree it certifies, so this write is what keeps the mega-suites genuinely covered after
+  // 3hbnd moved them here. Refusals and failures are recorded too — honest ledger — but only
+  // result "pass" ever certifies (checkHeavyReceipt enforces it).
+  try {
+    const mod = await import("./lib/heavy-receipt.mjs");
+    const tree = mod.currentTreeHash();
+    const written = mod.writeHeavyReceipt({
+      tree,
+      commit: mod.currentCommitSha(),
+      result: rc === 0 ? "pass" : rc === ENVIRONMENTAL_REFUSAL_EXIT ? "refusal" : "fail",
+      logPath: Deno.env.get("HEAVY_GATE_LOG_PATH") ?? null,
+      suites: requested.length,
+      startedAt: runStart,
+      finishedAt: Date.now(),
+    });
+    console.log(`heavy-gate: receipt ${rc === 0 ? "written" : "recorded (not a pass)"}: ${written.path}`);
+  } catch (error) {
+    // A receipt-write failure must not corrupt a GREEN tier verdict, but it must be loud:
+    // the gate will refuse to certify this tree later, and the operator needs to know why.
+    console.error(`heavy-gate: FAILED TO WRITE HEAVY RECEIPT (${error instanceof Error ? error.message : String(error)}) — the gate will refuse to certify this tree until a receipt exists (upqhp).`);
+  }
+
   if (rc === 0) {
     console.log(`\nheavy-gate: ALL ${requested.length} HEAVY WASM/FIXTURE TESTS GREEN`);
   } else if (rc === 75) {

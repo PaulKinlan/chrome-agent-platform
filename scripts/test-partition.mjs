@@ -200,6 +200,16 @@ export const HEAVY_GATE_REASONS = {
   // not the tree.
   "tests/ntp-boot-staging-timing.test.ts":
     "wall-clock NTP boot budgets (median long tasks 0, composer-ready < 150ms, thread-hydrated <= 250ms) in a real browser; kept out of the FULL gate so a landing does not take a load-dependent verdict, but note this tier runs in parallel with WASM stress suites and is not itself quiet",
+  // chrome-agent-platform-3hbnd: the two mega-suites are ENDURANCE, not correctness-under-contention.
+  // Measured on a849a9b3e (jtrny instrumentation): python-documents-bundle 1416s and wasm-sync-workspace
+  // 894s in a single run — together roughly two thirds of the parallel phase's 1800s bound, so on a QUIET
+  // box the phase is killed at its own bound (393 of 743 files completed, 350 produced no completed result)
+  // while a LOADED box completes only because heavy suites fail closed fast. The parallel phase must measure
+  // correctness, not endurance: these run to completion in the heavy tier instead.
+  "tests/python-documents-bundle-3p3e11.test.ts":
+    "mega-suite: builds and exercises the Python documents bundle end to end (measured 1416s alone, ~2/3 of the parallel bound with wasm-sync); endurance work that starved 350 sibling files of their wall on a quiet box",
+  "tests/wasm-sync-workspace.test.ts":
+    "mega-suite: full WASM workspace sync over large fixture trees (measured 894s alone); endurance work that starved 350 sibling files of their wall on a quiet box",
 };
 /**
  * The heavy-tier suites that measure WALL-CLOCK budgets rather than just load the box
