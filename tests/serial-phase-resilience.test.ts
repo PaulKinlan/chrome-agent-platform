@@ -479,18 +479,32 @@ Deno.test("xy6n2: a marker after the 5s soft deadline succeeds only when load is
   // CHILD'S OWN COLD BOOT dominates both numbers (measured 10-22s at fleet load ~5, in a serial lane that
   // runs alone). With a fixed soft=5000 / hard=20000 the marker's own 6s delay sat on top of a boot that
   // alone could exceed 20s, so the run was killed by the hard bound and the case redded on the box rather
-  // than on the code. Both numbers are now derived from a MEASURED boot, so the property under test — a
-  // late marker survives the soft bound via the named, bounded grace — holds at any boot cost.
+  // than on the code. Both numbers are derived from a MEASURED boot so the windows scale with load.
+  //
+  // chrome-agent-platform-3li6g: lateness is now enforced by CLOCK ORDERING INSIDE ONE PROCESS, not by
+  // wall-clock hope. The previous fixture slept a fixed 6s and relied on `bootMs + 6000 > softMs` — but
+  // bootMs is the PROBE child's full lifetime while the marker's lateness plays out in a DIFFERENT child,
+  // and under full-gate load (744 parallel files) the two boots skew by seconds: a probe that landed in a
+  // starvation burst set softMs far above the fixture's actual marker time, the marker then beat the soft
+  // deadline, the grace path was never entered, and the strict READY_MARKER_LOADED_GRACE assertion redded
+  // with only a `Check <file>` line in stderr (3li6g's two full-gate reds; green 3/3 in isolation on the
+  // same tree). Now the fixture sleeps `softMs + lateMarginMs` from ITS OWN first statement, in the same
+  // child whose marker the runner polls: the runner's t0 precedes that first statement by definition, so
+  // the marker is late by construction at any load — the property under test (a late marker survives the
+  // soft bound via the named, bounded grace) is what actually gets exercised. The boot measurement now
+  // only sizes the windows (kzy5x); it no longer decides the ordering.
   const bootMs = await measureChildBootMs(tempDir);
-  const softMs = bootMs + 500; // the marker (which cannot precede boot) is guaranteed to arrive AFTER this
-  const lateDelayMs = 6_000; // ...and comfortably before the derived hard bound (soft x up-to-4)
+  const softMs = bootMs + 500; // load-derived base: the grace window must cover a cold boot at this load
+  const lateMarginMs = 1_500; // the fixture's delay past softMs, measured from its own first statement
+  const LATE_ASSERTION_SLACK_MS = 1_000; // marker-write + runner-poll (50ms) jitter, named generously
   assert(
-    bootMs + lateDelayMs < softMs * 4,
-    `the declared late delay must land inside the derived hard bound: boot ${bootMs}ms + ${lateDelayMs}ms ` +
-      `vs hard ${softMs * 4}ms`,
+    bootMs + lateMarginMs + LATE_ASSERTION_SLACK_MS < softMs * 4 - 500,
+    `the fixture's marker must land inside the derived hard bound even at the measured boot cost: ` +
+      `fixture boot ≤ ${bootMs}ms + late ${lateMarginMs}ms + slack ${LATE_ASSERTION_SLACK_MS}ms ` +
+      `vs hard ${softMs * 4}ms (soft ${softMs}ms + 500ms poll)`,
   );
   await Deno.writeTextFile(tempTest, `
-await new Promise((resolve) => setTimeout(resolve, ${lateDelayMs}));
+await new Promise((resolve) => setTimeout(resolve, ${softMs + lateMarginMs}));
 await Deno.writeTextFile(${JSON.stringify(readyFile)}, "ready");
 Deno.test("passes after late marker", () => {});
 `);
@@ -506,8 +520,8 @@ Deno.test("passes after late marker", () => {});
     assertEquals(
       res.code,
       0,
-      `late marker must not be killed by the soft bound (boot ${bootMs}ms, soft ${softMs}ms, late ` +
-        `${lateDelayMs}ms): ${res.stderr?.toString()}`,
+      `late marker must not be killed by the soft bound (boot ${bootMs}ms, soft ${softMs}ms, fixture ` +
+        `late by ${lateMarginMs}ms past it): ${res.stderr?.toString()}`,
     );
     assertEquals(res.timedOut, false);
     assert((res.stderr?.toString() ?? "").includes("READY_MARKER_LOADED_GRACE"),
