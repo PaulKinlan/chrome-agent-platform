@@ -112,10 +112,25 @@ export function dirtyTrackedPaths(cwd) {
     return out
       .split("\n")
       .map((line) => line.slice(3).trim())
-      .filter(Boolean);
+      .filter(Boolean)
+      .filter(isRelevantDirtyPath);
   } catch {
     return [];
   }
+}
+
+/**
+ * Is this modified tracked path one a heavy receipt should refuse over?
+ *
+ * `.beads/` is excluded ON PURPOSE, and this is the difference between a check people trust and one
+ * they learn to bypass: the beads export is a passive task ledger that no suite reads, and every bd
+ * write in this fleet dirties it — including the very comment that records the heavy run. Counting it
+ * would make a CORRECT receipt refuse with a name that has nothing to do with the suites, which is how
+ * a fail-closed check teaches operators to work around it. Everything else (source, tests, extension
+ * bundle, dist markers, scripts) DOES affect what the suites measure and still refuses.
+ */
+export function isRelevantDirtyPath(path) {
+  return !path.startsWith(".beads/");
 }
 
 /** The enumerated heavy set for the tree being certified — read from the same table the tier uses. */

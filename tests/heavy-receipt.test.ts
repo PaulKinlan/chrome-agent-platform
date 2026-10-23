@@ -25,6 +25,7 @@ import {
   RECEIPT_VERSION,
   checkHeavyReceipt,
   expectedHeavyFiles,
+  isRelevantDirtyPath,
   receiptPath,
   writeHeavyReceipt,
 } from "../scripts/lib/heavy-receipt.mjs";
@@ -328,6 +329,18 @@ Deno.test("juubk falsifier: a run from a DIRTY worktree never certifies", withRe
   assertEquals(verdict.reason, "dirty");
   assertStringIncludes(refusalLine(verdict), "scripts/lib/heavy-receipt.mjs");
 }));
+
+Deno.test("juubk: the dirty-worktree rule ignores the passive beads ledger, nothing else", () => {
+  // The trap this avoids: every bd write in this fleet dirties .beads/issues.jsonl, including the
+  // comment recording the heavy run. Refusing over a file no suite reads would make a CORRECT
+  // receipt fail with a name unrelated to the suites — a fail-closed check people learn to bypass.
+  for (const path of [".beads/issues.jsonl", ".beads/config.yaml"]) {
+    assertEquals(isRelevantDirtyPath(path), false, `${path} must not block a receipt`);
+  }
+  for (const path of ["scripts/heavy-gate.ts", "tests/heavy-receipt.test.ts", "extension/dist/hub.js", "package.json"]) {
+    assertEquals(isRelevantDirtyPath(path), true, `${path} changes what the suites measure`);
+  }
+});
 
 Deno.test("juubk falsifier: a legacy v1 receipt (a suite COUNT, no set) cannot certify", withReceipts(async (nextTree) => {
   const TREE = nextTree();
