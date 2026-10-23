@@ -157,10 +157,14 @@ export interface AppReadinessOptions {
   stallMs?: number;
   /**
    * Explicit opt-in to a LONGER total ceiling than `timeoutMs`. The option exists so a call site CAN raise the
-   * ceiling deliberately, but NO call site uses it today: w51r used to, and now computes a load-aware
+   * ceiling deliberately. No NON-TEST call site uses it today: w51r used to, and now computes a load-aware
    * `timeoutMs` instead (see DEFAULT_READINESS_TIMEOUT_MS above). Raising the ceiling for a real worst case is a
    * decision for the operator with measurements behind it, not a harness constant. Default: timeoutMs, i.e. no
    * extension at all.
+   *
+   * The deliberate test uses are tests/harness-readiness.test.ts:814 and :893, which pass `maxTotalMs: 60000` on a
+   * DRIVEN FAKE CLOCK (tests/harness-readiness.test.ts:39-96, `fakeTimers()` + `onFakeClock`) to prove the ceiling
+   * is honoured past the 10s default. They are not a 60-second wall-clock wait and not a product opt-in.
    */
   maxTotalMs?: number;
   pollIntervalMs?: number;
