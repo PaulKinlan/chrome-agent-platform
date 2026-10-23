@@ -69,8 +69,21 @@ Deno.test("w6kc0: a forced serial failure makes the CHILD runner refuse certific
   assert(stderr.includes("INCOMPLETE"), "the run must print the INCOMPLETE marker");
   assert(stderr.includes("NOT CERTIFIABLE"), "the run must print NOT CERTIFIABLE");
 
-  // Review P1-2: this case must show that a REAL SERIAL FAILURE caused the planner to narrow - the
-  // announcement, the plan-level skip and the cause, not merely a non-zero exit that could come from anywhere.
+  // Review round 3: the CAUSE and the COUNT must be asserted against manifest.incomplete ITSELF. Searching all
+  // of stderr for the cause was a false green - the planner's announcement already contains that phrase, so a
+  // runner that attributed the gap to the WRONG CAUSE would still pass. The manifest field is the record a
+  // consumer reads, so that is what must carry the attribution.
+  assert(
+    /parallel phase skipped after serial failure \(\d+ file\(s\) unrun\)/.test(incomplete),
+    `manifest.incomplete must carry the cause AND the count in the manifest itself, got ${JSON.stringify(incomplete)}`,
+  );
+  assert(
+    !incomplete.includes("serial phase skipped"),
+    `a real serial failure must not be reported as a declined serial phase: ${JSON.stringify(incomplete)}`,
+  );
+
+  // Separately, the human-readable announcement still names the cause and the plan-level skip: that is the
+  // operator's line, and asserting it here does not weaken the manifest assertion above.
   assert(
     stderr.includes("serial file(s) failed"),
     `the announcement must name the serial failure as the cause: ${stderr.slice(-1200)}`,
@@ -78,10 +91,6 @@ Deno.test("w6kc0: a forced serial failure makes the CHILD runner refuse certific
   assert(
     /\d+ of \d+ parallel file\(s\) are SKIPPED/.test(stderr),
     `the announcement must state the plan-level skip and its size: ${stderr.slice(-1200)}`,
-  );
-  assert(
-    /skipped after the serial failure \(\d+ file\(s\) unrun\)/.test(stderr),
-    `the gap must attribute the skip to the serial failure: ${stderr.slice(-1200)}`,
   );
 });
 
