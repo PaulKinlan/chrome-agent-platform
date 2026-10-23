@@ -55,8 +55,35 @@ function sample(over: Partial<LoadSample> = {}): LoadSample {
   };
 }
 
-// Under parallel-phase contention, tests that need a larger proc scan budget must scope it
-// cleanly inside the individual test with save/restore in finally (chrome-agent-platform-3ow6b).
+// CAP_QUIET_MAX_PROC_SCAN_MS must never be overridden at MODULE SCOPE (chrome-agent-platform-3ow6b):
+// an un-restored module-scope set leaks into every later suite in the same deno process, so it is
+// process-wide state, not test-local configuration. Under parallel-phase contention, tests that need
+// a larger proc scan budget scope it inside the individual test with save/restore in a finally.
+//
+// The module-scope property is checked in a SANITISED CHILD PROCESS (see the jtpa5 test below) and
+// NOT by capturing a baseline here: a module-scope set that runs BEFORE any in-module capture becomes
+// the capture, so the two are indistinguishable and an in-process baseline goes falsely green. The
+// capture below exists only for the end-of-suite check, which asks a different question - did a TEST
+// leak a change it did not restore (chrome-agent-platform-6ai58 keeps that meaningful when the knob
+// arrived already set).
+const AMBIENT_PROC_SCAN_MS = Deno.env.get("CAP_QUIET_MAX_PROC_SCAN_MS");
+
+/** Scope a /proc scan budget to ONE test and restore it when the test settles
+ *  (chrome-agent-platform-3ow6b). The module-scope override this replaced was process-wide state that
+ *  leaked into every later suite in the same deno process; the tests that genuinely need a bigger budget
+ *  for their own spawned children state it locally instead (ssemb / kzy5x: parallel-phase churn on a
+ *  loaded box can truncate the 400 ms default before the walk reaches children THIS test just spawned,
+ *  and a truncated walk is unmeasurable by design - 1io9 - so the sample comes back refused, not wrong). */
+async function withProcScanBudget<T>(ms: string, body: () => Promise<T>): Promise<T> {
+  const before = Deno.env.get("CAP_QUIET_MAX_PROC_SCAN_MS");
+  Deno.env.set("CAP_QUIET_MAX_PROC_SCAN_MS", ms);
+  try {
+    return await body();
+  } finally {
+    if (before === undefined) Deno.env.delete("CAP_QUIET_MAX_PROC_SCAN_MS");
+    else Deno.env.set("CAP_QUIET_MAX_PROC_SCAN_MS", before);
+  }
+}
 
 const SPEC = { maxLoadPerCore: 0.35, maxCompilers: 1, maxWaitMs: 1000, sampleMs: 50, sustainedSamples: 3 };
 
@@ -208,6 +235,72 @@ async function startCalibratedCompiler(dir: string, targetMs: number): Promise<{
   return { proc, pid: proc.pid, input, compileMs };
 }
 
+Deno.test("3ow6b / jtpa5: importing this file in a SANITISED child process leaves CAP_QUIET_MAX_PROC_SCAN_MS unset", async () => {
+  // WHY A CHILD PROCESS, and not a baseline captured in this module: module scope runs before any
+  // capture placed in this module, so a module-scope set BECOMES the baseline and is indistinguishable
+  // from an operator export. Measured false green on the baseline design: `Deno.env["set"](KEY,
+  // "2500")` inserted immediately above the capture left both in-process assertions green while the
+  // import leaked 2500. No in-process baseline can fix that, and no text scan can either - brace,
+  // bracket, destructuring and split-call spellings each defeated a textual round.
+  //
+  // So the property is measured where it cannot be poisoned: a FRESH PROCESS whose environment never
+  // contained the key. Any value present AFTER importing this file can only have come from the
+  // module's own top-level code, whatever its spelling and wherever it is placed (jtpa5). Because the
+  // key is deleted from the child rather than compared to anything, an operator/fleet shell that
+  // exports it in the parent changes nothing here (chrome-agent-platform-6ai58).
+  //
+  // The sanitisation is made OBSERVABLE rather than assumed - the crux of this design is that the
+  // child's environment really is not the parent's:
+  //   * the parent poisons its OWN environment with the key ("999") and a parent-only marker;
+  //   * the child is spawned with clearEnv:true and a minimal env carrying a child marker;
+  //   * the child fails closed if it sees the parent-only marker (clearEnv did not take effect), if it
+  //     is missing its own marker (the environment is not the one this test built), or if the key is
+  //     present at any point - before the import (sanitisation failed) or after it (module-scope set).
+  const KEY = "CAP_QUIET_MAX_PROC_SCAN_MS";
+  const PARENT_MARKER = "CAP_QUIET_GUARD_PARENT";
+  const CHILD_MARKER = "CAP_QUIET_GUARD_CHILD";
+  const target = new URL("./quiet-window.test.ts", import.meta.url).href;
+  const prior = Deno.env.get(KEY);
+  Deno.env.set(KEY, "999");
+  Deno.env.set(PARENT_MARKER, "1");
+  try {
+    const env: Record<string, string> = { [CHILD_MARKER]: "1" };
+    for (const name of ["HOME", "PATH", "TMPDIR", "DENO_DIR", "DENO_NO_UPDATE_CHECK"]) {
+      const value = Deno.env.get(name);
+      if (value !== undefined) env[name] = value;
+    }
+    const script = `
+      const KEY = ${JSON.stringify(KEY)};
+      const CHILD_MARKER = ${JSON.stringify(CHILD_MARKER)};
+      const PARENT_MARKER = ${JSON.stringify(PARENT_MARKER)};
+      const fail = (why) => { console.error(why); Deno.exit(99); };
+      if (Deno.env.get(CHILD_MARKER) !== "1") fail("the child did not receive the environment this test built");
+      if (Deno.env.get(PARENT_MARKER) !== undefined) fail("clearEnv did not take effect: the parent environment reached the child");
+      if (Deno.env.get(KEY) !== undefined) fail("sanitisation failed: " + KEY + " was inherited by the child");
+      await import(${JSON.stringify(target)});
+      const leaked = Deno.env.get(KEY);
+      if (leaked !== undefined) fail("module-scope mutation: " + KEY + " = " + leaked + " after importing this file");
+    `;
+    const child = await new Deno.Command(Deno.execPath(), {
+      args: ["eval", "--no-check", script],
+      cwd: ROOT,
+      clearEnv: true,
+      env,
+      stdout: "piped",
+      stderr: "piped",
+    }).output();
+    const detail = new TextDecoder().decode(child.stderr).trim() || new TextDecoder().decode(child.stdout).trim();
+    assertEquals(
+      child.code,
+      0,
+      `importing this file must not set ${KEY} (child exit ${child.code}): ${detail}`,
+    );
+  } finally {
+    if (prior === undefined) Deno.env.delete(KEY); else Deno.env.set(KEY, prior);
+    Deno.env.delete(PARENT_MARKER);
+  }
+});
+
 Deno.test("dnop: a PARKED heavy-named daemon is not a build; a COMPILING one still is", async () => {
   // The measured defect: three esbuild SERVICE daemons (ages 1d14h, 2d00h,
   // 3d02h, CPU flat across a 10 s sample while load/core sat at 0.056) held the
@@ -265,7 +358,7 @@ Deno.test("dnop: /proc/<pid>/stat parsing survives a comm with spaces and parent
   assertEquals(parseProcStatCpu("garbage"), null);
 });
 
-Deno.test("dnop: the REAL sampler counts this test's compiling process and not its parked ones", async () => {
+Deno.test("dnop: the REAL sampler counts this test's compiling process and not its parked ones", () => withProcScanBudget("2500", async () => {
   // Ambient state is never assumed: every assertion names a pid THIS test
   // created, so another lane's build cannot make it pass or fail (p15i).
   const dir = await Deno.makeTempDir({ prefix: "cap-dnop-procs-" });
@@ -325,7 +418,7 @@ Deno.test("dnop: the REAL sampler counts this test's compiling process and not i
     }
     await Deno.remove(dir, { recursive: true }).catch(() => {});
   }
-});
+}));
 
 Deno.test("mkax: a quiet box starts the gate immediately", async () => {
   const notices: string[] = [];
@@ -512,7 +605,7 @@ Deno.test("mkax: quietReasons names what is holding the gate; heavy builders are
   }
 });
 
-Deno.test("mkax: a real sample from this box is finite, bounded and evidence-shaped", async () => {
+Deno.test("mkax: a real sample from this box is finite, bounded and evidence-shaped", () => withProcScanBudget("2500", async () => {
   const s = await readLoadSample();
   assertEquals(s.measurable, true, `this box is measurable: ${s.error ?? ""}`);
   assert(Number.isFinite(s.load1) && s.load1 >= 0, `load1 ${s.load1}`);
@@ -524,7 +617,7 @@ Deno.test("mkax: a real sample from this box is finite, bounded and evidence-sha
   const line = environmentLine(s);
   assert(line.includes("load1=") && line.includes("cores=") && line.includes("heavy-builders="), line);
   assertEquals(line.includes("worktrees"), false, "no paths or argv in the evidence line");
-});
+}));
 
 Deno.test("mkax: the launcher refuses to START the browser when the box is not quiet", async () => {
   const { launchChrome, teardownChrome } = await import("../scripts/lib/chrome-launch.ts");
@@ -681,6 +774,11 @@ Deno.test("mkax: the REAL journey gate refuses with exit 75 while a REAL compile
         CAP_QUIET_SAMPLE_MS: sampleMs,
         CAP_QUIET_MAX_COMPILERS: "1",
         CAP_QUIET_SUSTAINED: "2",
+        // A deliberate scan budget for THIS child, so the assertion is about the refusal and not about
+        // the 400 ms default: the test asserts measurable === true, and a walk truncated by the suite's
+        // own churn would make the refusal unmeasurable instead (1io9). It used to inherit this from the
+        // file's module-scope override (3ow6b), which is now scoped per test rather than process-wide.
+        CAP_QUIET_MAX_PROC_SCAN_MS: "2500",
         // zeew — TWO ambient assumptions removed, and the FIRST is the real one:
         //
         // 1. A PRIVATE fleet slot. The spawned gate takes the fleet-wide slot
@@ -1130,7 +1228,7 @@ Deno.test("qs8v7: parseProcStatCpu reads field 4 (ppid) and refuses a non-numeri
   assertEquals(odd?.ppid, null, "a parent this parser cannot read is null, never a merge");
 });
 
-Deno.test("qs8v7: the REAL sampler groups this test\'s nine children under their heavy parent job", async () => {
+Deno.test("qs8v7: the REAL sampler groups this test\'s nine children under their heavy parent job", () => withProcScanBudget("2500", async () => {
   // Linux only: the parent chain comes from /proc/<pid>/stat, and the macOS ps path does not report
   // it — there the documented fallback keeps the process count (fail closed).
   if (Deno.build.os !== "linux") return;
@@ -1178,7 +1276,7 @@ Deno.test("qs8v7: the REAL sampler groups this test\'s nine children under their
     } catch { /* best effort */ }
     await Deno.remove(dir, { recursive: true }).catch(() => {});
   }
-});
+}));
 
 Deno.test("n64td / o7abi: createExecutableStub eliminates write-then-exec ETXTBSY race across multiple rapid cycles for both symlink and fallback", async () => {
   const dir = await Deno.makeTempDir({ prefix: "cap-n64td-stubs-" });
@@ -1291,14 +1389,21 @@ Deno.test("n64td / o7abi: createExecutableStub eliminates write-then-exec ETXTBS
   }
 });
 
-Deno.test("3ow6b: quiet-window test suite has no module-scope CAP_QUIET_MAX_PROC_SCAN_MS override", async () => {
-  const src = await Deno.readTextFile(fileURLToPath(import.meta.url));
-  const firstTestIdx = src.indexOf("Deno.test(");
-  assert(firstTestIdx > 0, "tests/quiet-window.test.ts must define at least one Deno.test");
-  const prelude = src.slice(0, firstTestIdx);
-  assert(
-    !prelude.includes("CAP_QUIET_MAX_PROC_SCAN_MS"),
-    "tests/quiet-window.test.ts must not mutate or set CAP_QUIET_MAX_PROC_SCAN_MS at module scope in the prelude (chrome-agent-platform-3ow6b)",
+Deno.test("3ow6b / jtpa5: CAP_QUIET_MAX_PROC_SCAN_MS is back to its arrival value at end of suite", async () => {
+  // A different question from the sanitised-child check above: did a TEST in this file leak an override
+  // it did not restore? The scoped 1io9 drills raise and zero the budget and restore in a finally; this
+  // asserts that they restore, and comparing to the value this suite STARTED with (rather than to
+  // `undefined`) keeps the check honest when the knob arrived already set (chrome-agent-platform-6ai58).
+  // It cannot and does not try to detect a module-scope set - that is the child's job, because a
+  // module-scope set would also be this suite's arrival value.
+  assertEquals(
+    Deno.env.get("CAP_QUIET_MAX_PROC_SCAN_MS"),
+    AMBIENT_PROC_SCAN_MS,
+    `CAP_QUIET_MAX_PROC_SCAN_MS leaked or left changed after the suite's scoped overrides (arrived as ${
+      AMBIENT_PROC_SCAN_MS ?? "unset"
+    }) (chrome-agent-platform-jtpa5)`,
   );
 });
+
+
 

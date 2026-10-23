@@ -111,14 +111,54 @@ Deno.test("kemd3: quiet-window test fixture must not print alarming un-mocked ru
   assertEquals(match[1], "fixture:mock-compiler", "compilerNames in sustained fixture must be explicitly mock-prefixed");
 });
 
-Deno.test("3ow6b: quiet-window.test.ts must not mutate CAP_QUIET_MAX_PROC_SCAN_MS at module scope", async () => {
+Deno.test("3ow6b / jtpa5: the always-on half stays a source scan, and the module-scope check still sits in the burner half", async () => {
+  // This half stays a SOURCE READER and spawns nothing (chrome-agent-platform-fgik F1 keeps the
+  // always-on set cheap; a child-process import check placed here was redded for exactly that reason).
+  // The module-scope property is therefore measured in tests/quiet-window.test.ts, in a SANITISED CHILD
+  // PROCESS whose environment never contained the key - not by a baseline captured in the module, which
+  // a module-scope set placed above the capture would silently become (measured false green, jtpa5).
+  //
+  // What source can decide, and is therefore pinned here: the prelude never SETS or DELETES the key
+  // (reads are the point, writes are the leak); the arrival capture the end-of-suite check compares
+  // against exists before any registration; and the sanitised-child check has not been deleted from the
+  // burner half. The presence pin is not evidence of behaviour - the child check is - it is the tripwire
+  // that stops the behavioural layer being removed silently.
   const src = await Deno.readTextFile(`${ROOT}tests/quiet-window.test.ts`);
   const firstTestIdx = src.indexOf("Deno.test(");
   assert(firstTestIdx > 0, "tests/quiet-window.test.ts must define at least one Deno.test");
   const prelude = src.slice(0, firstTestIdx);
+
   assert(
-    !prelude.includes("CAP_QUIET_MAX_PROC_SCAN_MS"),
-    "tests/quiet-window.test.ts must not mutate or set CAP_QUIET_MAX_PROC_SCAN_MS at module scope in the prelude (chrome-agent-platform-3ow6b)",
+    /const\s+AMBIENT_PROC_SCAN_MS\s*=\s*Deno\.env\.get\(\s*["']CAP_QUIET_MAX_PROC_SCAN_MS["']\s*\)/.test(
+      prelude,
+    ),
+    "the arrival capture the end-of-suite leak check compares against must exist before any registration (chrome-agent-platform-jtpa5)",
+  );
+  // Module scope must only READ the key. Every prelude line that mentions it has to be the arrival
+  // capture itself, or an INDENTED line inside a function body (the scoped-budget helper, which runs
+  // only when a test calls it, and restores what it found). This is the round-2 rule kept as a cheap
+  // complement, and it is NOT the module-scope guard: a nested block indents its own lines, which is
+  // exactly why the behavioural check below is a sanitised CHILD PROCESS rather than a text scan.
+  for (const line of prelude.split("\n")) {
+    if (!line.includes("CAP_QUIET_MAX_PROC_SCAN_MS")) continue;
+    const trimmed = line.trimStart();
+    if (trimmed.startsWith("//") || trimmed.startsWith("*") || trimmed.startsWith("/*")) continue;
+    const isArrivalCapture = /^const\s+AMBIENT_PROC_SCAN_MS\s*=/.test(line);
+    const isInsideAFunction = /^\s+\S/.test(line);
+    assert(
+      isArrivalCapture || isInsideAFunction,
+      `module scope must only READ CAP_QUIET_MAX_PROC_SCAN_MS; this prelude line executes at import time: ${
+        JSON.stringify(line)
+      } (chrome-agent-platform-3ow6b)`,
+    );
+  }
+  assert(
+    src.includes("SANITISED child process leaves CAP_QUIET_MAX_PROC_SCAN_MS unset"),
+    "the sanitised-child module-scope check must stay in tests/quiet-window.test.ts: it is the only layer that cannot be poisoned by an in-module baseline (chrome-agent-platform-jtpa5)",
+  );
+  assert(
+    /clearEnv:\s*true/.test(src),
+    "the child must be spawned with its environment cleared, so the key cannot be inherited (chrome-agent-platform-jtpa5)",
   );
 });
 
