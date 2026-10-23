@@ -19,18 +19,39 @@ export interface LoadRetryDeps {
 /**
  * Executes a parsing or computation function, measuring elapsed time against a budget.
  * Under host CPU contention (!isQuiet), retries up to 3 times on a warm cycle with fresh stats.
+ *
+ * `samples` (chrome-agent-platform-b9dtq): how many warm samples to take up front, keeping the
+ * FASTEST. Preemption can only ever ADD time to a sample, so on a contended box the minimum of a
+ * few samples approximates the true cost while a single sample can be 10-20x its real work (measured
+ * on this file: a 4.9ms parse sampled at up to 93.9ms under fleet load). A single wall sample against
+ * a tight budget therefore reds by rounding when someone else's job lands on the core — the
+ * exact-boundary defect — while a genuine slowdown slows EVERY sample and is still caught.
  */
 export async function measureWithLoadRetry(
   run: (stats: { steps: number }) => void | Promise<void>,
   budgetMs: number,
   deps: LoadRetryDeps = {},
-): Promise<{ elapsed: number; stats: { steps: number }; retried: boolean }> {
+  samples = 1,
+): Promise<{ elapsed: number; stats: { steps: number }; retried: boolean; samples: number }> {
   let stats = { steps: 0 };
   const now = deps.now ?? (() => performance.now());
   const t0 = now();
   await run(stats);
   let elapsed = now() - t0;
   let retried = false;
+  let taken = 1;
+
+  while (taken < Math.max(1, samples)) {
+    taken++;
+    const freshStats = { steps: 0 };
+    const tSample = now();
+    await run(freshStats);
+    const sampleElapsed = now() - tSample;
+    if (sampleElapsed < elapsed) {
+      elapsed = sampleElapsed;
+      stats = freshStats;
+    }
+  }
 
   if (elapsed >= budgetMs) {
     let readLoadSample = deps.readLoadSample;
@@ -58,7 +79,7 @@ export async function measureWithLoadRetry(
       }
     }
   }
-  return { elapsed, stats, retried };
+  return { elapsed, stats, retried, samples: taken };
 }
 
 /**
