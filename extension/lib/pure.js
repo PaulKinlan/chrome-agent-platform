@@ -10,6 +10,17 @@ export const SCHEMA_BOUNDS = {
   maxUnionBranches: 5,
   maxEnumValues: 256,
   maxLiteralDepth: 8,
+  // chrome-agent-platform-mfu4a: the caps above bound each DIMENSION, and a
+  // hostile schema multiplies them. maxArrayItems=100 and maxDepth=8 permit an
+  // array-of-array-of-array… schema whose payload costs 100^n element
+  // validations, and tool arguments have NO byte ceiling on purpose
+  // (extension/lib/tool-argument-contract.js:4-9), so nothing else bounds the
+  // work a remote MCP server can ask this service worker to do. This is the
+  // budget on the PRODUCT: the worst-case number of leaf validations one
+  // payload can require. A realistic tool (a list of 100 records with a handful
+  // of fields each, or an array of arrays) sits in the hundreds to low
+  // thousands; the smallest useful multiplicative bomb is 100^3 = 1,000,000.
+  maxValidationWork: 100_000,
 };
 
 /**
@@ -386,13 +397,85 @@ export function schemaToZod(z, schema, depth = 0, report = undefined) {
  * named reason when the schema could not be compiled at all (zodSchema is
  * z.never()); dropped lists the keywords ignored under the fail-open policy.
  */
+/**
+ * Worst-case number of leaf validations ONE payload can force this schema to
+ * perform — the quantity the per-dimension caps do not bound, because they
+ * multiply: an array contributes its element cap × its items' work, a union the
+ * sum of its branches, an object the sum of its properties.
+ *
+ * Deliberately computed from the RAW schema over the SAME caps the builder
+ * applies, and it saturates at `budget + 1` so no multiplication can overflow
+ * into Infinity or wrap. It is an upper bound: where the builder drops a child
+ * this pass may still count it, which can only make it MORE conservative (a
+ * schema it refuses is one whose real work is at most what is counted).
+ * @param {any} schema
+ * @param {number} budget
+ * @returns {number} saturated work estimate (budget+1 means "over budget")
+ */
+export function schemaValidationWork(schema, budget = SCHEMA_BOUNDS.maxValidationWork) {
+  const cap = budget + 1;
+  const mul = (a, b) => {
+    if (!a || !b) return 0;
+    const v = a * b;
+    return v > cap || !Number.isFinite(v) ? cap : v;
+  };
+  const add = (a, b) => {
+    const v = a + b;
+    return v > cap || !Number.isFinite(v) ? cap : v;
+  };
+  const walk = (node, depth) => {
+    if (!node || typeof node !== "object" || Array.isArray(node) || depth > SCHEMA_BOUNDS.maxDepth) return 1;
+    const kids = (list) => {
+      let total = 0;
+      for (const child of list) total = add(total, walk(child, depth + 1));
+      return total;
+    };
+    if (node.type === "array") {
+      const pageMax = node.maxItems !== undefined ? node.maxItems : SCHEMA_BOUNDS.maxArrayItems;
+      const elements = Math.max(0, Math.min(pageMax, SCHEMA_BOUNDS.maxArrayItems));
+      // An array with no items schema validates `unknown` per element (work 1);
+      // an array that admits NO elements still costs one validation of itself.
+      const perElement = node.items !== undefined ? walk(node.items, depth + 1) : 1;
+      return elements > 0 ? mul(elements, perElement) : 1;
+    }
+    if (node.type === "object") {
+      const props = node.properties && typeof node.properties === "object" ? Object.values(node.properties) : [];
+      return add(1, kids(props));
+    }
+    let total = 1;
+    for (const key of ["anyOf", "oneOf", "allOf"]) {
+      const branches = Array.isArray(node[key]) ? node[key].slice(0, SCHEMA_BOUNDS.maxUnionBranches) : [];
+      if (branches.length) total = add(total, kids(branches));
+    }
+    return total;
+  };
+  return Math.min(walk(schema, 0), cap);
+}
+
 export function compileSchemaToZod(z, schema) {
   const report = { dropped: [], fatal: null };
+  // The work bound is checked BEFORE the tree is compiled, because compiling a
+  // bomb is itself the expensive part once a payload arrives: with no fatal
+  // flag the caller installs the validator and every later safeParse pays the
+  // multiplication.
+  const work = schemaValidationWork(schema);
+  if (work > SCHEMA_BOUNDS.maxValidationWork) {
+    report.fatal = "schema-work-exceeded";
+    return Object.freeze({
+      zodSchema: z.never(),
+      dropped: Object.freeze([]),
+      fatal: report.fatal,
+      work,
+    });
+  }
   const zodSchema = schemaToZod(z, schema, 0, report);
   return Object.freeze({
     zodSchema,
     dropped: Object.freeze(report.dropped.slice(0, 32)),
     fatal: report.fatal,
+    // Reported on BOTH paths so a caller (or a test) can see how much work the
+    // schema it just compiled may force — the number the budget is about.
+    work,
   });
 }
 
