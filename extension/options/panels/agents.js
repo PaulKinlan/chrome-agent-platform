@@ -3,6 +3,7 @@
 import { formatCadenceMinutes } from "../../lib/next-run-label.js";
 import { buildTemplateSelect } from "../../lib/agent-template-select.js";
 import { ensureAcpNativePermission } from "../../lib/acp-native.js";
+import { loopbackAcpRefusalReason } from "../../lib/acp-client.js";
 import { projectUnifiedAgents, slugifyAgentId } from "../../lib/agent-projection.js";
 import {
   AGENT_TEMPLATES,
@@ -619,6 +620,20 @@ async function renderAcpSettings() {
       try {
         const ep = endpointEl.value.trim() || "http://127.0.0.1:3210/health";
         const healthUrl = ep.replace(/^ws(s)?:/i, "http$1:").replace(/\/acp(\?.*)?$/i, "/health");
+        // chrome-agent-platform-duhcu: this url is DERIVED from an operator-typed
+        // endpoint, so it goes through the same loopback policy the ACP client
+        // enforces before its socket — otherwise a typed host is a reach-anywhere
+        // fetch from the options page. Refused is reported as such, not as
+        // "Offline": the operator needs to know the target is forbidden rather
+        // than unreachable.
+        const refused = loopbackAcpRefusalReason(healthUrl);
+        if (refused) {
+          if (statusEl) {
+            statusEl.textContent = refused;
+            statusEl.style.color = "var(--danger, #b3261e)";
+          }
+          return;
+        }
         const resp = await fetch(healthUrl, { signal: AbortSignal.timeout(3000) });
         if (resp.ok) {
           const data = await resp.json();
