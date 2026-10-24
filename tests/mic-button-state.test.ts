@@ -187,6 +187,13 @@ Deno.test("mic state: a newer start during PENDING getUserMedia supersedes the f
   let call = 0;
   navigator.mediaDevices = { getUserMedia: () => gums[Math.min(call++, 1)].promise };
   const p1 = el.start();
+  // The enumeration gate (fbg7i round 3): start() awaits the settled device
+  // selection before the meter request, so a SYNCHRONOUS second start would
+  // abandon the first at the gate before it ever requested a stream — no
+  // orphan to supersede. The real race this test pins is a second click
+  // landing while the first start's getUserMedia is PENDING (the permission
+  // prompt can pend for seconds), so let the first start pass the gate first.
+  await tick();
   const p2 = el.start();
   const streamA = fakeStream();
   const streamB = fakeStream();
@@ -308,4 +315,184 @@ Deno.test("mic state: the live-meter happy path still works after the failure-pa
   assertEquals(closed, 0, "nothing to close on the happy path");
   el._stopMeter();
   assertEquals(closed, 1, "stop still closes the live context");
+});
+
+Deno.test("mic state (fbg7i): the IntersectionObserver pays the hidden-check ONLY for non-intersecting entries", () => {
+  // The boot-cost fix: IO fires on every intersection-ratio change through the
+  // boot's layout churn, and each unchecked callback read offsetParent — a
+  // forced synchronous layout on a dirty tree (~90ms self per warm boot). The
+  // callback must skip intersecting entries entirely and run _stopIfHidden
+  // only on a non-intersecting transition, where the offsetParent distinction
+  // (display:none ancestor vs merely scrolled-off) still governs.
+  let ioCallback = null;
+  const PrevIO = globalThis.IntersectionObserver;
+  globalThis.IntersectionObserver = class {
+    constructor(cb) { ioCallback = cb; }
+    observe() {} unobserve() {} disconnect() {}
+  };
+  try {
+    const el = new MicButton();
+    const events = [];
+    el._emit = (type, detail) => events.push({ type, detail });
+    el.connectedCallback();
+    assert(typeof ioCallback === "function", "the visibility observer is installed at connect");
+
+    // Intersecting entries (boot churn) never reach the layout read.
+    let checks = 0;
+    el._stopIfHidden = () => { checks++; };
+    ioCallback([{ isIntersecting: true }]);
+    ioCallback([]);
+    assertEquals(checks, 0, "intersecting/empty entries must skip the hidden check");
+
+    // Non-intersecting: the REAL check runs; the offsetParent distinction governs.
+    delete el._stopIfHidden; // back to the prototype method
+    el._button = { offsetParent: {} }; // scrolled off but NOT display:none
+    el._listening = true;
+    ioCallback([{ isIntersecting: false }]);
+    assertEquals(el._listening, true, "scrolled-off is not hidden — recording continues");
+    el._button = { offsetParent: null }; // a display:none ancestor
+    ioCallback([{ isIntersecting: false }]);
+    assertEquals(el._listening, false, "display:none stops the recording");
+    assert(
+      events.some((e) => e.type === "mic-error" && /hidden/.test(e.detail?.message ?? "")),
+      "the stop is reported as the hidden-composer stop",
+    );
+    el.disconnectedCallback();
+  } finally {
+    globalThis.IntersectionObserver = PrevIO;
+  }
+});
+
+Deno.test("mic state (fbg7i): device enumeration is deferred off the connect path", () => {
+  // connectedCallback used to call _loadDevices() synchronously — a ~65ms
+  // main-thread enumeration continuation during stage1-composer of the NTP
+  // boot. It must now be scheduled for idle (requestIdleCallback, or the
+  // setTimeout fallback), not run in the connect task.
+  let scheduled = null;
+  const prevRic = globalThis.requestIdleCallback;
+  globalThis.requestIdleCallback = (cb, opts) => { scheduled = { cb, opts }; return 1; };
+  try {
+    const el = new MicButton();
+    let loads = 0;
+    el._loadDevices = () => { loads++; };
+    el.connectedCallback();
+    assertEquals(loads, 0, "connect must not enumerate devices synchronously");
+    assert(scheduled, "the enumeration is scheduled for idle");
+    assertEquals(typeof scheduled.cb, "function");
+    scheduled.cb(); // idle arrives
+    assertEquals(loads, 1, "the idle callback performs the deferred enumeration");
+    el.disconnectedCallback();
+  } finally {
+    if (prevRic === undefined) delete globalThis.requestIdleCallback;
+    else globalThis.requestIdleCallback = prevRic;
+  }
+});
+
+Deno.test("mic state (fbg7i): the hide-observer walks the COMPOSED chain — across the shadow host to the body — and covers a self-hide", () => {
+  // The gallery's <prompt-bar> renders its mic inside a shadow root. An
+  // ancestor walk on parentElement alone stops at the shadow boundary, so
+  // the body's view-switch class goes unobserved and a recording mic stays
+  // live while its composer is display:none (round-3 review, blocking).
+  const observed = [];
+  let mutCallback = null;
+  const PrevMO = globalThis.MutationObserver;
+  globalThis.MutationObserver = class {
+    constructor(cb) { mutCallback = cb; }
+    observe(target) { observed.push(target); }
+    disconnect() {}
+  };
+  try {
+    const el = new MicButton();
+    const events = [];
+    el._emit = (type, detail) => events.push({ type, detail });
+    // Composed parentage: mic → wrapper (shadow child) → [shadow root] → host → body.
+    const body = { parentElement: null, getRootNode() { return {}; } };
+    const host = { parentElement: body, getRootNode() { return {}; } };
+    const shadowRoot = { host };
+    const wrapper = { parentElement: null, getRootNode() { return shadowRoot; } };
+    el.parentElement = wrapper;
+    el.getRootNode = () => shadowRoot;
+    el.connectedCallback();
+    assert(observed.includes(el), "the element itself is observed (a self-hide must stop the recording)");
+    assert(observed.includes(wrapper), "the in-shadow ancestor is observed");
+    assert(observed.includes(host), "the walk crosses the shadow host");
+    assert(observed.includes(body), "the walk reaches the body — the view switch is observed");
+
+    // The hidden-recording path: a view-switch mutation fires while recording.
+    el._listening = true;
+    el._button = { offsetParent: null }; // the switch display:none'd the composer
+    mutCallback();
+    assertEquals(el._listening, false, "a hidden composer stops the recording through the shadow boundary");
+    assert(
+      events.some((e) => e.type === "mic-error" && /hidden/.test(e.detail?.message ?? "")),
+      "the stop is reported as the hidden-composer stop",
+    );
+    el.disconnectedCallback();
+  } finally {
+    globalThis.MutationObserver = PrevMO;
+  }
+});
+
+Deno.test("mic state (fbg7i): a click that beats the idle enumeration waits for it — the meter opens the settled selection, never a default-input stream the late resolution discards", async () => {
+  // Round-3 review: with enumeration deferred to idle, a quick click read a
+  // null _selectedDeviceId (metering the DEFAULT input) and the late
+  // resolution then failed _adoptMeterStream's deviceId check, discarding
+  // the pending stream. start() must await the in-flight enumeration.
+  const enumGate = deferred();
+  const gumCalls = [];
+  const stream = fakeStream();
+  Object.defineProperty(globalThis, "navigator", {
+    value: {
+      mediaDevices: {
+        enumerateDevices: () => enumGate.promise,
+        getUserMedia: (constraints) => { gumCalls.push(constraints); return Promise.resolve(stream); },
+        addEventListener() {},
+      },
+    },
+    configurable: true, writable: true,
+  });
+  globalThis.chrome = { storage: { local: { get: async () => ({}), set: async () => {} } } };
+  installFakeSR();
+  window.AudioContext = class {
+    constructor() { this.state = "running"; }
+    createAnalyser() { return { fftSize: 0, connect() {}, getByteTimeDomainData() {} }; }
+    createMediaStreamSource() { return { connect() {} }; }
+    close() { return Promise.resolve(); }
+  };
+  let scheduled = null;
+  const prevRic = globalThis.requestIdleCallback;
+  globalThis.requestIdleCallback = (cb) => { scheduled = cb; return 1; };
+  try {
+    const { el } = makeMic();
+    el.connectedCallback();
+    assert(scheduled, "enumeration is still idle-scheduled at connect");
+
+    // The click lands BEFORE idle fires and before enumeration resolves.
+    const startP = el.start();
+    await tick();
+    assertEquals(gumCalls.length, 0, "the meter request waits for the enumeration");
+
+    enumGate.resolve([
+      { deviceId: "mic-a", kind: "audioinput", groupId: "ga", label: "Mic A" },
+      { deviceId: "mic-b", kind: "audioinput", groupId: "gb", label: "Mic B" },
+      { deviceId: "default", kind: "audioinput", groupId: "ga" },
+    ]);
+    await startP;
+    await tick(); await tick();
+    assertEquals(gumCalls.length, 1, "exactly one meter request");
+    assertEquals(
+      gumCalls[0]?.audio?.deviceId?.exact, "mic-a",
+      "the meter opens the settled selection (the OS default's matching concrete mic), not the default input",
+    );
+    assertEquals(stream.tracks[0].stopped, 0, "the pending stream is adopted, never discarded by the late resolution");
+    assertEquals(el._listening, true, "recording is live after the wait");
+    el.stop();
+    el.disconnectedCallback();
+  } finally {
+    if (prevRic === undefined) delete globalThis.requestIdleCallback;
+    else globalThis.requestIdleCallback = prevRic;
+    delete globalThis.chrome;
+    delete window.AudioContext;
+    Object.defineProperty(globalThis, "navigator", { value: { mediaDevices: null }, configurable: true, writable: true });
+  }
 });
