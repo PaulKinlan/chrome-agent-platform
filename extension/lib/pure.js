@@ -1508,40 +1508,6 @@ export function redactSecrets(value, seen = new WeakSet()) {
   return value;
 }
 
-/** The delimiter pair the hook dispatcher frames an UNTRUSTED browser event with
- * (service-worker.js `dispatchHook`). It is a FIXED literal rather than the
- * random per-run token of lib/untrusted-fence.js because the block frames the
- * hook's TASK text, which is built before the run (and therefore its token)
- * exists. Safety therefore comes from construction, not from secrecy: nothing
- * inside the block can spell the closing delimiter — see
- * `serializeUntrustedEventData` (chrome-agent-platform-ypafy). */
-export const UNTRUSTED_EVENT_OPEN = "<untrusted-event-data>";
-export const UNTRUSTED_EVENT_CLOSE = "</untrusted-event-data>";
-
-/**
- * Serialize an untrusted browser-event payload (a tab title, a download
- * filename, a bookmark title, a storage change) for the untrusted-event-data
- * block such that NO value inside it can emit the block's closing delimiter
- * (chrome-agent-platform-ypafy — the fence was injectable).
- *
- * `JSON.stringify` leaves `<` raw, so a payload value containing the literal
- * `</untrusted-event-data>` closed the DATA block early and the rest of the
- * title was read as instructions by the management-capable hub model the fence
- * exists to protect.
- *
- * Every `<` is emitted as the JSON escape `\u003c`, which makes the delimiter
- * un-spellable from inside the block while keeping the payload lossless: the
- * block's content is still JSON, so `JSON.parse` returns the original value
- * byte for byte (nothing is stripped, truncated or silently dropped).
- */
-export function serializeUntrustedEventData(value) {
-  const json = JSON.stringify(value);
-  // JSON.stringify returns undefined for undefined/function/symbol input; the
-  // block must still be well-formed JSON rather than "undefined" text.
-  if (typeof json !== "string") return "null";
-  return json.replaceAll("<", "\\u003c");
-}
-
 /** Known per-tool secret argument names (P1-3 / 2uhx). Bare argument names
  * like "key" are not covered by generic SECRET_KEY_RE to avoid global false
  * positives, but are redacted on tool egress, digest, and display paths. */
