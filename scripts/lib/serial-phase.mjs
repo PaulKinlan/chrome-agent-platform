@@ -129,19 +129,134 @@ export const DEFAULT_SERIAL_FILE_TIMEOUT_MS = 180_000; // 3 minutes per file ON 
 // CAP_SERIAL_TEST_TIMEOUT_MS always wins unscaled — the operator asked for that
 // number. The effective bound is printed when it is scaled, so a timeout
 // explains itself instead of looking like a hang.
+//
+// chrome-agent-platform-8qy5d (2026-10-24): loadavg alone is BLIND to hypervisor
+// CPU steal — steal deschedules the vCPUs without adding runnable tasks, so a
+// 64.7%-steal box measured load 0.25/cpu, the scale floored at x1, and the
+// merger's gate killed tests/reachability.test.ts at the flat 180s while the
+// captured log showed ordinary-speed work. Steal now contributes its own scale
+// component, 1/(1-S): under steal fraction S the child gets (1-S) of the CPU,
+// so base-sized work takes base/(1-S) of wall clock — the honest compensation,
+// not a tuned factor (at the merger's S=0.647 that is x2.83 -> a 510s window,
+// inside the same x4 ceiling). loadavg and steal each independently raise the
+// scale toward the ceiling (max, not product): the two signals overlap but are
+// distinct, and the ceiling caps either path. The window is sampled PER FILE at
+// the wait, never once per run, and EVERY measured decision is logged — the
+// silence of the old not-scaled path is what cost the night the run died.
 export const MAX_LOAD_SCALE = 4;
 
+// Steal below this is hypervisor noise: <=2% steal stretches wall clock <=2%,
+// far inside any window's slack, and measuring it would scale 180s to 183.7s on
+// every cloud VM idling at 1-2% — noise, not signal.
+export const STEAL_DEAD_BAND = 0.02;
+
+/** Pure: the scale component for a measured steal fraction (null = unmeasurable -> x1). */
+export function stealScaleComponent(steal) {
+  if (!Number.isFinite(steal) || steal <= STEAL_DEAD_BAND) return 1;
+  return Math.min(1 / (1 - Math.min(steal, 0.99)), MAX_LOAD_SCALE);
+}
+
 /**
- * Pure: the timeout for one serial file, given the machine's load.
- * @param {{ base?: number, loadPerCpu?: number, override?: string|number|null }} [options]
+ * Pure: the timeout for one serial file, given the machine's load and steal.
+ * @param {{ base?: number, loadPerCpu?: number, steal?: number|null, override?: string|number|null }} [options]
  * @returns {number}
  */
-export function serialFileTimeoutMs({ base = DEFAULT_SERIAL_FILE_TIMEOUT_MS, loadPerCpu = 1, override = null } = {}) {
+export function serialFileTimeoutMs({ base = DEFAULT_SERIAL_FILE_TIMEOUT_MS, loadPerCpu = 1, steal = null, override = null } = {}) {
   const explicit = Number(override ?? NaN);
   if (Number.isFinite(explicit) && explicit > 0) return explicit; // the operator's number, unscaled
-  const ratio = Number.isFinite(loadPerCpu) && loadPerCpu > 1 ? loadPerCpu : 1;
+  const loadRatio = Number.isFinite(loadPerCpu) && loadPerCpu > 1 ? loadPerCpu : 1;
+  const ratio = Math.max(loadRatio, stealScaleComponent(steal));
   const scale = Math.min(ratio, MAX_LOAD_SCALE);
   return Math.round(base * scale);
+}
+
+// ── CPU-steal measurement (chrome-agent-platform-8qy5d) ─────────────────────
+// /proc/stat's aggregate "cpu" line, fields (jiffies): user nice system idle
+// iowait irq softirq STEAL guest guest_nice. Steal is field 8. The window
+// fraction over a sample pair is dSteal/dTotal where Total is the first 8
+// fields — guest/guest_nice are excluded because the kernel already counts
+// guest time inside user (double-counting it would dilute the fraction).
+
+/**
+ * Pure: parse the aggregate cpu line of a /proc/stat snapshot into jiffy totals.
+ * @returns {{ steal: number, total: number } | null}
+ */
+export function stealJiffiesFromStatLine(text) {
+  const line = String(text ?? "").split("\n", 1)[0] ?? "";
+  if (!line.startsWith("cpu ")) return null;
+  const fields = line.trim().split(/\s+/).slice(1).map(Number);
+  if (fields.length < 8 || fields.some((n) => !Number.isFinite(n))) return null;
+  return { steal: fields[7], total: fields.slice(0, 8).reduce((a, b) => a + b, 0) };
+}
+
+/** Pure: the steal fraction over a sample pair; counters that went backwards
+ * (a fresh boot) or did not move yield null — unmeasurable, never a guess. */
+export function stealFractionFromStatSamples(a, b) {
+  if (!a || !b) return null;
+  const dTotal = b.total - a.total;
+  const dSteal = b.steal - a.steal;
+  if (!Number.isFinite(dTotal) || !Number.isFinite(dSteal) || dTotal <= 0 || dSteal < 0) return null;
+  return Math.min(dSteal / dTotal, 1);
+}
+
+// The measurement window: two /proc/stat reads this far apart. 150ms of host
+// time is ~37 jiffies per core — enough delta to be exact, and small next to
+// serial files that run for minutes. The wait is a bounded busy-spin because
+// the phase is synchronous (spawnSync) and Atomics.wait/Deno.sleepSync are not
+// portable across the runtimes that execute this module (node children AND
+// deno); the spin costs at most STEAL_SAMPLE_MS per serial file.
+export const STEAL_SAMPLE_MS = 150;
+
+function busySleepSync(ms, now = () => performance.now()) {
+  const end = now() + ms;
+  while (now() < end) { /* bounded measurement spin (see STEAL_SAMPLE_MS) */ }
+}
+
+/** The steal fraction over the last `sampleMs` of host time, sampled
+ * synchronously at the wait. Null on any failure (non-Linux, unreadable
+ * /proc/stat, stalled counters) — unmeasurable contributes no scaling and the
+ * decision line says so. `readFile` and `sleepSync` are test seams.
+ * @returns {number | null}
+ */
+export function currentStealFractionSync({ sampleMs = STEAL_SAMPLE_MS, readFile = /** @type {typeof readFileSync} */ (readFileSync), sleepSync = /** @type {(ms: number) => void} */ (busySleepSync) } = {}) {
+  try {
+    const a = stealJiffiesFromStatLine(readFile("/proc/stat", "utf8"));
+    sleepSync(sampleMs);
+    const b = stealJiffiesFromStatLine(readFile("/proc/stat", "utf8"));
+    return stealFractionFromStatSamples(a, b);
+  } catch {
+    return null;
+  }
+}
+
+/** Pure: the per-file decision, so tests can pin the arithmetic and the words
+ * the gate log carries. `source` says which branch resolved the window.
+ * @param {{ base?: number, loadPerCpu?: number, steal?: number|null, override?: string|number|null }} [options]
+ * @returns {{ ms: number, scaled: boolean, override: boolean }}
+ */
+export function resolveSerialFileWindow({ base = DEFAULT_SERIAL_FILE_TIMEOUT_MS, loadPerCpu = 1, steal = null, override = null } = {}) {
+  const ms = serialFileTimeoutMs({ base, loadPerCpu, steal, override });
+  const explicit = Number(override ?? NaN);
+  return { ms, scaled: ms > base, override: Number.isFinite(explicit) && explicit > 0 };
+}
+
+/** Pure: the decision line every measured per-file window prints. The
+ * not-scaled line exists because its ABSENCE is what cost the night
+ * (chrome-agent-platform-8qy5d): a reader of a dead run must see the measured
+ * load and steal, not infer silence meant the signal was fine.
+ * @param {{ file: string, base?: number, loadPerCpu?: number, steal?: number|null, override?: string|number|null, ms: number }} [options]
+ * @returns {string}
+ */
+export function serialWindowDecisionLine({ file, base = DEFAULT_SERIAL_FILE_TIMEOUT_MS, loadPerCpu = 1, steal = null, override = null, ms }) {
+  const loadTxt = `load ${Number(loadPerCpu).toFixed(2)} per CPU`;
+  const stealTxt = Number.isFinite(steal) ? `steal ${(steal * 100).toFixed(1)}%` : "steal unmeasurable";
+  if (resolveSerialFileWindow({ base, loadPerCpu, steal, override }).override) {
+    return `run-tests: serial window ${ms / 1000}s for ${file} (operator override CAP_SERIAL_TEST_TIMEOUT_MS, unscaled; measured at the wait: ${loadTxt}, ${stealTxt})`;
+  }
+  if (ms > base) {
+    return `run-tests: serial timeout scaled to ${ms / 1000}s for ${file} (base ${base / 1000}s x measured conditions, ceiling x${MAX_LOAD_SCALE}; at the wait: ${loadTxt}, ${stealTxt})`;
+  }
+  return `run-tests: serial window ${ms / 1000}s for ${file} (not scaled: at the wait ${loadTxt}, ${stealTxt})`;
 }
 
 /** The machine's current load per CPU (1 when it is idle or unsizable).
@@ -157,6 +272,10 @@ export function currentLoadPerCpu() {
     return 1;
   }
 }
+
+// chrome-agent-platform-8qy5d: defaultSerialTimeoutMs sampled ONCE per run and
+// is superseded by the per-file at-the-wait measurement in runSerialFiles. Kept
+// exported for compatibility; nothing in the gate path calls it any more.
 
 /** A ready-marker deadline may use load only when it can actually be measured. */
 export function measuredReadyLoadPerCpu() {
@@ -351,7 +470,11 @@ let SERIAL_RUN_SEQ = 0;
  * (the focused tests pass ["ignore","ignore","ignore"]).
  */
 export function runSerialFiles(files, {
-  timeoutMs = defaultSerialTimeoutMs(),
+  // 8qy5d: the default used to be defaultSerialTimeoutMs() — sampled ONCE, at
+  // the start of the phase, from loadavg alone, and silent when it did not
+  // scale. `undefined` now means MEASURE per file at the wait (below); a caller
+  // that passes an explicit timeoutMs keeps exactly the old behaviour.
+  timeoutMs = undefined,
   perFileTimeoutMs = SERIAL_FILE_TIMEOUTS,
   stdio = "pipe",
   cwd = undefined,
@@ -377,8 +500,24 @@ export function runSerialFiles(files, {
     // work x a modest factor, see SERIAL_FILE_TIMEOUTS) is used where one exists; the base window
     // stays the fallback for every other file. The effective window is PRINTED when it differs, so
     // a reader never has to guess which bound a file ran under.
-    const fileTimeoutMs = perFileTimeoutMs?.[file] ?? timeoutMs;
-    console.log(`run-tests: serial file ${file}${fileTimeoutMs !== timeoutMs ? ` (per-file bound ${fileTimeoutMs / 1000}s)` : ""}`);
+    //
+    // chrome-agent-platform-8qy5d: with no table entry and no explicit caller window, the window is
+    // now MEASURED AT THE WAIT — load per CPU and hypervisor steal sampled here, for THIS file, not
+    // once at phase start — and the decision is LOGGED EITHER WAY. At the merger's dead run
+    // (64.7% steal, zero "scaled" lines) the old code read an idle box, scaled nothing, said
+    // nothing, and killed the file at 180.5s while 703 parallel files never ran.
+    const tableMs = perFileTimeoutMs?.[file];
+    let fileTimeoutMs;
+    if (tableMs !== undefined || timeoutMs !== undefined) {
+      fileTimeoutMs = tableMs ?? timeoutMs;
+      console.log(`run-tests: serial file ${file}${fileTimeoutMs !== timeoutMs ? ` (per-file bound ${fileTimeoutMs / 1000}s)` : ""}`);
+    } else {
+      const loadPerCpu = currentLoadPerCpu();
+      const steal = currentStealFractionSync();
+      const decision = resolveSerialFileWindow({ loadPerCpu, steal, override: env?.CAP_SERIAL_TEST_TIMEOUT_MS ?? null });
+      fileTimeoutMs = decision.ms;
+      console.log(serialWindowDecisionLine({ file, loadPerCpu, steal, override: env?.CAP_SERIAL_TEST_TIMEOUT_MS ?? null, ms: decision.ms }));
+    }
     const result = runSerialFile(file, { timeoutMs: fileTimeoutMs, stdio, cwd, env });
     const secs = ((Date.now() - started) / 1000).toFixed(1);
     // (1) chrome-agent-platform-grj9: an OS-level spawnSync failure (ENOENT when the runtime is
