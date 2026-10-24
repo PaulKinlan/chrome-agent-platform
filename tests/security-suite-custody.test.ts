@@ -197,11 +197,20 @@ async function verifyLiveProcOwnership(
   expectedStart: string,
   timeoutMs = 2_000,
   readIdentity = readProcIdentity,
+  // sfew0: the poll's clock and sleep are injectable so the two outcomes below can be
+  // exercised as SEQUENCES rather than as races against the box. Defaults are the real ones,
+  // and every production caller passes neither.
+  timing: { now?: () => number; sleep?: (ms: number) => Promise<void> } = {},
 ): Promise<{ status: "live"; starttime: string; uid: number } | {
   status: "vanished"; reason: "pid-vanished-during-ownership-inspection";
 }> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
+  const now = timing.now ?? (() => Date.now());
+  const sleep = timing.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  // The deadline is checked on the injected clock: with the real clock a 20ms poll sleep that
+  // lands late under load could expire the budget BEFORE the next read happened, and the
+  // fail-closed zombie throw would be reported where the test expected the vanished path.
+  const deadline = now() + timeoutMs;
+  while (now() < deadline) {
     let id;
     try {
       id = await readIdentity(pid);
@@ -223,7 +232,7 @@ async function verifyLiveProcOwnership(
       }
       return { status: "live", starttime: id.starttime, uid: id.uid };
     }
-    await new Promise((r) => setTimeout(r, 20));
+    await sleep(20);
   }
   throw new Error(`custody ownership unverified for pid ${pid}: process not live (zombie)`);
 }
@@ -1250,16 +1259,41 @@ Deno.test("security-suite custody: residue matching selects escape child by iden
 Deno.test("yuu9s: a pid vanishing MID ownership inspection is a named absence, not a raw /proc throw", async () => {
   const pid = 424242;
   let reads = 0;
+  // sfew0: driven clock. The sequence (zombie observed -> 20ms poll -> ENOENT) is deterministic
+  // instead of depending on a 20ms timer landing inside a 100ms budget on a loaded box, which is
+  // how this assertion reddened in the 2026-10-24 full gate (yuu9s at :1250, "process not live
+  // (zombie)" thrown after the deadline expired with only ONE read made).
+  let simulated = 0;
   const result = await verifyLiveProcOwnership(pid, "1000", 100, async () => {
     reads++;
     if (reads === 1) return { pid, ppid: 1, pgid: pid, sid: pid, state: "Z", starttime: "1000", uid: Deno.uid() ?? 0 };
     throw Object.assign(new Error(`ENOENT: stat /proc/${pid}`), {
       code: "ENOENT", path: `/proc/${pid}`, sysCall: "stat",
     });
-  });
+  }, { now: () => simulated, sleep: async (ms) => { simulated += ms; } });
   assertEquals(reads, 2, "failure must be on the second read INSIDE the ownership inspection");
   assertEquals((result as unknown as { status?: string }).status, "vanished");
   assertEquals((result as unknown as { reason?: string }).reason, "pid-vanished-during-ownership-inspection");
+});
+
+// sfew0: the deadline path the flake was colliding with now has its OWN test, so making the
+// vanished sequence deterministic does not lose the fail-closed coverage it accidentally had.
+Deno.test("sfew0: a pid that stays a zombie past the inspection deadline fails CLOSED by name", async () => {
+  const pid = 424244;
+  let reads = 0;
+  let simulated = 0;
+  const err = await assertRejects(
+    () =>
+      verifyLiveProcOwnership(pid, "1000", 100, async () => {
+        reads++;
+        return { pid, ppid: 1, pgid: pid, sid: pid, state: "Z", starttime: "1000", uid: Deno.uid() ?? 0 };
+      }, { now: () => simulated, sleep: async (ms) => { simulated += ms; } }),
+    Error,
+    `custody ownership unverified for pid ${pid}: process not live (zombie)`,
+  );
+  assertEquals(err.message, `custody ownership unverified for pid ${pid}: process not live (zombie)`);
+  assert(reads > 1, `must POLL before refusing, not refuse on a single observation (got ${reads} reads)`);
+  assert(simulated >= 100, `must consume the whole deadline before refusing (simulated ${simulated}ms)`);
 });
 
 Deno.test("yuu9s: unreadable /proc identity is named unverified, never a vanished pid", async () => {
