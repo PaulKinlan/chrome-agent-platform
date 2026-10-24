@@ -588,15 +588,30 @@ export function checkHeavyReceipt(tree, { now = Date.now(), maxAgeMs = DEFAULT_R
         : steal.reason === "no-steal-evidence"
           ? `the receipt carries NO steal evidence (produced before tu8w9, or outside the gate)`
           : `the receipt's steal evidence is not a completed measurement (timing ${steal.payload.timing ?? "not recorded"})`;
+    // The FIRST line is the verdict a human reads off a red gate, and it must answer the only question
+    // that matters at that moment: is this the CODE or the BOX? (coord, 2026-10-24: "the whole value of a
+    // distinct code is that a human reading a red gate knows instantly whether to look at the code or the
+    // box".) So it is one greppable line: `ACCOUNTING-ONLY: <what the numbers say> on tree <sha> — receipt
+    // claims no timing.` The detail follows on its own lines for whoever needs the remedy.
+    const headline =
+      steal.reason === "starved"
+        ? `ACCOUNTING-ONLY: sampled steal ${pct(steal.payload.maxStealPct)} >= ${pct(steal.payload.thresholdPct)} on tree ${tree.slice(0, 12)} — receipt claims no timing.`
+        : steal.reason === "no-steal-evidence"
+          ? `ACCOUNTING-ONLY: no steal samples recorded on tree ${tree.slice(0, 12)} — receipt claims no timing.`
+          : `ACCOUNTING-ONLY: steal unmeasured (${steal.payload.timing ?? "no verdict"}) on tree ${tree.slice(0, 12)} — receipt claims no timing.`;
     return {
       ok: false,
       outcome: "accounting-only",
       reason: `accounting-only:${steal.reason}`,
+      headline,
       line:
-        `gate-receipt: HEAVY RECEIPT IS ACCOUNTING-ONLY, NOT A TIMING CREDENTIAL for tree ${tree.slice(0, 12)} — ` +
-        `${why}: ${numbers}. Functional completeness (every enumerated suite passed, 0 skips, rc 0) is certified; ` +
-        `the DURATIONS from this run are not evidence (tu8w9/gezg6). Re-run \`npm run test:heavy\` on an idle box for a ` +
-        `timing credential, or accept this receipt for ACCOUNTING with --accept-accounting-only.`,
+        `${headline}\n` +
+        `  ${why}: ${numbers}.\n` +
+        `  Functional completeness (every enumerated suite passed, 0 skips, rc 0) is certified; the DURATIONS from ` +
+        `this run are not evidence (tu8w9/gezg6).\n` +
+        `  Fix the BOX: re-run \`npm run test:heavy\` with no arguments on an idle host for a timing credential.\n` +
+        `  Or accept it for ACCOUNTING only: node scripts/gate-receipt.mjs --accept-accounting-only`,
+
       marker: "HEAVY_RECEIPT_ACCOUNTING_ONLY",
       payload: { tree, expectedTree: tree, outcome: "accounting-only", ...steal.payload },
       receipt,

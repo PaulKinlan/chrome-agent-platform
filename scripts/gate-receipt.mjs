@@ -64,10 +64,12 @@ if (!verdict.ok) {
   const accountingOnly = verdict.outcome === "accounting-only";
   if (accountingOnly && acceptAccountingOnly) {
     // The hub's accounting path: functional completeness is certified, timing is explicitly not claimed.
+    // The accepted line keeps the same shape as the refusal, so a log reader sees the verdict, the
+    // numbers and the tree in one place whether the run was accepted or refused.
     console.log(verdict.marker, JSON.stringify({ ...verdict.payload, accepted: "accounting-only", timingClaim: "none" }));
     console.log(
-      `gate-receipt: ACCOUNTING-ONLY accepted for tree ${tree.slice(0, 12)} — every enumerated suite passed and no`,
-      `timing is claimed by this run (steal peak ${verdict.payload.maxStealPct ?? "NA"}%).`,
+      `ACCOUNTING-ONLY ACCEPTED: ${verdict.headline.replace(/^ACCOUNTING-ONLY: /, "")} ` +
+        `(every enumerated suite passed; accounting only, timingClaim none).`,
     );
     process.exit(0);
   }

@@ -507,11 +507,15 @@ Deno.test("gezg6: the refusal NAMES the tree, the steal numbers and the threshol
   const TREE = nextTree();
   writeHeavyReceipt({ ...certifyingBody(TREE, { conditions: { steal: starvedSteal() } }) } as any);
   const verdict = checkHeavyReceipt(TREE, { now: NOW });
-  assertStringIncludes(verdict.line, `NOT A TIMING CREDENTIAL for tree ${TREE.slice(0, 12)}`);
-  assertStringIncludes(verdict.line, "STARVED");
+  // The FIRST line is the whole point of the distinct code (coord): a human reading a red gate must
+  // know instantly whether to look at the CODE or the BOX. One greppable line, numbers and tree on it.
+  const firstLine = String(verdict.line).split("\n")[0];
+  assertEquals(firstLine, `ACCOUNTING-ONLY: sampled steal 87% >= 20% on tree ${TREE.slice(0, 12)} — receipt claims no timing.`);
+  // ...and the detail below it carries the numbers, the threshold's SOURCE and both remedies.
   assertStringIncludes(verdict.line, "avg 58.6%");
   assertStringIncludes(verdict.line, "peak 87%");
   assertStringIncludes(verdict.line, "threshold 20% (default 20 (ADR rxayt / tu8w9))");
+  assertStringIncludes(verdict.line, "Fix the BOX");
   assertStringIncludes(verdict.line, "--accept-accounting-only");
   assertEquals(verdict.payload.accepted, undefined, "the verdict itself never claims acceptance");
 }));
@@ -540,7 +544,8 @@ Deno.test("gezg6: accountingOnly is enough on its own, and UNKNOWN is not an exc
   writeHeavyReceipt({ ...certifyingBody(OLD, { conditions: undefined }) } as any);
   const old = checkHeavyReceipt(OLD, { now: NOW });
   assertEquals([old.ok, old.reason], [false, "accounting-only:no-steal-evidence"]);
-  assertStringIncludes(old.line, "NO steal evidence");
+  assertEquals(String(old.line).split("\n")[0], `ACCOUNTING-ONLY: no steal samples recorded on tree ${OLD.slice(0, 12)} — receipt claims no timing.`);
+  assertEquals(String(unknown.line).split("\n")[0], `ACCOUNTING-ONLY: steal unmeasured (UNKNOWN) on tree ${UNKNOWN.slice(0, 12)} — receipt claims no timing.`);
 }));
 
 Deno.test("gezg6: the accounting path still requires completeness — a starved run with a skip is REFUSED, not accepted", withReceipts(async (nextTree) => {
@@ -586,13 +591,14 @@ Deno.test("gezg6: the CLI separates 'bad box' (exit 3) from 'no receipt' (exit 2
     );
     const starved = cli();
     assertEquals(starved.code, 3, "a starved box is a DISTINCT failure from a missing receipt");
-    assertStringIncludes(text(starved.stderr), "NOT A TIMING CREDENTIAL");
+    assertStringIncludes(text(starved.stderr), "ACCOUNTING-ONLY: sampled steal 87% >= 20% on tree ");
     assertStringIncludes(text(starved.stdout), "HEAVY_RECEIPT_ACCOUNTING_ONLY");
 
     // ...and exit 0 for the accounting path when that is explicitly accepted.
     const accepted = cli(["--accept-accounting-only"]);
     assertEquals(accepted.code, 0);
-    assertStringIncludes(text(accepted.stdout), "ACCOUNTING-ONLY accepted");
+    assertStringIncludes(text(accepted.stdout), "ACCOUNTING-ONLY ACCEPTED: sampled steal 87% >= 20%");
+    assertStringIncludes(text(accepted.stdout), "accounting only, timingClaim none");
     assertEquals(text(accepted.stdout).includes('"accepted":"accounting-only"'), true);
 
     // (a) a healthy receipt => exit 0 as a full timing credential, with the numbers on the line.
