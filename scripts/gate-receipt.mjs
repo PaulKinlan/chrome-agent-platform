@@ -22,8 +22,34 @@
 //
 // Refusal contract: named line naming both the expected and the found tree + HEAVY_RECEIPT_REFUSAL
 // marker + exit 2, zero suites run.
+//
+// ACCOUNTING vs TIMING (chrome-agent-platform-gezg6, coord 2026-10-24): since tu8w9 a receipt records
+// the CPU steal it ran under, so a functional PASS is no longer automatically a TIMING credential. The
+// exit codes are distinguishable on purpose, because "there is no receipt" and "the box was starved" are
+// different problems with different fixes:
+//
+//   exit 0  full credential (steal measured, below threshold)
+//   exit 0  accounting-only ACCEPTED, only with --accept-accounting-only: the hub's accounting path
+//           (every enumerated suite passed, 0 skips, tracked failures, rc 0) still lands, and the run
+//           claims no timing. The marker on stdout says so, so a later reader cannot mistake it.
+//   exit 2  structurally refused: missing / mismatched / stale / not a pass / incomplete (get a receipt)
+//   exit 3  accounting-only and NOT accepted: starved, unmeasured, or no steal evidence (fix the box)
 
 import { checkHeavyReceipt, currentTreeHash, expectedHeavyFiles } from "./lib/heavy-receipt.mjs";
+
+const args = process.argv.slice(2);
+const known = new Set(["--accept-accounting-only", "--help"]);
+for (const arg of args) {
+  if (!known.has(arg)) {
+    console.error(`gate-receipt: unknown argument ${JSON.stringify(arg)} — known: --accept-accounting-only`);
+    process.exit(2);
+  }
+}
+if (args.includes("--help")) {
+  console.log("gate-receipt [--accept-accounting-only]\n\n  exit 0 full credential; 0 accounting-only when accepted,\n  2 nothing usable (missing/mismatched/incomplete), 3 starved but not accepted.");
+  process.exit(0);
+}
+const acceptAccountingOnly = args.includes("--accept-accounting-only");
 
 let tree;
 try {
@@ -35,12 +61,27 @@ try {
 const verdict = checkHeavyReceipt(tree, { expected: expectedHeavyFiles() });
 if (!verdict.ok) {
   console.error(`\n${verdict.line}\n`);
+  const accountingOnly = verdict.outcome === "accounting-only";
+  if (accountingOnly && acceptAccountingOnly) {
+    // The hub's accounting path: functional completeness is certified, timing is explicitly not claimed.
+    // The accepted line keeps the same shape as the refusal, so a log reader sees the verdict, the
+    // numbers and the tree in one place whether the run was accepted or refused.
+    console.log(verdict.marker, JSON.stringify({ ...verdict.payload, accepted: "accounting-only", timingClaim: "none" }));
+    console.log(
+      `ACCOUNTING-ONLY ACCEPTED: ${verdict.headline.replace(/^ACCOUNTING-ONLY: /, "")} ` +
+        `(every enumerated suite passed; accounting only, timingClaim none).`,
+    );
+    process.exit(0);
+  }
   console.log(verdict.marker, JSON.stringify(verdict.payload));
-  process.exit(2);
+  // 3 vs 2: "bad box" vs "no receipt". Both fail closed; only one is fixed by re-running on idle iron.
+  process.exit(accountingOnly ? 3 : 2);
 }
 const receipt = verdict.receipt;
 console.log(
-  `gate-receipt: heavy tier certified for tree ${tree.slice(0, 12)} ` +
+  `gate-receipt: heavy tier certified for tree ${tree.slice(0, 12)} (timing credential: steal peak ` +
+    `${verdict.steal?.maxStealPct === null || verdict.steal?.maxStealPct === undefined ? "NA" : Number(verdict.steal.maxStealPct).toFixed(1)}%, ` +
+    `threshold ${verdict.steal?.thresholdPct ?? "NA"}%) ` +
     `(result ${receipt.result}, ${receipt.covered.length}/${receipt.expected.length} enumerated suites all passed, ` +
     `rc ${receipt.exitCode}, finished ${new Date(receipt.finishedAt).toISOString()}, producer ${receipt.producer})`,
 );

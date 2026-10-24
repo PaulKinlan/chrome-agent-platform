@@ -42,6 +42,7 @@ import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, re
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { durableDir } from "./durable-root.mjs";
+import { STEAL_THRESHOLD_PCT } from "./cpu-steal-sampler.mjs";
 import { HEAVY_GATE_FILES } from "../test-partition.mjs";
 
 export const RECEIPT_DIR_NAME = "heavy-receipts";
@@ -218,7 +219,7 @@ export function auditSuiteLedger(suites, expected) {
  * Write failure THROWS: the producer must not exit 0 when it could not record what it ran, or the
  * gate would later refuse a tree that looked certified to the operator.
  *
- * @param {{ tree: string, treeEnd?: string, commit?: string, result: "pass"|"fail"|"refusal"|"subset"|"drift",
+ * @param {{ tree: string, treeEnd?: string, commit?: string, result: "pass"|"fail"|"refusal"|"subset"|"drift", conditions?: any,
  *   command?: string, args?: string[], exitCode?: number | null, logPath?: string | null,
  *   suites?: { file: string, phase: string, status: string }[], expected?: string[], dirty?: string[], producer?: string,
  *   startedAt?: number | null, finishedAt?: number }} args
@@ -235,6 +236,7 @@ export function writeHeavyReceipt({
   suites = [],
   expected = expectedHeavyFiles(),
   dirty = [],
+  conditions = null,
   producer = process.env.FLEET_LANE ?? "unknown",
   startedAt = null,
   finishedAt = Date.now(),
@@ -283,6 +285,12 @@ export function writeHeavyReceipt({
     missing,
     skipped,
     dirty,
+    // tu8w9: the CONDITIONS OF ITS OWN PRODUCTION. A receipt that records only a verdict cannot be
+    // audited later for whether the box was starved while the durations were measured, which is the
+    // one thing a reader most needs to know before trusting a timing assertion.
+    conditions,
+    timing: conditions?.steal?.timing ?? "UNKNOWN",
+    accountingOnly: conditions?.steal?.timing === "UNMEASURED" && result === "pass",
     producer,
     host: process.env.HOSTNAME ?? "unknown",
     startedAt,
@@ -336,10 +344,67 @@ export function writeHeavyReceipt({
  * @param {{ now?: number, maxAgeMs?: number, expected?: string[] }} [options]
  * @returns {HeavyReceiptVerdict}
  */
+/**
+ * What a receipt's OWN steal numbers allow it to certify (chrome-agent-platform-gezg6).
+ *
+ * tu8w9 made the receipt record the conditions it was produced under. This is the half that consumes
+ * them: a functional PASS says the suites ran and passed, and says NOTHING about whether the box was
+ * starved while their durations were measured. Measured on this VM on 2026-10-23: average 58.6% steal,
+ * peak 87%, 689/698 intervals at or above 20%, while 744/744 parallel files still completed. So:
+ *
+ *   full            — steal was measured and stayed under the threshold: a timing credential.
+ *   accounting-only — the run was marked accounting-only, or its numbers say the box was starved
+ *                     (>= threshold sampled), or it carries no usable steal evidence at all.
+ *                     Functional completeness is still certified; DURATIONS are not evidence.
+ *
+ * There is deliberately no third "probably fine" state, and no way to reach `full` without a MEASURED
+ * verdict from a run that recorded the numbers: missing data cannot authorise a timing claim, which is
+ * the same rule the producer applies (UNKNOWN is never an exception).
+ */
+export function evaluateStealConditions(receipt) {
+  const conditions = receipt?.conditions?.steal ?? null;
+  if (!conditions) {
+    return {
+      outcome: "accounting-only",
+      reason: "no-steal-evidence",
+      payload: { accountingReason: "no-steal-evidence", timing: null },
+    };
+  }
+  const thresholdPct = Number.isFinite(Number(conditions.thresholdPct)) ? Number(conditions.thresholdPct) : STEAL_THRESHOLD_PCT;
+  const maxStealPct = Number.isFinite(Number(conditions.maxStealPct)) ? Number(conditions.maxStealPct) : null;
+  const avgStealPct = Number.isFinite(Number(conditions.avgStealPct)) ? Number(conditions.avgStealPct) : null;
+  const payload = {
+    accountingReason: null,
+    timing: conditions.timing ?? null,
+    samples: conditions.samples ?? null,
+    validSamples: conditions.validSamples ?? null,
+    maxStealPct,
+    avgStealPct,
+    thresholdPct,
+    thresholdSource: conditions.thresholdSource ?? null,
+  };
+  const starved =
+    receipt.accountingOnly === true ||
+    conditions.timing === "UNMEASURED" ||
+    (maxStealPct !== null && maxStealPct >= thresholdPct);
+  if (starved) {
+    return { outcome: "accounting-only", reason: "starved", payload: { ...payload, accountingReason: "starved" } };
+  }
+  if (conditions.timing !== "MEASURED" || maxStealPct === null) {
+    // UNKNOWN, a missing verdict, or numbers that were never completed: no timing claim either way.
+    return { outcome: "accounting-only", reason: "steal-unmeasured", payload: { ...payload, accountingReason: "steal-unmeasured" } };
+  }
+  return { outcome: "full", reason: "measured", payload };
+}
+
+/**
+ * @returns {Record<string, any>} verdict: {ok, outcome: "full"|"accounting-only"|"refused", reason, line?, marker?, payload, receipt?, path?, steal?}
+ */
 export function checkHeavyReceipt(tree, { now = Date.now(), maxAgeMs = DEFAULT_RECEIPT_MAX_AGE_MS, expected = expectedHeavyFiles() } = {}) {
   const path = receiptPath(tree);
   const refuse = (reason, line, payload = {}) => ({
     ok: false,
+    outcome: "refused",
     reason,
     line,
     marker: "HEAVY_RECEIPT_REFUSAL",
@@ -505,5 +570,53 @@ export function checkHeavyReceipt(tree, { now = Date.now(), maxAgeMs = DEFAULT_R
       { ageMs, maxAgeMs },
     );
   }
-  return { ok: true, reason: "certified", receipt, path };
+  // gezg6: structure is not the whole credential. The receipt's own conditions decide whether this is a
+  // TIMING credential or only good enough for accounting, and the refusal names the numbers so an
+  // operator can tell "no receipt" (exit 2, missing) from "bad box" (exit 3, starved).
+  const steal = evaluateStealConditions(receipt);
+  if (steal.outcome !== "full") {
+    // Numbers, or an honest "not recorded" — never NaN% or undefined%, which read as measurements.
+    const pct = (value) =>
+      Number.isFinite(Number(value)) && value !== null ? `${String(Number(Number(value).toFixed(1)))}%` : "not recorded";
+    const numbers =
+      `avg ${pct(steal.payload.avgStealPct)}, peak ${pct(steal.payload.maxStealPct)}, ` +
+      `threshold ${pct(steal.payload.thresholdPct)} (${steal.payload.thresholdSource ?? "source not recorded"}), ` +
+      `${steal.payload.validSamples ?? "?"}/${steal.payload.samples ?? "?"} valid sample(s), timing ${steal.payload.timing ?? "not recorded"}`;
+    const why =
+      steal.reason === "starved"
+        ? `the receipt's own steal numbers say the box was STARVED`
+        : steal.reason === "no-steal-evidence"
+          ? `the receipt carries NO steal evidence (produced before tu8w9, or outside the gate)`
+          : `the receipt's steal evidence is not a completed measurement (timing ${steal.payload.timing ?? "not recorded"})`;
+    // The FIRST line is the verdict a human reads off a red gate, and it must answer the only question
+    // that matters at that moment: is this the CODE or the BOX? (coord, 2026-10-24: "the whole value of a
+    // distinct code is that a human reading a red gate knows instantly whether to look at the code or the
+    // box".) So it is one greppable line: `ACCOUNTING-ONLY: <what the numbers say> on tree <sha> — receipt
+    // claims no timing.` The detail follows on its own lines for whoever needs the remedy.
+    const headline =
+      steal.reason === "starved"
+        ? `ACCOUNTING-ONLY: sampled steal ${pct(steal.payload.maxStealPct)} >= ${pct(steal.payload.thresholdPct)} on tree ${tree.slice(0, 12)} — receipt claims no timing.`
+        : steal.reason === "no-steal-evidence"
+          ? `ACCOUNTING-ONLY: no steal samples recorded on tree ${tree.slice(0, 12)} — receipt claims no timing.`
+          : `ACCOUNTING-ONLY: steal unmeasured (${steal.payload.timing ?? "no verdict"}) on tree ${tree.slice(0, 12)} — receipt claims no timing.`;
+    return {
+      ok: false,
+      outcome: "accounting-only",
+      reason: `accounting-only:${steal.reason}`,
+      headline,
+      line:
+        `${headline}\n` +
+        `  ${why}: ${numbers}.\n` +
+        `  Functional completeness (every enumerated suite passed, 0 skips, rc 0) is certified; the DURATIONS from ` +
+        `this run are not evidence (tu8w9/gezg6).\n` +
+        `  Fix the BOX: re-run \`npm run test:heavy\` with no arguments on an idle host for a timing credential.\n` +
+        `  Or accept it for ACCOUNTING only: node scripts/gate-receipt.mjs --accept-accounting-only`,
+
+      marker: "HEAVY_RECEIPT_ACCOUNTING_ONLY",
+      payload: { tree, expectedTree: tree, outcome: "accounting-only", ...steal.payload },
+      receipt,
+      path,
+    };
+  }
+  return { ok: true, outcome: "full", reason: "certified", receipt, path, steal: steal.payload };
 }

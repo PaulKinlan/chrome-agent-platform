@@ -31,6 +31,13 @@ const row = (path, bytes) => ({ path, bytes });
 // Identical values either way, so the byte-matrix assertions below cannot tell the two apart.
 const dense = (length, value = 1) => new Array(length).fill(value);
 
+// chrome-agent-platform-ifu81: this file used to hold FOUR cases whose cost was a 10 MiB byte walk
+// (~133s each; exactDenseByteArray() does two reflective passes per byte). Those four are now four files
+// — -seed-total-limit, -seed-file-limit, -seed-maxima and -transaction-growth — so each runs in its own
+// worker and no single unit holds the pool for 2-7 minutes. Every assertion they made moved with them
+// unchanged; nothing was dropped and nothing was weakened. Measured here (2026-10-24): the heaviest
+// case left is now milliseconds, and this file runs in ~10s instead of ~430s.
+
 Deno.test("5icgm/wtpwp: explicit and default dense() bytes agree with an independently encoded workspace write/read", () => {
   // Do not construct the expected bytes from dense() or hand-copy byte literals:
   // this independent producer writes TextEncoder bytes into the REAL workspace.
@@ -72,26 +79,6 @@ Deno.test("S1 seed: inputs predecessor matrix is byte-identical to the 13936ec v
   assertEquals(valid([]).files.length, 0);
 });
 
-Deno.test("S1 seed: valid scratch + mixed classes at independent maxima", () => {
-  const empty = valid([row("scratch/e.bin", [])]);
-  assertEquals(empty.files[0].path, "scratch/e.bin");
-  assertEquals(empty.files[0].bytes.length, 0);
-  // one scratch file at the exact 10 MiB max + inputs at the exact 256 KiB total
-  // (spread across the 8 input files — the per-file input cap is 32 KiB)
-  const big = valid([
-    row("scratch/big.bin", dense(SCRATCH_FILE_LIMITS.maxFileBytes)),
-    ...Array.from({ length: 8 }, (_, i) => row(`inputs/t${i}.bin`, dense(32 * 1024))),
-  ]);
-  assertEquals(big.files[0].bytes.length, 10 * 1024 * 1024);
-  assertEquals(big.files.reduce((sum, f) => sum + (f.path.startsWith("inputs") ? f.bytes.length : 0), 0), 256 * 1024);
-  // a mixed 8 inputs + 8 scratch seed succeeds (16 combined)
-  const mixed = valid([
-    ...Array.from({ length: 8 }, (_, i) => row(`inputs/i${i}.bin`, [i])),
-    ...Array.from({ length: 8 }, (_, i) => row(`scratch/s${i}.bin`, [i])),
-  ]);
-  assertEquals(mixed.files.length, 16);
-});
-
 Deno.test("S1 seed: count and total boundary pins (7/8/9 per class, 16/17 combined, exact-bound/+1)", () => {
   expectSeedFail([...Array.from({ length: 9 }, (_, i) => row(`inputs/i${i}.bin`, [i]))], "inputs 9th");
   expectSeedFail([...Array.from({ length: 9 }, (_, i) => row(`scratch/s${i}.bin`, [i]))], "scratch 9th");
@@ -106,13 +93,16 @@ Deno.test("S1 seed: count and total boundary pins (7/8/9 per class, 16/17 combin
     ...Array.from({ length: 8 }, (_, i) => row(`inputs/t${i}.bin`, dense(32 * 1024))),
     row("inputs/extra.bin", dense(1)),
   ], "inputs total +1");
-  // scratch exactly 10 MiB succeeds; +1 fails INDEPENDENTLY of inputs.
-  valid([row("scratch/big.bin", dense(SCRATCH_FILE_LIMITS.maxTotalBytes))]);
+  // chrome-agent-platform-ifu81: the two ACCEPTED maximum-size scratch seeds moved to their own files
+  // (wasm-sync-workspace-seed-total-limit.test.ts and -seed-file-limit.test.ts). Measured per statement,
+  // each 10 MiB validation costs 133.5s while every assertion left here costs 0.0-1.6s, so keeping them
+  // in this case meant one worker held for 378s (21% of the 1800s parallel bound) and starved the
+  // browser suites sharing the pool. The LIMIT assertions stay here — they fail before the byte walk,
+  // cost milliseconds, and are the half that actually protects the boundary.
   expectSeedFail([row("scratch/big.bin", dense(SCRATCH_FILE_LIMITS.maxTotalBytes + 1))], "scratch total +1");
-  // per-file: inputs 32 KiB exact OK, +1 fail; scratch 10 MiB exact OK, +1 fail.
+  // per-file: inputs 32 KiB exact OK, +1 fail; scratch per-file +1 fails (its AT-limit half is the split).
   valid([row("inputs/f.bin", dense(INPUT_SEED_LIMITS.maxFileBytes))]);
   expectSeedFail([row("inputs/f.bin", dense(INPUT_SEED_LIMITS.maxFileBytes + 1))], "inputs file +1");
-  valid([row("scratch/f.bin", dense(SCRATCH_FILE_LIMITS.maxFileBytes))]);
   expectSeedFail([row("scratch/f.bin", dense(SCRATCH_FILE_LIMITS.maxFileBytes + 1))], "scratch file +1");
   // the counts are CLASS-SCOPED: 8 inputs + 8 scratch succeeds; 8 inputs + 9 scratch fails.
   valid([
@@ -304,34 +294,6 @@ Deno.test("S1 transaction: count/handle-cap boundaries (7->8, 8->9; 63->64, 64->
   assertEquals(code, "ENOSPC");
   assertEquals(capWs._inspect().openHandles, 64, "no row or handle leaked on the cap failure");
   for (const h of openHandles) h.close();
-});
-
-Deno.test("S1 transaction: malformed now() fails before mutation; aggregate write-growth invariant", () => {
-  const ws = createSyncWorkspace({ root: "tool-jobs/t/c/", now: () => "bad" });
-  let code = null;
-  try { ws.createScratchFile("scratch/x.bin"); } catch (e) { code = e?.code ?? e?.message; }
-  assertEquals(code, "EINVAL");
-  assertEquals(ws._inspect().files.includes("scratch/x.bin"), false, "no mutation on malformed now");
-  // aggregate growth: A at 9 MiB + B at 1 MiB - 1; a write that grows B past
-  // the remaining budget hits the AGGREGATE ENOSPC before mutation (B stays
-  // within its per-file bound).
-  const big = createSyncWorkspace({ root: "tool-jobs/t/c/", seed: { files: [
-    row("scratch/a.bin", dense(9 * 1024 * 1024)),
-    row("scratch/b.bin", dense(1024 * 1024 - 1)),
-  ] } });
-  const h = big.open("scratch/b.bin", { write: true });
-  code = null;
-  try { h.write(1024 * 1024 - 1, new Uint8Array(2)); } catch (e) { code = e?.code ?? e?.message; }
-  assertEquals(code, "ENOSPC", "aggregate growth past 10 MiB -> ENOSPC before mutation");
-  assertEquals(big.stat("scratch/b.bin").size, 1024 * 1024 - 1, "no mutation on the denied growth");
-  // shrink/equal writes remain allowed
-  assertEquals(h.write(0, new Uint8Array(1)), 1);
-  // per-file EFBIG on a single write that would exceed the per-file bound
-  const per = createSyncWorkspace({ root: "tool-jobs/t/c/", seed: { files: [row("scratch/p.bin", [1])] } });
-  const hp = per.open("scratch/p.bin", { write: true });
-  code = null;
-  try { hp.write(10 * 1024 * 1024 - 1, new Uint8Array(2)); } catch (e) { code = e?.code ?? e?.message; }
-  assertEquals(code, "EFBIG");
 });
 
 Deno.test("S1 transaction: P3 — a REAL first-commit-path exception keeps the row committed (EIO, no rollback)", () => {
@@ -544,31 +506,6 @@ Deno.test("S1 seed: extended hostile lattice — prototypes, Proxy traps, setter
 });
 
 
-Deno.test("S1 validator: exactDenseByteArray is a SINGLE indexed walk — one fresh dense result, never routed through the values helper", async () => {
-  // Structural proof (the reviewer's blocker): the byte validator's own block
-  // must NOT call the values helper (no intermediate full values array at the
-  // 10 MiB boundary) and must build exactly one dense result.
-  const source = await Deno.readTextFile(new URL("../extension/lib/wasm-sync-workspace.js", import.meta.url));
-  const blockStart = source.indexOf("function exactDenseByteArray");
-  const blockEnd = source.indexOf("function classForPath", blockStart);
-  assert(blockStart >= 0 && blockEnd > blockStart, "the byte validator exists");
-  const block = source.slice(blockStart, blockEnd);
-  assert(!block.includes("exactDenseArrayValues"), "the byte validator is its own single walk, not values+dense");
-  assert(block.includes("dense.push"), "the byte validator builds its ONE fresh dense result");
-  assert((block.match(/dense\.push\(/g) ?? []).length === 1, "exactly one dense result construction");
-  // Non-vacuity: the single-walk validator preserves the exact semantics —
-  // valid dense byte arrays validate + every hostile value fails job-seed.
-  const ok = validateWorkspaceSeed({ files: [{ path: "scratch/b.bin", bytes: [1, 2, 255] }] });
-  assertEquals([...ok.files[0].bytes], [1, 2, 255]);
-  const big = validateWorkspaceSeed({ files: [{ path: "scratch/big.bin", bytes: dense(10 * 1024 * 1024) }] });
-  assertEquals(big.files[0].bytes.length, 10 * 1024 * 1024);
-  for (const bad of [[256], [-1], [1.5], [NaN], [Infinity], [1, , 3]]) {
-    expectSeedFail({ files: [{ path: "scratch/b.bin", bytes: bad }] }, "byte-range " + JSON.stringify(bad));
-  }
-  // a getter/setter or a symbol key on the byte array still fails
-  expectSeedFail({ files: [{ path: "scratch/g.bin", bytes: [1], [Symbol("x")]: 2 }] }, "bytes symbol key");
-  expectSeedFail({ files: [{ path: "scratch/s.bin", get bytes() { return [1]; } }] }, "bytes getter");
-});
 
 // ──────────────────────────────────────────────────────────────────────────
 // S2 transactional scratch directories: explicit dir representation + the
