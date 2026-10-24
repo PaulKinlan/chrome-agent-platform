@@ -54,6 +54,27 @@ function check(name: string, cond: boolean, detail?: unknown) {
 }
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+// BOUNDED POLL, not a fixed sleep. A `sleep` before a check is an assumption
+// about machine speed, and on a loaded box that assumption is what reds this
+// journey for changes that never touched it (chrome-agent-platform-scp2o: the
+// 900ms window after the row click lost the race with the hub's render on a
+// 135-suite parallel phase, twice). Every wait that guards an assertion below
+// polls for the CONDITION with a deadline instead, so a fast box finishes early
+// and a slow one still converges on the real behaviour being asserted.
+async function pollUntil<T>(
+  fn: () => Promise<T | null | undefined | false>,
+  ms = 8000,
+  intervalMs = 150,
+): Promise<T | null> {
+  const deadline = Date.now() + ms;
+  for (;;) {
+    const v = await fn();
+    if (v) return v as T;
+    if (Date.now() >= deadline) return null;
+    await sleep(intervalMs);
+  }
+}
+
 // Fail fast (with an honest message) when the extension isn't built.
 try { await Deno.stat(`${EXT}/dist/background/service-worker.js`); } catch {
   console.log("FAIL: extension is not built (missing dist/background/service-worker.js) — run npm run build:production first");
@@ -272,8 +293,12 @@ const findRow = (name: string) => `(() => {
   const del = row.closest(".optwrap")?.querySelector(".rowdel") ?? null;
   return { found: true, hasDelete: !!del, summary: picker.hasAttribute("summary"), search: !!picker.shadowRoot.querySelector(".search") };
 })()`;
-await sleep(1200);
-const rowFound = await ntp.ev(findRow(agentName));
+// Bounded poll for the row the registry broadcast re-renders (scp2o: a fixed
+// beat here is the same machine-speed assumption as the click windows below).
+const rowFound = await pollUntil(async () => {
+  const found = await ntp.ev(findRow(agentName));
+  return found?.found === true && found.hasDelete === true ? found : null;
+}) ?? await ntp.ev(findRow(agentName));
 check("journey: the seeded agent's row renders with a real Delete button", rowFound?.found === true && rowFound.hasDelete === true, rowFound);
 check(
   "journey: the hub lists its agents through the SHARED summary picker (no search combobox)",
@@ -284,7 +309,9 @@ check(
 // ── 2a. The row still OPENS the agent: the surface is unchanged ──────────
 // The row IS the click target (a plain button in the summary list), so the
 // trusted click that used to land on capability-row.open lands here.
-const rowRect = await ntp.ev(`(() => {
+// The row's box is recomputed per attempt: the picker re-renders (and re-focuses)
+// after the seed, so a box cached before the click can already be stale.
+const rowBox = () => ntp.ev(`(() => {
   const picker = document.querySelector("#named-agents agent-picker");
   const rows = [...(picker?.shadowRoot?.querySelectorAll(".opt") ?? [])];
   const row = rows.find((r) => (r.querySelector(".name")?.textContent || "") === ${JSON.stringify(agentName)});
@@ -293,29 +320,45 @@ const rowRect = await ntp.ev(`(() => {
   const r = row.getBoundingClientRect();
   return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) };
 })()`);
-const rowClicked = await ntp.clickXY(rowRect);
-check("journey: the shared row received a trusted pointer click", rowClicked === true, { rowRect });
-await sleep(900);
-const threadOpen = await ntp.ev(`(() => {
+const readThread = () => ntp.ev(`(() => {
   const view = document.getElementById("thread-view");
   return { open: !!view && !view.hidden, title: document.getElementById("thread-title")?.textContent ?? "" };
 })()`);
+const clickRowAndWaitForThread = async (windowMs: number) => {
+  const rect = await rowBox();
+  const clicked = await ntp.clickXY(rect);
+  if (clicked !== true) return { rect, clicked, thread: null };
+  const thread = await pollUntil(async () => {
+    const t = await readThread();
+    return t?.open === true && t.title === agentName ? t : null;
+  }, windowMs);
+  return { rect, clicked, thread };
+};
+
+let rowAttempt = await clickRowAndWaitForThread(5000);
+// One bounded RETRY, not a longer sleep: if the window above still lost the
+// race (a click landing mid-re-render can be swallowed), recompute the box and
+// click again — what a person would do — and give the render the same window.
+if (rowAttempt.thread === null) rowAttempt = await clickRowAndWaitForThread(8000);
+check("journey: the shared row received a trusted pointer click", rowAttempt.clicked === true, { rowRect: rowAttempt.rect });
 check(
   "journey: clicking the row opens the agent's thread (the surface the row always opened)",
-  threadOpen?.open === true && threadOpen.title === agentName,
-  { ...threadOpen, agentName },
+  rowAttempt.thread !== null,
+  { open: rowAttempt.thread?.open ?? false, title: rowAttempt.thread?.title ?? null, agentName },
 );
 await ntp.shot(`${OUT}/02-row-opens-thread.png`);
 const backClicked = await ntp.clickSel("#thread-back");
-await sleep(600);
-const backHome = await ntp.ev(`(() => {
-  const view = document.getElementById("thread-view");
-  return { hidden: !!view?.hidden, panel: !!document.querySelector("#named-agents agent-picker") };
-})()`);
+const backHome = await pollUntil(async () => {
+  const state = await ntp.ev(`(() => {
+    const view = document.getElementById("thread-view");
+    return { hidden: !!view?.hidden, panel: !!document.querySelector("#named-agents agent-picker") };
+  })()`);
+  return state?.hidden === true && state.panel === true ? state : null;
+});
 check(
   "journey: back returns to the hub's agent list",
-  backClicked === true && backHome?.hidden === true && backHome.panel === true,
-  backHome,
+  backClicked === true && backHome !== null,
+  backHome ?? { backClicked },
 );
 
 // Click the real Delete with a TRUSTED CDP pointer gesture — the button lives
@@ -334,13 +377,15 @@ const delRect = await ntp.ev(`(() => {
 })()`);
 const delClicked = await ntp.clickXY(delRect);
 check("journey: the Delete button received a trusted pointer click", delClicked === true, { delRect });
-await sleep(600); // the confirm dialog renders
-const dialogUp = await ntp.ev(`(() => {
-  const d = document.querySelector(".cap-confirm-dialog");
-  const accept = d?.querySelector(".cap-confirm-accept");
-  return { up: !!d, title: d?.querySelector(".cap-confirm-title")?.textContent ?? null, hasAccept: !!accept };
-})()`);
-check("journey: the real confirm dialog appears (destructive delete)", dialogUp?.up === true && dialogUp.hasAccept === true, dialogUp);
+const dialogUp = await pollUntil(async () => {
+  const d = await ntp.ev(`(() => {
+    const d = document.querySelector(".cap-confirm-dialog");
+    const accept = d?.querySelector(".cap-confirm-accept");
+    return { up: !!d, title: d?.querySelector(".cap-confirm-title")?.textContent ?? null, hasAccept: !!accept };
+  })()`);
+  return d?.up === true && d.hasAccept === true ? d : null;
+});
+check("journey: the real confirm dialog appears (destructive delete)", dialogUp !== null, dialogUp);
 await ntp.shot(`${OUT}/02-confirm-dialog.png`);
 
 // ── 3. Accept → deletion must be REAL, COMPLETE, and NON-BLOCKING ─────────
