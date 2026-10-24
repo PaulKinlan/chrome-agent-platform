@@ -31,7 +31,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 // @ts-ignore — see above.
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
-import { mountRemoteMcpServers as mountCore, namespacedToolName, formatMcpToolResult } from "./mcp-client-core.js";
+import { mountRemoteMcpServers as mountCore, namespacedToolName, formatMcpToolResult, createGuardedMcpFetch } from "./mcp-client-core.js";
 
 export { namespacedToolName, formatMcpToolResult };
 
@@ -40,16 +40,24 @@ const CLIENT_INFO = { name: "chrome-agent-platform", version: "0.1.0" };
 
 /**
  * Build a browser-safe transport for one server config.
+ *
+ * EVERY transport gets the egress guard (chrome-agent-platform-aix7j): the
+ * owner-configured `headers` carry the owner's Authorization token, and the
+ * SDK's own fetch would follow a 3xx and re-send them (plus the body) to a
+ * target the server chooses. `createGuardedMcpFetch` pins every request and
+ * every same-origin hop to the CONFIGURED origin and refuses the rest, so the
+ * redirect policy lives in this repo rather than in the SDK's defaults.
  * @param {{type:'http'|'sse', url:string, headers?:Record<string,string>}} transport
  */
 export function createRemoteTransport(transport) {
   const url = new URL(transport.url);
   const requestInit = transport.headers ? { headers: transport.headers } : undefined;
+  const guardedFetch = createGuardedMcpFetch({ origin: url.origin });
   switch (transport.type) {
     case "http":
-      return new StreamableHTTPClientTransport(url, { requestInit });
+      return new StreamableHTTPClientTransport(url, { requestInit, fetch: guardedFetch });
     case "sse":
-      return new SSEClientTransport(url, { requestInit });
+      return new SSEClientTransport(url, { requestInit, fetch: guardedFetch });
     default:
       throw new TypeError(
         `Unsupported MCP transport "${transport?.type}". MV3 supports only remote transports: "http" (Streamable HTTP) or "sse".`,

@@ -69,6 +69,115 @@ export function formatMcpToolResult(result) {
 }
 
 /**
+ * Bounds for the MCP egress guard below (chrome-agent-platform-aix7j).
+ */
+export const MCP_EGRESS_MAX_REDIRECT_HOPS = 5;
+
+/** A refusal from the MCP egress guard. A distinct class so a caller (and a
+ * test) can tell "we refused to send this" from "the server failed". */
+export class McpEgressRefusedError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "McpEgressRefusedError";
+  }
+}
+
+function headerValue(res, name) {
+  try {
+    return res?.headers?.get?.(name) ?? res?.headers?.get?.(String(name).toLowerCase()) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The MCP egress guard: the ONE fetch the remote MCP transports may use.
+ *
+ * WHY (chrome-agent-platform-aix7j, GHSA-6prh-2h8m-c8cw). `createRemoteTransport`
+ * hands the owner-configured `headers` (which carry the owner's Authorization
+ * token) to `StreamableHTTPClientTransport` / `SSEClientTransport`. With no
+ * fetch override the SDK's own fetch FOLLOWS a 3xx and re-sends those headers —
+ * and the request body — to whatever origin the server names. Every other
+ * network surface in the repo already refuses this (`lib/site-docs-fallback.js`,
+ * `lib/ask-agent-entry.js`, `lib/skill-import.js`, `lib/python-network.js`: an
+ * owner grants an ORIGIN, never "whatever this origin points at next"), and the
+ * MCP client was the one fetch path that skipped the rule. A compromised MCP
+ * server could therefore 302 the extension into handing a token reused for a
+ * second service to an attacker-chosen host.
+ *
+ * The policy, in order of what each check buys:
+ *   1. `redirect: "manual"` on EVERY attempt — the platform never follows a hop
+ *      for us, so we always see the 3xx before any header is re-sent.
+ *   2. An `opaqueredirect` (what a browser service worker returns: status 0, no
+ *      Location) REFUSES the call. It cannot be inspected, so it is not guessed
+ *      at; following it would re-send the headers blind.
+ *   3. A 3xx WITH a Location is followed ONLY when the next hop is the SAME
+ *      ORIGIN as the owner-configured server (an http→https or
+ *      `/mcp` → `/mcp/v2` move stays legitimate). Anything else is refused.
+ *   4. A request whose URL is not the configured origin is refused before it is
+ *      issued, so a server-supplied URL can never become the request target.
+ *   5. Hops are bounded (MCP_EGRESS_MAX_REDIRECT_HOPS).
+ *
+ * Refusals throw `McpEgressRefusedError`; the mount helper records them per
+ * server like any other connection failure, so the other servers still mount.
+ *
+ * @param {{origin:string, fetchImpl?:typeof fetch, maxHops?:number}} options
+ * @returns {(url: string|URL, init?: RequestInit) => Promise<Response>}
+ */
+export function createGuardedMcpFetch({ origin, fetchImpl = globalThis.fetch, maxHops = MCP_EGRESS_MAX_REDIRECT_HOPS } = {}) {
+  if (typeof origin !== "string" || !origin) {
+    throw new TypeError("createGuardedMcpFetch requires the configured server origin");
+  }
+  if (typeof fetchImpl !== "function") {
+    throw new TypeError("createGuardedMcpFetch requires a fetch implementation");
+  }
+  const refuse = (why) => new McpEgressRefusedError(`MCP request refused: ${why}`);
+  let base;
+  try {
+    base = new URL(origin);
+  } catch {
+    throw new TypeError(`createGuardedMcpFetch: invalid origin "${origin}"`);
+  }
+
+  return async function guardedMcpFetch(url, init) {
+    let current;
+    try {
+      current = new URL(String(url && typeof url === "object" && "href" in url ? url.href : url), base.href);
+    } catch {
+      throw refuse(`invalid request URL "${String(url)}"`);
+    }
+    if (current.origin !== base.origin) {
+      throw refuse(`${current.href} is not the configured MCP origin ${base.origin}`);
+    }
+    for (let hop = 0; hop <= maxHops; hop++) {
+      // Always overwrite the caller's redirect policy: this is the guard.
+      const res = await fetchImpl(current.href, { ...(init ?? {}), redirect: "manual" });
+      if (res?.type === "opaqueredirect") {
+        throw refuse(`${current.href} redirected to an uninspectable destination`);
+      }
+      const status = Number(res?.status ?? 0);
+      if (!(status >= 300 && status < 400)) return res;
+      const location = headerValue(res, "location");
+      if (!location) throw refuse(`${current.href} answered ${status} without an inspectable Location`);
+      let next;
+      try {
+        next = new URL(String(location), current.href);
+      } catch {
+        throw refuse(`${current.href} answered ${status} with an invalid Location`);
+      }
+      if (next.origin !== base.origin) {
+        throw refuse(`redirect to ${next.origin} is not the configured MCP origin ${base.origin}`);
+      }
+      if (hop === maxHops) {
+        throw refuse(`more than ${maxHops} redirects from ${base.origin}`);
+      }
+      current = next;
+    }
+    throw refuse(`more than ${maxHops} redirects from ${base.origin}`);
+  };
+}
+
+/**
  * Mount a set of remote MCP servers with PER-SERVER resilience.
  *
  * @param {Array<{name:string, transport:object, allowedTools?:string[]}>} configs
