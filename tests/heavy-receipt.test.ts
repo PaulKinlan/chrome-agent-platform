@@ -23,6 +23,7 @@ import {
   DEFAULT_RECEIPT_MAX_AGE_MS,
   RECEIPT_FUTURE_SKEW_MS,
   RECEIPT_VERSION,
+  auditSuiteLedger,
   checkHeavyReceipt,
   expectedHeavyFiles,
   isRelevantDirtyPath,
@@ -329,6 +330,58 @@ Deno.test("juubk falsifier: a run from a DIRTY worktree never certifies", withRe
   assertEquals(verdict.reason, "dirty");
   assertStringIncludes(refusalLine(verdict), "scripts/lib/heavy-receipt.mjs");
 }));
+
+Deno.test("957s2 falsifier: claimed completion over an EMPTY ledger does not certify", withReceipts(async (nextTree) => {
+  // The reviewer's exact reproduction (rev-juubk1, 2026-10-23): a v2 receipt whose covered list names
+  // all suites, whose suites ledger is EMPTY, whose treeEnd is wrong and whose args name a subset was
+  // accepted, because the check trusted the producer's own flags. Every one of those is now
+  // recomputed from the ledger, so each is refused on its own term.
+  const TREE = nextTree();
+  writeFileSync(
+    receiptPath(TREE),
+    JSON.stringify(certifyingBody(TREE, {
+      suites: [],
+      covered: expectedHeavyFiles(),
+      treeEnd: nextTree(),
+      args: [expectedHeavyFiles()[0]],
+      command: "deno run -A scripts/heavy-gate.ts tests/python-runtime.test.ts",
+    })),
+  );
+  const verdict = checkHeavyReceipt(TREE, { now: NOW });
+  assertEquals(verdict.ok, false, "an empty ledger beside a claimed completion must never certify");
+  assertEquals(verdict.reason, "subset-invocation");
+}));
+
+Deno.test("957s2 falsifier: each forged field is refused on its own terms", withReceipts(async (nextTree) => {
+  const cases: { name: string; body: Record<string, unknown>; reason: string }[] = [
+    { name: "empty ledger", body: { suites: [] }, reason: "coverage-mismatch" },
+    { name: "subset args", body: { args: ["tests/python-runtime.test.ts"] }, reason: "subset-invocation" },
+    { name: "tree moved mid-run", body: { treeEnd: nextTree() }, reason: "drift" },
+    { name: "duplicated suite", body: { suites: [...completeSuites(), completeSuites()[0]] }, reason: "ledger-duplicate" },
+    { name: "extra suite", body: { suites: [...completeSuites(), { file: "tests/not-heavy.test.ts", phase: "parallel", status: "passed" }] }, reason: "coverage-mismatch" },
+    { name: "complete flag false", body: { complete: false }, reason: "incomplete" },
+  ];
+  for (const { name, body, reason } of cases) {
+    const TREE = nextTree();
+    writeFileSync(receiptPath(TREE), JSON.stringify(certifyingBody(TREE, body)));
+    const verdict = checkHeavyReceipt(TREE, { now: NOW });
+    assertEquals(verdict.ok, false, `${name} must not certify`);
+    assertEquals(verdict.reason, reason, `${name} must be refused as ${reason}, got ${verdict.reason}`);
+  }
+}));
+
+Deno.test("957s2: the ledger audit is one function, shared by producer and checker", () => {
+  const expected = ["a.test.ts", "b.test.ts"];
+  assertEquals(auditSuiteLedger([{ file: "a.test.ts", status: "passed" }, { file: "b.test.ts", status: "passed" }], expected).ok, true);
+  const empty = auditSuiteLedger([], expected);
+  assertEquals([empty.ok, empty.missing], [false, ["a.test.ts", "b.test.ts"]]);
+  assertEquals(auditSuiteLedger([{ file: "a.test.ts", status: "passed" }, { file: "a.test.ts", status: "passed" }], expected).duplicate, ["a.test.ts"]);
+  assertEquals(auditSuiteLedger([{ file: "a.test.ts", status: "killed" }, { file: "b.test.ts", status: "passed" }], expected).bad, [{ file: "a.test.ts", status: "killed" }]);
+  // The writer and the checker must not be able to disagree: the producer's completeness flag is
+  // computed by THIS function, and the checker re-derives it.
+  const lib = readFileSync(join(ROOT, "scripts", "lib", "heavy-receipt.mjs"), "utf8");
+  assertEquals((lib.match(/auditSuiteLedger\(/g) ?? []).length >= 3, true, "writer and checker must both call the shared audit");
+});
 
 Deno.test("juubk: the dirty-worktree rule ignores the passive beads ledger, nothing else", () => {
   // The trap this avoids: every bd write in this fleet dirties .beads/issues.jsonl, including the

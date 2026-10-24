@@ -169,6 +169,32 @@ function certifies(receipt) {
 }
 
 /**
+ * Audit a suite ledger against the tree's enumerated set (juubk + review finding 957s2).
+ *
+ * The ledger is the ONLY evidence that suites ran, so it is checked by content and not by the
+ * `complete` flag beside it: a receipt that claims completion while its ledger is empty, short,
+ * duplicated or non-passing is refused. Writer and checker share this one function, so a producer
+ * cannot mint a shape the checker would not recompute for itself.
+ *
+ * @param {{ file?: string, status?: string }[]} suites
+ * @param {string[]} expected
+ * @returns {{ ok: boolean, missing: string[], extra: string[], duplicate: string[], bad: { file: string, status: string }[] }}
+ */
+export function auditSuiteLedger(suites, expected) {
+  const entries = Array.isArray(suites) ? suites : [];
+  const files = entries.map((entry) => (typeof entry?.file === "string" ? entry.file : ""));
+  const counts = new Map();
+  for (const file of files) counts.set(file, (counts.get(file) ?? 0) + 1);
+  const missing = expected.filter((file) => !counts.has(file));
+  const extra = [...counts.keys()].filter((file) => !expected.includes(file));
+  const duplicate = [...counts.entries()].filter(([, count]) => count > 1).map(([file]) => file);
+  const bad = entries
+    .filter((entry) => entry?.status !== "passed")
+    .map((entry) => ({ file: String(entry?.file ?? "unknown"), status: String(entry?.status ?? "unknown") }));
+  return { ok: missing.length === 0 && extra.length === 0 && duplicate.length === 0 && bad.length === 0, missing, extra, duplicate, bad };
+}
+
+/**
  * Write a receipt atomically. Called for EVERY outcome — a refusal, a failure, a subset or a drift
  * is recorded too (honest ledger) — but only a complete no-args green run may carry `result: pass`,
  * and a certifying receipt already on disk is never replaced by a weaker one.
@@ -203,10 +229,15 @@ export function writeHeavyReceipt({
   if (!tree) throw new Error("heavy-receipt: a receipt must name the tree it ran on");
 
   const covered = suites.map((s) => s.file);
-  const missing = expected.filter((file) => !covered.includes(file));
-  const skipped = suites.filter((s) => s.status !== "passed").map((s) => s.file);
+  const ledger = auditSuiteLedger(suites, expected);
+  const missing = ledger.missing;
+  const skipped = ledger.bad.map((entry) => entry.file);
   const complete =
-    result === "pass" && args.length === 0 && tree === treeEnd && missing.length === 0 && skipped.length === 0 && dirty.length === 0;
+    result === "pass" &&
+    ledger.ok &&
+    args.length === 0 &&
+    tree === treeEnd &&
+    dirty.length === 0;
 
   // A pass claim that the run cannot support is a defect in the producer, not something to record
   // quietly as a pass: downgrade it here so nothing downstream can be tempted to trust the flag.
@@ -341,27 +372,64 @@ export function checkHeavyReceipt(tree, { now = Date.now(), maxAgeMs = DEFAULT_R
       { result: receipt.result, claimed: receipt.claimed },
     );
   }
-  if (receipt.complete !== true) {
+  // review finding 957s2: the check RECOMPUTES everything the receipt asserts. `complete`, `covered`
+  // and `suites` are producer-written fields, and a receipt is exactly the kind of evidence an
+  // operator trusts without re-deriving — so an empty ledger beside claimed completion, a subset
+  // invocation, or a run whose tree moved must each be refused on their own terms.
+  if (!Array.isArray(receipt.args) || receipt.args.length > 0) {
     return refuse(
-      "incomplete",
-      `gate-receipt: HEAVY RECEIPT IS NOT COMPLETE for tree ${tree.slice(0, 12)} — only a no-argument run of the ` +
-        `full enumerated set certifies (juubk).`,
-      { covered: receipt.covered, expected: receipt.expected },
+      "subset-invocation",
+      `gate-receipt: HEAVY RECEIPT RECORDS A SUBSET INVOCATION for tree ${tree.slice(0, 12)} — ` +
+        `args ${JSON.stringify(receipt.args ?? null)}. Only a no-argument run of the full enumerated set ` +
+        `certifies (juubk). Re-run \`npm run test:heavy\` with no arguments.`,
+      { args: receipt.args ?? null },
     );
   }
-  // The covered set must equal THIS tree's enumerated set: the receipt names what ran, the check
-  // names what that tree's taxonomy requires. A receipt written against a different partition is
-  // evidence for a different tree.
-  const covered = Array.isArray(receipt.covered) ? receipt.covered : [];
-  const missing = expected.filter((file) => !covered.includes(file));
-  const extra = covered.filter((file) => !expected.includes(file));
-  if (missing.length > 0 || extra.length > 0) {
+  if (receipt.treeEnd !== tree) {
+    return refuse(
+      "drift",
+      `gate-receipt: HEAVY RECEIPT'S RUN ENDED ON A DIFFERENT TREE — started ${String(receipt.tree).slice(0, 12)}, ` +
+        `ended ${String(receipt.treeEnd ?? "unknown").slice(0, 12)}, certifying ${tree.slice(0, 12)}. The suites did ` +
+        `not all run against this tree (juubk).`,
+      { treeEnd: receipt.treeEnd ?? null },
+    );
+  }
+  // The ledger must match THIS tree's enumerated set exactly, suite by suite — not a count, and not
+  // the `covered` list beside it.
+  const ledger = auditSuiteLedger(receipt.suites, expected);
+  if (ledger.missing.length > 0 || ledger.extra.length > 0) {
     return refuse(
       "coverage-mismatch",
       `gate-receipt: HEAVY RECEIPT COVERS A DIFFERENT SUITE SET for tree ${tree.slice(0, 12)} — ` +
-        `missing ${missing.length ? missing.join(", ") : "none"}; unexpected ${extra.length ? extra.join(", ") : "none"} ` +
-        `(juubk). Re-run \`npm run test:heavy\` on THIS tree.`,
-      { missing, extra },
+        `missing ${ledger.missing.length ? ledger.missing.join(", ") : "none"}; ` +
+        `unexpected ${ledger.extra.length ? ledger.extra.join(", ") : "none"} (juubk). ` +
+        `Re-run \`npm run test:heavy\` on THIS tree.`,
+      { missing: ledger.missing, extra: ledger.extra },
+    );
+  }
+  if (ledger.duplicate.length > 0) {
+    return refuse(
+      "ledger-duplicate",
+      `gate-receipt: HEAVY RECEIPT LEDGER NAMES A SUITE MORE THAN ONCE for tree ${tree.slice(0, 12)} — ` +
+        `${ledger.duplicate.join(", ")}; a ledger is one terminal status per suite (juubk).`,
+      { duplicate: ledger.duplicate },
+    );
+  }
+  if (ledger.bad.length > 0) {
+    return refuse(
+      "incomplete-suites",
+      `gate-receipt: HEAVY RECEIPT HAS NON-PASSING SUITES for tree ${tree.slice(0, 12)} — ` +
+        `${ledger.bad.map((entry) => `${entry.file} (${entry.status})`).join(", ")}. A receipt certifies only when ` +
+        `every enumerated suite reached "passed" (juubk).`,
+      { badSuites: ledger.bad },
+    );
+  }
+  if (receipt.complete !== true) {
+    return refuse(
+      "incomplete",
+      `gate-receipt: HEAVY RECEIPT IS NOT COMPLETE for tree ${tree.slice(0, 12)} — only a no-argument, clean, ` +
+        `all-green run of the full enumerated set certifies (juubk).`,
+      { covered: receipt.covered, expected: receipt.expected, dirty: receipt.dirty ?? null },
     );
   }
   const dirty = Array.isArray(receipt.dirty) ? receipt.dirty : [];
@@ -373,16 +441,6 @@ export function checkHeavyReceipt(tree, { now = Date.now(), maxAgeMs = DEFAULT_R
         `content while the suites ran, so they did not measure this tree (juubk). Commit, then re-run ` +
         `\`npm run test:heavy\` with no arguments.`,
       { dirty },
-    );
-  }
-  const badStatus = (receipt.suites ?? []).filter((s) => s.status !== "passed");
-  if (badStatus.length > 0) {
-    return refuse(
-      "incomplete-suites",
-      `gate-receipt: HEAVY RECEIPT HAS NON-PASSING SUITES for tree ${tree.slice(0, 12)} — ` +
-        `${badStatus.map((s) => `${s.file} (${s.status})`).join(", ")}. A receipt certifies only when every ` +
-        `enumerated suite reached "passed" (juubk).`,
-      { badSuites: badStatus.map((s) => ({ file: s.file, status: s.status })) },
     );
   }
   if (receipt.exitCode !== 0) {
