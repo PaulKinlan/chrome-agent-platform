@@ -118,6 +118,7 @@ async function runPhase(
 }
 
 export async function runHeavyGate(args = Deno.args): Promise<number> {
+  const runStart = Date.now();
   const requested = filesFor(args);
   const { parallel, wallClock } = partitionByPhase(requested);
   console.log(`heavy-gate: ${requested.length} heavy test(s) — ${parallel.length} parallel, ${wallClock.length} wall-clock`);
@@ -133,6 +134,37 @@ export async function runHeavyGate(args = Deno.args): Promise<number> {
   }
 
   const rc = codes.length ? combinePhaseExitCodes(...codes) : 0;
+
+  // chrome-agent-platform-upqhp: every tier run writes a receipt for the exact tree it ran on
+  // (keyed by TREE hash). The gate-command stage (`node scripts/gate-receipt.mjs`) fails closed without a
+  // fresh passing receipt for the tree it certifies, so this write is what keeps the heavy tier
+  // genuinely covered once a suite is tiered here. Refusals and failures are recorded too — an
+  // honest ledger — but only result "pass" ever certifies (checkHeavyReceipt enforces it).
+  // upqhp (coord): the receipt records the EXACT command and result, not just a class — argv so
+  // an auditor can re-run what produced the certification, rc so a timed-out or signal-killed
+  // run cannot masquerade as a clean class.
+  try {
+    const mod = await import("./lib/heavy-receipt.mjs");
+    const tree = mod.currentTreeHash();
+    const argv = ["deno", "run", "-A", "scripts/heavy-gate.ts", ...args];
+    const written = mod.writeHeavyReceipt({
+      tree,
+      commit: mod.currentCommitSha(),
+      result: rc === 0 ? "pass" : rc === ENVIRONMENTAL_REFUSAL_EXIT ? "refusal" : "fail",
+      command: argv.join(" "),
+      exitCode: rc,
+      logPath: Deno.env.get("HEAVY_GATE_LOG_PATH") ?? null,
+      suites: requested.length,
+      startedAt: runStart,
+      finishedAt: Date.now(),
+    });
+    console.log(`heavy-gate: receipt ${rc === 0 ? "written" : "recorded (not a pass)"}: ${written.path}`);
+  } catch (error) {
+    // A receipt-write failure must not corrupt a GREEN tier verdict, but it must be loud: the
+    // gate will refuse to certify this tree later, and the operator needs to know why.
+    console.error(`heavy-gate: FAILED TO WRITE HEAVY RECEIPT (${error instanceof Error ? error.message : String(error)}) — the gate will refuse to certify this tree until a receipt exists (upqhp).`);
+  }
+
   if (rc === 0) {
     console.log(`\nheavy-gate: ALL ${requested.length} HEAVY WASM/FIXTURE TESTS GREEN`);
   } else if (rc === 75) {
