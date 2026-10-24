@@ -281,12 +281,51 @@ export class MicButton extends Component {
     // MutationObserver on body attributes (the view-switch mechanism) runs the
     // same check. offsetParent===null distinguishes display:none (stop) from
     // merely scrolled-off (keep dictating).
-    this._visObserver = new IntersectionObserver(() => this._stopIfHidden());
-    this._visObserver.observe(this);
-    this._mutObserver = new MutationObserver(() => this._stopIfHidden());
-    this._mutObserver.observe(document.body, {
-      attributes: true, attributeFilter: ["class", "hidden", "style"], subtree: true,
+    // fbg7i: IO fires on EVERY intersection-ratio change through the boot's
+    // layout churn, and each callback read offsetParent — a forced synchronous
+    // layout on a dirty tree (~90ms self in a warm-boot profile even after the
+    // MutationObserver was scoped to the ancestor chain). Only a NON-intersecting
+    // entry can mean "hidden" — intersecting transitions skip the layout read
+    // entirely. The display:none-vs-scrolled-off distinction stays inside
+    // _stopIfHidden (offsetParent null check), exactly as before.
+    this._visObserver = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        if (entry.isIntersecting === false) {
+          this._stopIfHidden();
+          break;
+        }
+      }
     });
+    this._visObserver.observe(this);
+    // fbg7i: this observer used to watch the WHOLE body subtree for attribute
+    // changes. During boot, every attribute write of every mounting component
+    // (hundreds of mutations across stage1-composer) batched into a callback
+    // that reads offsetParent — a forced synchronous layout on a dirty tree,
+    // repeated for each mounted mic-button (hub composer AND thread composer),
+    // measured at 70-88ms self per warm boot. The only hide mechanism it must
+    // catch is an ANCESTOR going display:none/hidden (the view switch sets a
+    // class on body; the thread view hides via an ancestor's hidden
+    // attribute), so observe the ancestor CHAIN — a handful of elements,
+    // mutated rarely — with no subtree. Trade, documented: re-parenting the
+    // element without a disconnect/reconnect does not re-arm the chain.
+    this._mutObserver = new MutationObserver(() => this._stopIfHidden());
+    // Walk the COMPOSED ancestor chain: parentElement within a tree, then
+    // across the shadow host — the gallery's <prompt-bar> renders its mic
+    // inside a shadow root, where a light-DOM-only walk stops at the shadow
+    // boundary and the body's view-switch class goes unobserved, leaving a
+    // recording mic live while its composer is hidden (round-3 review).
+    // The element ITSELF is observed too: a self-hide (hidden/class/style on
+    // the mic-button) must stop the recording — IO does not reliably deliver
+    // for display:none. Trade, documented: re-parenting the element without
+    // a disconnect/reconnect does not re-arm the chain.
+    const shadowHostOf = (el) => {
+      const root = el.getRootNode?.();
+      return root && root.host ? root.host : null;
+    };
+    this._mutObserver.observe(this, { attributes: true, attributeFilter: ["class", "hidden", "style"] });
+    for (let el = this.parentElement ?? shadowHostOf(this); el; el = el.parentElement ?? shadowHostOf(el)) {
+      this._mutObserver.observe(el, { attributes: true, attributeFilter: ["class", "hidden", "style"] });
+    }
     this._onPageHide = () => {
       // Pagehide while getUserMedia is PENDING: _listening is still false, so
       // "stop only when listening" leaves the in-flight start valid and the
@@ -298,7 +337,24 @@ export class MicButton extends Component {
     window.addEventListener("pagehide", this._onPageHide);
     this._onDeviceChange = () => void this._refreshDevices(true);
     navigator.mediaDevices?.addEventListener?.("devicechange", this._onDeviceChange);
-    void this._loadDevices();
+    // fbg7i: enumerateDevices costs a ~65ms main-thread continuation during
+    // boot (warm-boot CPU profile), and the picker it feeds only matters when
+    // the owner interacts with the mic — enumerate at idle, not at connect.
+    // The isConnected guard keeps a disconnected element's deferred load from
+    // running (the stub test DOM has no isConnected, so undefined passes).
+    const onIdle = globalThis.requestIdleCallback ?? ((cb) => setTimeout(cb, 750));
+    onIdle(() => {
+      if (this.isConnected !== false) void this._ensureDevices();
+    }, { timeout: 2000 });
+  }
+  // The enumeration runs at most once per element: the idle callback starts
+  // it early, and a click that beats idle starts it on the spot and AWAITS
+  // it — see start() (round-3 review: a quick click must not meter the
+  // default input and then have its pending stream discarded when the
+  // deferred selection resolves underneath it).
+  _ensureDevices() {
+    if (!this._devicesPromise) this._devicesPromise = this._loadDevices();
+    return this._devicesPromise;
   }
   async _loadDevices() {
     try {
@@ -737,6 +793,18 @@ export class MicButton extends Component {
       return;
     }
     const gen = ++this._startGen;
+    // A click that beats the idle enumeration waits for it: the meter must
+    // open the SETTLED selection, not the default input whose pending stream
+    // the late resolution would then discard (round-3 review). The wait is
+    // free in the common case — idle resolved the enumeration long ago.
+    await this._ensureDevices();
+    // The await opens an interleaving the rest of start() never had: a
+    // stop(), a hide, or a disconnect during the wait must WIN.
+    if (gen !== this._startGen) return;
+    if (this._button && this._button.offsetParent === null) {
+      this._emit("mic-error", { message: "recording stopped — the composer was hidden" });
+      return;
+    }
     if (!this._recognition) {
       this._recognition = new SR();
       this._recognition.continuous = true;
