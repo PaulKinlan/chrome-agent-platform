@@ -11,6 +11,7 @@ import {
   checkReachability,
   checkExportReachability,
   checkScriptsExportReachability,
+  createContentCache,
   RETAINED,
   RETAINED_EXPORTS,
   candidateRefs,
@@ -20,6 +21,19 @@ import {
 } from "../scripts/check-reachability.mjs";
 
 const REPO = fileURLToPath(new URL("../", import.meta.url)).replace(/\/$/, "");
+
+// chrome-agent-platform-8qy5d: every checkReachability() call re-reads the tree
+// and re-tokenizes it, and this file calls it ~10 times (one per scenario, plus
+// the falsification tests after they plant or remove a file). Measured on main
+// 2026-10-23: 85s whole-file wall on a quiet box (load 2.4), user 85.0s — pure
+// CPU in acorn — and 46-248s under fleet load, against a FLAT 180s serial bound
+// per file; overrunning it fail-fasts the whole parallel phase and hid 698 of
+// 746 sibling files. The analyses are pure functions of (rel, source), so ONE
+// content-addressed cache is shared across the file run: an unchanged file is
+// analysed once no matter how many scans ask for it, and a changed file (the
+// planted probe below) takes a new content key and is re-analysed. Content
+// keys, not mtime: no stale-verdict window.
+const SCAN_CACHE = createContentCache();
 
 const io = {
   readFile: (p: string) => Deno.readTextFile(p),
@@ -37,6 +51,7 @@ async function run(root = `${REPO}/extension`, retained = RETAINED) {
     manifest: JSON.parse(await Deno.readTextFile(`${REPO}/extension/manifest.json`)),
     retained,
     io,
+    contentCache: SCAN_CACHE,
   });
 }
 
@@ -45,6 +60,22 @@ Deno.test("reachability: zero unlisted unreachable files under extension/", asyn
   assertEquals(result.violations, [], "every shipped source file is reached or RETAINED with a reason");
   assertEquals(result.unreached, []);
   assert(result.reachedFromEntry.size > 100, "the entry-point walk covers the product");
+});
+
+// The memo is the reason this file fits inside a serial file window at all, so
+// pin it structurally (not by timing): two scans of an unchanged tree must
+// perform NO new analysis. Order-independent by construction — it only requires
+// that nothing mutates the tree between the two adjacent calls.
+Deno.test("reachability: a repeated scan of an unchanged tree reuses every analysis (content memo)", async () => {
+  await run();
+  const missesAfterFirst = SCAN_CACHE.misses;
+  await run();
+  assertEquals(
+    SCAN_CACHE.misses,
+    missesAfterFirst,
+    "the second scan of identical content must not re-tokenize any file",
+  );
+  assert(SCAN_CACHE.hits > 0, "the second scan must be served from the content cache");
 });
 
 Deno.test("reachability: RETAINED names only existing files, each with a non-empty reason, none already reached", async () => {
@@ -629,4 +660,55 @@ Deno.test("reachability (kf3h): dead exported functions are caught and genuinely
 
   // 8. Strict export violations include unreached and stale entries
   assert(report.exportViolations.length >= 4, "strict violations must include unreached and stale entries");
+});
+
+// The falsification gate for the content memo (chrome-agent-platform-8qy5d).
+// The memo is keyed by CONTENT, not by path+mtime, so a changed file must be
+// re-analysed and its verdict must follow the bytes. Mutating the memo to reuse
+// the first answer for a path (drill: `byContent.values().next().value` on any
+// non-empty bucket) REDs this test — that is the point of it.
+Deno.test("reachability (8qy5d): a changed file is re-analysed, never served from the content memo", async () => {
+  const cache = createContentCache();
+  const paths = ["lib/provider.js", "lib/consumer.js"];
+  const ioFor = (contents: Record<string, string>) => ({
+    readFile: async (p: string) => {
+      const rel = p.replace(/^mock8qy5d\//, "");
+      if (contents[rel] !== undefined) return contents[rel];
+      throw new Error(`File not found: ${p}`);
+    },
+    readdir: async () => [],
+  });
+  const scan = (contents: Record<string, string>) =>
+    checkExportReachability({
+      root: "mock8qy5d",
+      reached: new Set(paths),
+      io: ioFor(contents),
+      strictExports: true,
+      contentCache: cache,
+    });
+
+  const before = {
+    "lib/provider.js": `export function live() { return 1; }`,
+    "lib/consumer.js": `import { live } from "./provider.js";\nconsole.log(live());`,
+  };
+  const first = await scan(before);
+  assert(
+    first.reachedExports.includes("lib/provider.js:live"),
+    "baseline: the called export is reached",
+  );
+
+  // Same paths, different bytes: the consumer still imports `live` but no longer calls it.
+  const after = {
+    ...before,
+    "lib/consumer.js": `import { live } from "./provider.js";\nconsole.log("unrelated");`,
+  };
+  const second = await scan(after);
+  assert(
+    !second.reachedExports.includes("lib/provider.js:live"),
+    "a changed file must be re-analysed: the memo must not serve the pre-change verdict",
+  );
+  assert(
+    second.unreachedExports.some((e: string) => e.startsWith("lib/provider.js:live")),
+    "the uncalled export must be reported unreached after the change",
+  );
 });
