@@ -319,6 +319,19 @@ Implemented and verified live (pi-acp 0.0.33 over `npm run acp:bridge`):
   token is refused with 403 even on loopback. The extension side REFUSES a
   non-loopback `acp.endpoint` rather than connecting to it, because the bridge
   speaks plain `ws://`. The Settings UI for these is still pending (bead khkk).
+  **THE REFUSAL IS ONE FUNCTION, AND EVERY FETCH DERIVED FROM AN ACP ENDPOINT
+  USES IT (chrome-agent-platform-duhcu).** `loopbackAcpRefusalReason(url)` (and
+  its throwing form `assertLoopbackAcpEndpoint(url)`) in
+  `extension/lib/acp-client.js` is the only definition of "is this ACP target
+  allowed". It is consulted by the socket paths, by the token-bearing `/health`
+  probe and `/acp/preflight` diagnostic (both of which carry the bridge secret),
+  and by the Settings Test-connection check, whose URL is derived by regex from
+  an OPERATOR-TYPED endpoint. It is applied to the url actually FETCHED, not to
+  the endpoint that was handed in, so a rewrite that moves the request cannot
+  step around it. `tests/acp-loopback-guard.test.ts` enforces this structurally:
+  it AST-walks every fetch in the ACP surface and reds on a site whose own
+  function does not run the guard — so the next person adding a probe cannot
+  reinvent the path without also confronting the policy.
   **Tokenless loopback is DELIBERATE — an explicit opt-out (Paul, 2026-10-07):**
   `--allow-anonymous-loopback` makes the loopback bridge tokenless ON PURPOSE, so
   a local process may drive the harness without a token. It exists for local-only

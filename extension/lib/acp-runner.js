@@ -4,7 +4,7 @@
 // Drives an external agent harness (e.g. pi via pi-acp) over the loopback ACP WebSocket bridge,
 // streaming thoughts, tool progress, and message chunks into the conversation surface.
 
-import { AcpClient, acpAllowOptionId, acpDenyOptionId } from "./acp-client.js";
+import { AcpClient, acpAllowOptionId, acpDenyOptionId, loopbackAcpRefusalReason } from "./acp-client.js";
 import { AcpNativeTransport, DEFAULT_NATIVE_HOST } from "./acp-native.js";
 import { acpExecutionId } from "./acp-thread-journal.js";
 import { sha256Hex } from "./pure.js";
@@ -384,7 +384,16 @@ export function acpHealthUrl(endpoint) {
   }
 }
 
-/** Probe the ACP bridge /health endpoint, optionally probing a specific harness. */
+/** Probe the ACP bridge /health endpoint, optionally probing a specific harness.
+ *
+ * chrome-agent-platform-duhcu: this URL carries the BRIDGE TOKEN, and it is
+ * checked against the loopback policy before the fetch — the same policy the
+ * client enforces before it opens a socket. The guard runs on the DERIVED url
+ * (the thing actually fetched), not on the endpoint we were handed, so a
+ * rewrite that moves the request elsewhere cannot step around it. A target the
+ * policy forbids is reported as "no answer" (null): the probe is opportunistic
+ * (called to learn whether a bridge is up), so it must not throw into callers,
+ * but it must never spend the token on a non-loopback host to answer. */
 export async function probeAcpBridgeHealth(endpoint = DEFAULT_ACP_ENDPOINT, harnessId = "") {
   const base = acpHealthUrl(endpoint);
   if (!base) return null;
@@ -396,6 +405,7 @@ export async function probeAcpBridgeHealth(endpoint = DEFAULT_ACP_ENDPOINT, harn
   if (harnessId) params.set("harness", harnessId);
   const qs = params.toString();
   const url = qs ? `${base}?${qs}` : base;
+  if (loopbackAcpRefusalReason(url)) return null;
   try {
     const res = await fetch(url, { signal: AbortSignal.timeout(2000) });
     if (res.ok) return await res.json();

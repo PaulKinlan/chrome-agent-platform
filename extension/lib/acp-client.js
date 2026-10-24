@@ -43,18 +43,43 @@ export function isLoopbackAcpEndpoint(url) {
 }
 
 /**
- * Refuse a non-loopback ACP endpoint rather than connecting to it (jsjy).
+ * THE loopback policy, as a reason string (null when the url is acceptable).
+ *
+ * chrome-agent-platform-duhcu: this predicate must be the ONLY definition of
+ * "is this ACP target allowed", because the policy is about to be consulted by
+ * fetch paths outside this module (the token-bearing health probe in
+ * acp-runner.js, the Settings Test-connection check in options/panels/agents.js).
+ * Those siblings used to re-fetch a DERIVED url with their own credentials and
+ * no check at all, so a new call site had to remember a rule that lived in one
+ * place. One function, imported by every site, and a test that reds when a fetch
+ * target bypasses it.
+ *
  * @param {string} url
+ * @returns {string|null} the refusal reason, or null when the url is allowed
  */
-function assertLoopbackEndpoint(url) {
-  if (isLoopbackAcpEndpoint(url)) return;
-  throw new Error(
-    `ACP endpoint ${url} is not on loopback — refusing to connect. ` +
-      `The bridge speaks plain ws:// and drives the local approval surface, so only a loopback ` +
-      `endpoint (127.0.0.1, ::1 or localhost) is accepted. Run the bridge with its default ` +
-      `--host and put TLS in front of it if it must be reached remotely.`,
+export function loopbackAcpRefusalReason(url) {
+  if (isLoopbackAcpEndpoint(url)) return null;
+  return (
+    `ACP target ${url} is not on loopback — refusing to send to it. ` +
+    `The bridge speaks plain ws:// and drives the local approval surface, so only a loopback ` +
+    `endpoint (127.0.0.1, ::1 or localhost) is accepted. Run the bridge with its default ` +
+    `--host and put TLS in front of it if it must be reached remotely.`
   );
 }
+
+/**
+ * Refuse a non-loopback ACP endpoint rather than connecting to it (jsjy).
+ * The public form of the policy: SIBLING fetch paths must call this (or
+ * `loopbackAcpRefusalReason` when they report rather than throw).
+ * @param {string} url
+ */
+export function assertLoopbackAcpEndpoint(url) {
+  const reason = loopbackAcpRefusalReason(url);
+  if (reason) throw new Error(reason);
+}
+
+/** Alias kept for this module's existing call sites. */
+const assertLoopbackEndpoint = assertLoopbackAcpEndpoint;
 
 /**
  * @typedef {Object} AcpClientOptions
@@ -91,6 +116,12 @@ export function acpPreflightUrl(endpoint) {
 export async function acpProbeConnectionFailure(endpoint) {
   const url = acpPreflightUrl(endpoint);
   if (!url) return null;
+  // The preflight url carries the SAME token + harness query as the connection
+  // (see acpPreflightUrl), so it is subject to the loopback policy exactly like
+  // the socket is — chrome-agent-platform-duhcu: this site lives in the module
+  // that OWNS the policy and still had no check, which is the whole point of
+  // factoring the policy into one exported function.
+  if (loopbackAcpRefusalReason(url)) return null;
   try {
     const res = await fetch(url, { signal: AbortSignal.timeout(2000) });
     if (res.ok) return null;
