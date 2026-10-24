@@ -173,6 +173,17 @@ npm run note:dist   # NOTE (not a gate) — the real dist gate is npm test's ser
 npm run test:file -- tests/<relevant>.test.ts
 # (If UI/harness): deno run -A scripts/<harness>.ts
 
+# 7b. Landing-range clearance check (chrome-agent-platform-drhi7)
+# A delta-scoped PASS is not per-commit clearance: on a linear branch a review-failed
+# ancestor must not be cleared by a later commit's PASS. Run BEFORE the full gate:
+node scripts/check-landing-clearance.mjs <previous-main>..<candidate-sha>
+# exit 0 range clear · exit 1 a review-failed bead's commit is INSIDE the range (named) —
+#   fix or re-review that bead, or land a range that excludes it · exit 75 environmental
+#   (git/bd unusable; `bd dolt pull` first — the checker reads the LOCAL bd replica).
+# fleet-land-message still enforces the TIP's own clearance (CURRENT/STALE/DIVERGED/...);
+# this rung adds the ancestor scan. Integration into fleet-land-message itself is
+# tracked in the fleet (drhi7 defect).
+
 # 8. Run full two-phase suite gate and dedicated build gate (Option D: chrome-agent-platform-h65e)
 npm test > /tmp/npm-test-<bead>.log 2>&1
 # Verify exit 0, zero failures, record wall time and phase counts
