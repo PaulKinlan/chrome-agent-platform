@@ -423,29 +423,48 @@ export function schemaValidationWork(schema, budget = SCHEMA_BOUNDS.maxValidatio
     const v = a + b;
     return v > cap || !Number.isFinite(v) ? cap : v;
   };
+  const isNode = (v) => v && typeof v === "object" && !Array.isArray(v);
   const walk = (node, depth) => {
-    if (!node || typeof node !== "object" || Array.isArray(node) || depth > SCHEMA_BOUNDS.maxDepth) return 1;
-    const kids = (list) => {
-      let total = 0;
-      for (const child of list) total = add(total, walk(child, depth + 1));
-      return total;
-    };
-    if (node.type === "array") {
+    if (!isNode(node) || depth > SCHEMA_BOUNDS.maxDepth) return 1;
+    // A union COMPOSES with whatever else the node declares (buildFromClean
+    // intersects the base with each branch), so its branches are added whatever
+    // `type` says — chrome-agent-platform-26g5y: an early return per type threw
+    // away exactly that, so `{type:"object", anyOf:[bomb]}` accounted as 1 and
+    // then validated 100^4 leaves.
+    let total = 1; // the node itself
+    for (const key of ["anyOf", "oneOf", "allOf"]) {
+      const branches = Array.isArray(node[key]) ? node[key].slice(0, SCHEMA_BOUNDS.maxUnionBranches) : [];
+      for (const b of branches) total = add(total, walk(b, depth + 1));
+    }
+    // CONTAINERS ARE DETECTED BY THEIR KEYWORDS, NOT BY `type`: the builder
+    // treats `{properties:{…}}` (no type) as an object and validates every
+    // property, so `type` alone let an untyped bomb through (measured: 105k
+    // leaves validated in ~99ms while the budget reported work 1).
+    if (node.type === "array" || node.items !== undefined) {
       const pageMax = node.maxItems !== undefined ? node.maxItems : SCHEMA_BOUNDS.maxArrayItems;
       const elements = Math.max(0, Math.min(pageMax, SCHEMA_BOUNDS.maxArrayItems));
       // An array with no items schema validates `unknown` per element (work 1);
       // an array that admits NO elements still costs one validation of itself.
       const perElement = node.items !== undefined ? walk(node.items, depth + 1) : 1;
-      return elements > 0 ? mul(elements, perElement) : 1;
+      total = add(total, elements > 0 ? mul(elements, perElement) : 1);
     }
-    if (node.type === "object") {
-      const props = node.properties && typeof node.properties === "object" ? Object.values(node.properties) : [];
-      return add(1, kids(props));
-    }
-    let total = 1;
-    for (const key of ["anyOf", "oneOf", "allOf"]) {
-      const branches = Array.isArray(node[key]) ? node[key].slice(0, SCHEMA_BOUNDS.maxUnionBranches) : [];
-      if (branches.length) total = add(total, kids(branches));
+    const declaresObject = node.type === "object" ||
+      (isNode(node.properties)) ||
+      isNode(node.additionalProperties) ||
+      isNode(node.patternProperties);
+    if (declaresObject) {
+      if (isNode(node.properties)) {
+        for (const child of Object.values(node.properties)) total = add(total, walk(child, depth + 1));
+      }
+      // `additionalProperties`/`patternProperties` are NOT enforced by this
+      // converter today (they are dropped with a record), so these two are
+      // insurance rather than a live path: a schema-valued one is counted, so
+      // the day either keyword is supported the budget already covers it. A
+      // boolean `additionalProperties` costs nothing and adds nothing.
+      if (isNode(node.additionalProperties)) total = add(total, walk(node.additionalProperties, depth + 1));
+      if (isNode(node.patternProperties)) {
+        for (const child of Object.values(node.patternProperties)) total = add(total, walk(child, depth + 1));
+      }
     }
     return total;
   };
