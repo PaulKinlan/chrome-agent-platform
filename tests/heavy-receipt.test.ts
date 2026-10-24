@@ -801,3 +801,139 @@ Deno.test("upqhp/juubk wiring: the receipt stays out of npm test, and the produc
   assertStringIncludes(heavyGate, "dirty: mod.dirtyTrackedPaths()");
   assertStringIncludes(heavyGate, "if (rc === 0) rc = 1;", "an unwritable receipt must not leave a successful producer exit (juubk)");
 });
+
+// ---------------------------------------------------------------------------
+// chrome-agent-platform-gutt3: an ENVIRONMENTAL refusal (producer rc 75) is the
+// BOX, not the CODE. On this VM steal bursts during a boot even at load 0.18,
+// so the heavy tier legitimately refuses; classifying that receipt as exit 2
+// ("nothing usable") would red every gate once CHECK_CMD flips. The matrix:
+//   (a) refusal + rc 75 recorded  => outcome accounting-only (exit 3; 0 with the flag)
+//   (b) refusal WITHOUT rc 75     => structural refusal (exit 2) — the label is not evidence
+//   (c) missing receipt           => structural refusal (exit 2)   (covered by upqhp tests)
+//   (d) pass + low steal          => full credential (exit 0)      (covered by gezg6 tests)
+// Structural refusals are NOT weakened: version, tree, treeEnd, canonical command, no-args
+// invocation, exact-set ledger, no failed/killed/unknown suite, clean worktree, fresh timestamp
+// are each still demanded on the environmental path.
+
+function refusalSuites(): { file: string; phase: string; status: string }[] {
+  // The producer's rc-75 shape: the parallel batch passed, the wall-clock suite refused.
+  const files = expectedHeavyFiles();
+  return files.map((file, i) => ({
+    file,
+    phase: i === files.length - 1 ? "wall-clock" : "parallel",
+    status: i === files.length - 1 ? "refused" : "passed",
+  }));
+}
+
+Deno.test("gutt3 (a): a refusal receipt that records rc 75 classifies ACCOUNTING-ONLY, naming tree + steal + refusal reason", withReceipts(async (nextTree) => {
+  const TREE = nextTree();
+  writeHeavyReceipt({
+    ...certifyingBody(TREE, {
+      result: "refusal",
+      claimed: "refusal",
+      complete: false,
+      exitCode: 75,
+      suites: refusalSuites(),
+      covered: refusalSuites().map((s) => s.file),
+      conditions: { steal: starvedSteal() },
+    }),
+  } as any);
+  const verdict = checkHeavyReceipt(TREE, { now: NOW });
+  assertEquals([verdict.ok, verdict.outcome], [false, "accounting-only"]);
+  assertEquals(verdict.reason, "accounting-only:environmental-refusal");
+  assertEquals(verdict.marker, "HEAVY_RECEIPT_ACCOUNTING_ONLY");
+  // The one greppable line names the tree and the rc, and the detail names the steal numbers.
+  const firstLine = String(verdict.line).split("\n")[0];
+  assertStringIncludes(firstLine, `on tree ${TREE.slice(0, 12)}`);
+  assertStringIncludes(firstLine, "rc 75");
+  assertStringIncludes(String(verdict.line), "avg 58.6%");
+  assertStringIncludes(String(verdict.line), "peak 87%");
+  assertStringIncludes(String(verdict.line), "--accept-accounting-only");
+  assertEquals(verdict.payload.accountingReason, "environmental-refusal");
+  assertEquals(verdict.payload.exitCode, 75);
+  assertEquals(verdict.payload.timing, "UNMEASURED");
+}));
+
+Deno.test("gutt3 (a2): on the environmental path a refused wall-clock suite is accounted, but a FAILED suite still refuses", withReceipts(async (nextTree) => {
+  const TREE = nextTree();
+  writeHeavyReceipt({
+    ...certifyingBody(TREE, {
+      result: "refusal",
+      claimed: "refusal",
+      complete: false,
+      exitCode: 75,
+      suites: refusalSuites(),
+      conditions: { steal: starvedSteal() },
+    }),
+  } as any);
+  assertEquals(checkHeavyReceipt(TREE, { now: NOW }).outcome, "accounting-only");
+
+  const OTHER = nextTree();
+  writeHeavyReceipt({
+    ...certifyingBody(OTHER, {
+      result: "refusal",
+      claimed: "refusal",
+      complete: false,
+      exitCode: 75,
+      suites: refusalSuites().map((s) => (s.status === "refused" ? s : { ...s, status: "failed" })),
+      conditions: { steal: starvedSteal() },
+    }),
+  } as any);
+  const failed = checkHeavyReceipt(OTHER, { now: NOW });
+  assertEquals([failed.ok, failed.outcome, failed.reason], [false, "refused", "incomplete-suites"]);
+}));
+
+Deno.test("gutt3 (b): a receipt LABELLED refusal without rc 75 recorded stays a structural refusal (exit 2)", withReceipts(async (nextTree) => {
+  const TREE = nextTree();
+  writeHeavyReceipt({
+    ...certifyingBody(TREE, {
+      result: "refusal",
+      claimed: "refusal",
+      complete: false,
+      exitCode: 1,
+      suites: refusalSuites(),
+      conditions: { steal: starvedSteal() },
+    }),
+  } as any);
+  const verdict = checkHeavyReceipt(TREE, { now: NOW });
+  assertEquals([verdict.ok, verdict.outcome, verdict.reason], [false, "refused", "not-pass:refusal"]);
+  assertStringIncludes(String(verdict.line), "ONLY when the receipt itself records rc 75");
+}));
+
+Deno.test("gutt3 (b2): the environmental path still demands the structural gates — dirty worktree refuses", withReceipts(async (nextTree) => {
+  const TREE = nextTree();
+  writeHeavyReceipt({
+    ...certifyingBody(TREE, {
+      result: "refusal",
+      claimed: "refusal",
+      complete: false,
+      exitCode: 75,
+      suites: refusalSuites(),
+      dirty: ["extension/lib/something.js"],
+      conditions: { steal: starvedSteal() },
+    }),
+  } as any);
+  const verdict = checkHeavyReceipt(TREE, { now: NOW });
+  assertEquals([verdict.ok, verdict.outcome, verdict.reason], [false, "refused", "dirty"]);
+}));
+
+Deno.test("gutt3 (b3): the environmental path still demands the canonical no-args command — a subset invocation refuses", withReceipts(async (nextTree) => {
+  const TREE = nextTree();
+  writeHeavyReceipt({
+    ...certifyingBody(TREE, {
+      result: "refusal",
+      claimed: "refusal",
+      complete: false,
+      exitCode: 75,
+      suites: refusalSuites().slice(0, 3),
+      expected: expectedHeavyFiles(),
+      covered: refusalSuites().slice(0, 3).map((s) => s.file),
+      args: ["tests/python-runtime.test.ts"],
+      command: "deno run -A scripts/heavy-gate.ts",
+      conditions: { steal: starvedSteal() },
+    }),
+  } as any);
+  const verdict = checkHeavyReceipt(TREE, { now: NOW });
+  // The subset-invocation gate fires before the coverage gate would, and either way it is exit 2.
+  assertEquals(verdict.outcome, "refused");
+}));

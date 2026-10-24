@@ -44,6 +44,7 @@ import { join } from "node:path";
 import { durableDir } from "./durable-root.mjs";
 import { STEAL_THRESHOLD_PCT } from "./cpu-steal-sampler.mjs";
 import { HEAVY_GATE_FILES } from "../test-partition.mjs";
+import { ENVIRONMENTAL_REFUSAL_EXIT } from "./environmental-verdict.mjs";
 
 export const RECEIPT_DIR_NAME = "heavy-receipts";
 /** v2 (juubk): versioned payload carrying the covered/expected suite sets and per-suite statuses.
@@ -447,14 +448,22 @@ export function checkHeavyReceipt(tree, { now = Date.now(), maxAgeMs = DEFAULT_R
       { receiptTree: receipt.tree },
     );
   }
-  if (receipt.result !== "pass") {
+  // chrome-agent-platform-gutt3: a producer "refusal" receipt is rc 75 BY CONSTRUCTION — the producer
+  // maps only ENVIRONMENTAL_REFUSAL_EXIT to result "refusal" — but the classification EARNs it from
+  // recorded evidence, not the label: the receipt must itself record rc 75. A receipt labelled
+  // "refusal" with any other rc is corrupt or mislabelled and stays a structural refusal (exit 2),
+  // which is what keeps a hostile or buggy writer from minting an accounting pass out of a name.
+  const environmentalRefusal =
+    receipt.result === "refusal" && receipt.exitCode === ENVIRONMENTAL_REFUSAL_EXIT;
+  if (receipt.result !== "pass" && !environmentalRefusal) {
     return refuse(
       `not-pass:${receipt.result ?? "unknown"}`,
       `gate-receipt: HEAVY RECEIPT IS NOT A PASS (result "${receipt.result}"` +
         `${receipt.claimed && receipt.claimed !== receipt.result ? `, claimed "${receipt.claimed}"` : ""}) for tree ` +
         `${tree.slice(0, 12)} — a refused, failed, subset or drifted tier run does not certify anything (upqhp/juubk). ` +
-        `Fix the tier run, then re-run \`npm run test:heavy\` with no arguments.`,
-      { result: receipt.result, claimed: receipt.claimed },
+        `Fix the tier run, then re-run \`npm run test:heavy\` with no arguments.` +
+        `${receipt.result === "refusal" ? " A refusal classifies as accounting-only ONLY when the receipt itself records rc 75 (gutt3); this one does not." : ""}`,
+      { result: receipt.result, claimed: receipt.claimed, exitCode: receipt.exitCode },
     );
   }
   // review finding 957s2: the check RECOMPUTES everything the receipt asserts. `complete`, `covered`
@@ -509,16 +518,25 @@ export function checkHeavyReceipt(tree, { now = Date.now(), maxAgeMs = DEFAULT_R
       { duplicate: ledger.duplicate },
     );
   }
-  if (ledger.bad.length > 0) {
+  // gutt3: on the environmental-refusal path a wall-clock suite's terminal status IS "refused"
+  // (rc 75 by construction), so it is accounted; failed/killed/unknown suites still refuse — a
+  // failed suite is a product red no box condition can account for.
+  const badSuites = environmentalRefusal
+    ? ledger.bad.filter((entry) => entry.status !== "refused")
+    : ledger.bad;
+  if (badSuites.length > 0) {
     return refuse(
       "incomplete-suites",
       `gate-receipt: HEAVY RECEIPT HAS NON-PASSING SUITES for tree ${tree.slice(0, 12)} — ` +
-        `${ledger.bad.map((entry) => `${entry.file} (${entry.status})`).join(", ")}. A receipt certifies only when ` +
+        `${badSuites.map((entry) => `${entry.file} (${entry.status})`).join(", ")}. A receipt certifies only when ` +
         `every enumerated suite reached "passed" (juubk).`,
-      { badSuites: ledger.bad },
+      { badSuites },
     );
   }
-  if (receipt.complete !== true) {
+  // gutt3: the writer sets complete only for certifying passes BY CONSTRUCTION (it is derived from
+  // result === "pass"), so on the environmental-refusal path demanding it would be demanding the
+  // impossible. The recomputed ledger gates above are the completeness witness there (957s2).
+  if (!environmentalRefusal && receipt.complete !== true) {
     return refuse(
       "incomplete",
       `gate-receipt: HEAVY RECEIPT IS NOT COMPLETE for tree ${tree.slice(0, 12)} — only a no-argument, clean, ` +
@@ -537,7 +555,9 @@ export function checkHeavyReceipt(tree, { now = Date.now(), maxAgeMs = DEFAULT_R
       { dirty },
     );
   }
-  if (receipt.exitCode !== 0) {
+  // gutt3: the environmental path's honest raw rc IS 75 — it is demanded by the classification
+  // condition above, so the raw-rc gate only guards the certifying path.
+  if (!environmentalRefusal && receipt.exitCode !== 0) {
     return refuse(
       "raw-rc",
       `gate-receipt: HEAVY RECEIPT RAN WITH rc ${String(receipt.exitCode)} for tree ${tree.slice(0, 12)} — ` +
@@ -569,6 +589,51 @@ export function checkHeavyReceipt(tree, { now = Date.now(), maxAgeMs = DEFAULT_R
         `${Math.round(maxAgeMs / 86400000)}d) for tree ${tree.slice(0, 12)}. Re-run \`npm run test:heavy\` on this tree (upqhp).`,
       { ageMs, maxAgeMs },
     );
+  }
+  // chrome-agent-platform-gutt3: an environmental refusal is the BOX, not the CODE. The tier ran,
+  // the ledger is complete and terminal (checked above), and rc 75 means a wall-clock suite could
+  // not measure — on this VM steal bursts 11-53% during a boot even at load 0.18, so the tier
+  // legitimately refuses and classifying that as exit 2 ("nothing usable") would red every gate
+  // after the CHECK_CMD flip for a reason no author can fix. Functional completeness is certified
+  // (every enumerated suite reached a terminal status, none failed); TIMING is not claimed. A
+  // structural problem never reaches this branch: version, tree, treeEnd, canonical command,
+  // no-args invocation, exact-set ledger, no failed/killed/unknown suite, clean worktree, rc 75
+  // recorded, and a fresh timestamp were each demanded on the way here.
+  if (environmentalRefusal) {
+    const steal = evaluateStealConditions(receipt);
+    const refusedSuites = (Array.isArray(receipt.suites) ? receipt.suites : [])
+      .filter((entry) => entry?.status === "refused")
+      .map((entry) => String(entry.file));
+    const pct = (value) =>
+      Number.isFinite(Number(value)) && value !== null ? `${Number(Number(value).toFixed(1))}%` : "not recorded";
+    const headline =
+      `ACCOUNTING-ONLY: the heavy tier refused environmentally (rc ${ENVIRONMENTAL_REFUSAL_EXIT}` +
+      `${refusedSuites.length ? `; refused: ${refusedSuites.join(", ")}` : ""}) on tree ${tree.slice(0, 12)} — receipt claims no timing.`;
+    return {
+      ok: false,
+      outcome: "accounting-only",
+      reason: "accounting-only:environmental-refusal",
+      headline,
+      line:
+        `${headline}\n` +
+        `  Why: the tier recorded an environmental refusal (rc ${ENVIRONMENTAL_REFUSAL_EXIT}) — a BOX verdict, never a product red (gutt3).\n` +
+        `  Steal on the run: avg ${pct(steal.payload.avgStealPct)}, peak ${pct(steal.payload.maxStealPct)}, threshold ${pct(steal.payload.thresholdPct)} (${steal.payload.thresholdSource ?? "source not recorded"}), ` +
+        `${steal.payload.validSamples ?? "?"}/${steal.payload.samples ?? "?"} valid sample(s), timing ${steal.payload.timing ?? "not recorded"}.\n` +
+        `  Fix the BOX: re-run \`npm run test:heavy\` with no arguments on an idle host for a timing credential.\n` +
+        `  Or accept it for ACCOUNTING only: node scripts/gate-receipt.mjs --accept-accounting-only`,
+      marker: "HEAVY_RECEIPT_ACCOUNTING_ONLY",
+      payload: {
+        tree,
+        expectedTree: tree,
+        outcome: "accounting-only",
+        ...steal.payload,
+        accountingReason: "environmental-refusal",
+        refusedSuites,
+        exitCode: receipt.exitCode,
+      },
+      receipt,
+      path,
+    };
   }
   // gezg6: structure is not the whole credential. The receipt's own conditions decide whether this is a
   // TIMING credential or only good enough for accounting, and the refusal names the numbers so an
