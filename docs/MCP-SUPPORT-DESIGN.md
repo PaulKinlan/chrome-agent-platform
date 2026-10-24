@@ -194,6 +194,22 @@ not dead weight. MCP peer contexts bind different Zod majors and are not dedupli
 - Credentials go in `transport.headers` at connect time, sourced from secure
   storage; never persist them into a logged/exported config
   (`MCP-CONFIG-STORE-01`).
+- **Egress is redirect-refusing by policy, not by SDK default**
+  (chrome-agent-platform-aix7j, GHSA-6prh-2h8m-c8cw). Because those headers carry
+  the owner's token, both transports receive `fetch: createGuardedMcpFetch({ origin })`
+  (`extension/lib/mcp-client-core.js`): every request is issued with
+  `redirect: "manual"`, an uninspectable `opaqueredirect` is refused, a request to
+  any origin other than the configured server's is refused BEFORE it is sent, and
+  a 3xx is followed only to the SAME origin and only within
+  `MCP_EGRESS_MAX_REDIRECT_HOPS`. Same reason as every other bridge in the repo: the
+  owner granted an ORIGIN, not whatever that origin points at next
+  (`lib/site-docs-fallback.js`, `lib/ask-agent-entry.js`, `lib/skill-import.js`,
+  `lib/python-network.js`). The MCP client was the one fetch path that inherited
+  the platform's follow-redirects-and-resend-headers default, so a compromised
+  server could 302 the extension into handing its token to an attacker-chosen host.
+  `tests/mcp-client-egress-guard.test.ts` drives the guard against a recording
+  fetch and asserts the foreign request is never ISSUED (refusing after sending
+  would already have leaked it).
 
 ---
 

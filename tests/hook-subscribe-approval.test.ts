@@ -352,19 +352,19 @@ Deno.test("hooks.subscribe from the MODEL path stores an empty template even whe
     true,
     "the empty-template branch must append the fenced payload",
   );
-  // ...and the fence itself is the untrusted-event-data block around the payload.
+  // ...and the fence itself is the untrusted-event-data block around the
+  // payload, built by lib/hook-event-fence.js rather than re-spelled here
+  // (chrome-agent-platform-ypafy: the inline template literal was injectable, so
+  // the block must have ONE owner — tests/hook-event-fence-injection.test.ts
+  // drives the real dispatcher with a hostile title against it).
   const fence = findNode(
     dispatchFn,
     (n) => n.type === "VariableDeclarator" && n.id?.name === "dataBlock",
   );
   assert(fence?.init, "dispatchHook must build its payload data block");
-  assertEquals(fence.init.type, "TemplateLiteral");
-  assertEquals(fence.init.quasis.map((q) => q.value.cooked), [
-    "<untrusted-event-data>\n",
-    "\n</untrusted-event-data>",
-  ]);
-  assertEquals(fence.init.expressions.length, 1);
-  assertEquals(fence.init.expressions[0].type, "CallExpression");
+  assertEquals(fence.init.type, "CallExpression");
+  assertEquals(fence.init.callee?.name, "untrustedEventDataBlock");
+  assertEquals(fence.init.arguments?.[0]?.name, "safePayload");
 });
 
 /** Depth-first search of an acorn AST node for the first match. */
