@@ -65,12 +65,21 @@ const RETIRED_POISON = "/tmp/cap-chrome-slot-POISON";
 const ESCAPE_SELF_TEST_BUDGET_MS = 10_000;
 const ESCAPE_ACK_DEADLINE_BASE_MS = 12_000;
 const STUBBORN_ACK_DEADLINE_BASE_MS = 12_000;
+// rblji: the box is sampled ONCE, into the declaration, and every later check reads that SAME sample.
+// The first cut re-sampled inside declaredAckDeadlineMs(), so the test asserted a module-load value
+// against a LIVE load average: whenever the load drifted (it does, between module evaluation and test
+// execution) the derived numbers legitimately differed and the assertion failed. A declaration must be
+// a snapshot — re-deriving it from a moving box is not a stricter check, it is a different number.
+const DECLARED_READY_LOAD = { loadavg: loadAverageSample(), loadPerCpu: loadPerCpuSample() } as const;
 /** The declared ACK window for THIS box: the base, scaled by absolute load, capped (see SELF_TEST_READY_MAX_SCALE). */
-function declaredAckDeadlineMs(baseMs: number): number {
+function declaredAckDeadlineMs(
+  baseMs: number,
+  load: { loadavg: number | null; loadPerCpu: number | null } = DECLARED_READY_LOAD,
+): number {
   return selfTestReadyDeadlineMs({
     baseMs,
-    loadavg: loadAverageSample(),
-    loadPerCpu: loadPerCpuSample(),
+    loadavg: load.loadavg ?? 1,
+    loadPerCpu: load.loadPerCpu ?? 1,
   });
 }
 const ESCAPE_ACK_DEADLINE_MS = declaredAckDeadlineMs(ESCAPE_ACK_DEADLINE_BASE_MS);
