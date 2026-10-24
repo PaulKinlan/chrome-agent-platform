@@ -78,14 +78,20 @@ async function fixtureEnvReport(logPath: string, timeoutMs = 20_000): Promise<"P
  * AFTER that connection's adapter has reported. The previous fixed 500ms sleep raced the child's
  * startup under gate load (744 parallel files): the sleep elapsed before the adapter exec'd, the
  * disconnect killed it, the report row never appeared, and fixtureMcpReport polled its full 20s
- * and returned null — the union a4468dff2 full-gate red ('Values are not equal: null / true'). */
+ * and returned null — the union a4468dff2 full-gate red ('Values are not equal: null / true').
+ * chrome-agent-platform-e18f3 (review note 2): only "not written yet" is swallowed — a corrupt or
+ * foreign log path surfaces as its own error instead of masquerading as a 30s spawn failure. */
 async function fixtureRowSeen(logPath: string, harness: string, timeoutMs = 30_000): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
+    let rows;
     try {
-      const rows = Deno.readTextFileSync(logPath).split("\n").filter(Boolean).map((line) => JSON.parse(line));
-      if (rows.some((row) => row?.harness === harness)) return true;
-    } catch { /* not written yet */ }
+      rows = Deno.readTextFileSync(logPath).split("\n").filter(Boolean).map((line) => JSON.parse(line));
+    } catch (error) {
+      if (error instanceof Deno.errors.NotFound) { /* not written yet */ }
+      else throw error; // an unreadable log is its own defect, never a silent 30s wait
+    }
+    if (rows && rows.some((row) => row?.harness === harness)) return true;
     await new Promise((r) => setTimeout(r, 100));
   }
   return false;
@@ -287,9 +293,12 @@ Deno.test("nqe6j: the BRIDGE spawns a pi adapter with MCP discovery off, and lea
       // their startup report under gate load — the row never appeared and the assertion below read a
       // bare null. Waiting for the row makes the kill unable to race the report; a child that never
       // reports now reds HERE, attributable to the spawn, instead of as a null equality.
+      // e18f3 (review note 1): name the bound and the log, so a red here is diagnosed as "the child
+      // never reported within 30s" rather than misread as the (disproved) disconnect-kill race.
       assert(
         await fixtureRowSeen(logPath, harness),
-        `the ${harness} adapter never reported before its socket closed (spawn or startup failed)`,
+        `the ${harness} adapter never reported within 30s (log: ${logPath}) — the spawn or startup ` +
+          `failed; this is NOT the disconnect race (the socket has not been closed yet)`,
       );
       // The bridge closes the connection when the adapter exits; closing our side too keeps it prompt.
       ws.close();
