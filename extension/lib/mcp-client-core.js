@@ -105,21 +105,31 @@ function headerValue(res, name) {
  * server could therefore 302 the extension into handing a token reused for a
  * second service to an attacker-chosen host.
  *
- * The policy, in order of what each check buys:
+ * The policy — "same origin" means the EXACT configured origin, scheme and port
+ * included, so `https://host` and `http://host` are DIFFERENT origins and a
+ * scheme upgrade is NOT a same-origin hop (chrome-agent-platform-fd586):
  *   1. `redirect: "manual"` on EVERY attempt — the platform never follows a hop
  *      for us, so we always see the 3xx before any header is re-sent.
- *   2. An `opaqueredirect` (what a browser service worker returns: status 0, no
- *      Location) REFUSES the call. It cannot be inspected, so it is not guessed
- *      at; following it would re-send the headers blind.
- *   3. A 3xx WITH a Location is followed ONLY when the next hop is the SAME
- *      ORIGIN as the owner-configured server (an http→https or
- *      `/mcp` → `/mcp/v2` move stays legitimate). Anything else is refused.
+ *   2. A 3xx WITH a Location (the Deno/Node shape) is followed ONLY when the
+ *      next hop is the SAME ORIGIN as the owner-configured server (a
+ *      `/mcp` → `/mcp/v2` endpoint move, a trailing-slash fix). Anything else,
+ *      including a scheme upgrade or a subdomain move, is refused.
+ *   3. An `opaqueredirect` (the BROWSER shape: status 0, no readable Location)
+ *      is resolved WITHOUT credentials rather than guessed at
+ *      (chrome-agent-platform-q7ti9): the guard issues a header-free, GET,
+ *      `redirect: "follow"` probe of the same URL, reads the probe's final
+ *      `url`, and re-issues the ORIGINAL request to that URL only if its origin
+ *      is unchanged. The probe carries no Authorization header and no body, so a
+ *      cross-origin hop learns nothing; if the probe lands off-origin, or cannot
+ *      be resolved at all, the call is refused.
  *   4. A request whose URL is not the configured origin is refused before it is
  *      issued, so a server-supplied URL can never become the request target.
- *   5. Hops are bounded (MCP_EGRESS_MAX_REDIRECT_HOPS).
+ *   5. Hops are bounded (MCP_EGRESS_MAX_REDIRECT_HOPS), probes included.
  *
  * Refusals throw `McpEgressRefusedError`; the mount helper records them per
  * server like any other connection failure, so the other servers still mount.
+ * An operator whose server answers on a different scheme/host must point the
+ * server config at the FINAL url: this guard follows one origin, never a move.
  *
  * @param {{origin:string, fetchImpl?:typeof fetch, maxHops?:number}} options
  * @returns {(url: string|URL, init?: RequestInit) => Promise<Response>}
@@ -139,6 +149,42 @@ export function createGuardedMcpFetch({ origin, fetchImpl = globalThis.fetch, ma
     throw new TypeError(`createGuardedMcpFetch: invalid origin "${origin}"`);
   }
 
+  /** True when a response is a redirect the platform did not follow for us. */
+  const isRedirectLike = (res) => {
+    if (res?.type === "opaqueredirect") return true;
+    const status = Number(res?.status ?? 0);
+    return status >= 300 && status < 400;
+  };
+
+  /**
+   * Resolve an OPAQUE redirect (a browser service worker gives status 0 and no
+   * Location) without spending a credential on it: a header-free GET that is
+   * allowed to follow, whose final `url` is the only thing we keep. Returns the
+   * resolved URL when it is still the configured origin, else null.
+   */
+  const resolveOpaqueRedirect = async (current) => {
+    let probe;
+    try {
+      probe = await fetchImpl(current.href, {
+        method: "GET",
+        credentials: "omit",
+        redirect: "follow",
+      });
+    } catch {
+      return null; // CORS/network refusal: nothing to learn, refuse the call.
+    }
+    const finalUrl = typeof probe?.url === "string" && probe.url ? probe.url : "";
+    if (!finalUrl) return null;
+    try {
+      const resolved = new URL(finalUrl);
+      if (resolved.origin !== base.origin) return null;
+      if (resolved.href === current.href) return null; // the probe did not move: no hop to take
+      return resolved;
+    } catch {
+      return null;
+    }
+  };
+
   return async function guardedMcpFetch(url, init) {
     let current;
     try {
@@ -153,7 +199,18 @@ export function createGuardedMcpFetch({ origin, fetchImpl = globalThis.fetch, ma
       // Always overwrite the caller's redirect policy: this is the guard.
       const res = await fetchImpl(current.href, { ...(init ?? {}), redirect: "manual" });
       if (res?.type === "opaqueredirect") {
-        throw refuse(`${current.href} redirected to an uninspectable destination`);
+        const resolved = await resolveOpaqueRedirect(current);
+        if (!resolved) {
+          throw refuse(
+            `${current.href} answered an opaque redirect (this service worker cannot read its Location): ` +
+              `point this MCP server's config at the final url — only a hop inside ${base.origin} is followed`,
+          );
+        }
+        if (hop === maxHops) {
+          throw refuse(`more than ${maxHops} redirects from ${base.origin}`);
+        }
+        current = resolved;
+        continue;
       }
       const status = Number(res?.status ?? 0);
       if (!(status >= 300 && status < 400)) return res;
