@@ -33,9 +33,9 @@ export function normalizeSuiteList(files = []) {
  * Candidates come from the selector's reverse graph / exact mappings; executed_suites
  * comes only from the runner. The fleet's independent extractor may find additional
  * gaps, but this ledger never claims a selected or omitted suite actually ran.
- * @param {{changed?: string[], candidates?: Record<string, string[]>, executedSuites?: string[], omitted?: Array<{file: string, reason: string}>, unmappable?: Array<{file: string, mechanism: string}>}} args
+ * @param {{changed?: string[], candidates?: Record<string, string[]>, executedSuites?: string[], omitted?: Array<{file: string, reason: string}>, unmappable?: Array<{file: string, mechanism: string}>, runExitCode?: number | null}} args
  */
-export function explainChangedFileMapping({ changed = [], candidates = {}, executedSuites = [], omitted = [], unmappable = [] } = {}) {
+export function explainChangedFileMapping({ changed = [], candidates = {}, executedSuites = [], omitted = [], unmappable = [], runExitCode = null } = {}) {
   const ran = new Set(executedSuites);
   const omittedByFile = new Map(omitted.map(({ file, reason }) => [file, reason]));
   const unmappableByFile = new Map(unmappable.map(({ file, mechanism }) => [file, mechanism]));
@@ -55,7 +55,13 @@ export function explainChangedFileMapping({ changed = [], candidates = {}, execu
       return { file, status: "mapped", executed_suites: executed, reason: "reachable inspecting suite executed" };
     }
     const omittedReason = reachable.map((suite) => omittedByFile.get(suite)).filter(Boolean);
+    // 7w5k1: on a FAILED run the caller zeroes executedSuites (a failed run certifies
+    // nothing), so every reachable suite reads "not executed" — which falsely implies a
+    // SELECTION omission. Name the real cause: the run failed, so execution cannot be
+    // attributed. A genuinely omitted suite keeps its own omission reason either way.
+    const failedRun = Number.isFinite(runExitCode) && runExitCode !== 0;
     const reason = omittedReason.length ? `reachable suite not run: ${omittedReason.join("; ")}`
+      : failedRun && reachable.length ? `executed suites not attributable (run failed, rc=${runExitCode}) — see the failure; no selection omission is claimed for this file`
       : reachable.length ? `reachable suite(s) not executed: ${reachable.join(", ")}`
       : "no executable inspecting suite is reachable from this changed path";
     return { file, status: "unmapped", executed_suites: [], reason };
@@ -304,6 +310,9 @@ export function fullTierManifestFields({
     omittedTotal: omitted.length,
     ...(fileMappingContext ? { fileMapping: explainChangedFileMapping({
       ...fileMappingContext, executedSuites: rc === 0 ? executedSuites : [], omitted,
+      // 7w5k1: without the exit code the explainer cannot distinguish "the selector
+      // omitted this" from "the run failed", and mislabels the latter as an omission.
+      runExitCode: rc,
     }) } : {}),
   };
 }
