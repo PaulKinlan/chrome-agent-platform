@@ -26,8 +26,12 @@ import {
   classifyProcessEntries,
   classifyTiming,
   createSample,
+  MAX_EXPLICIT_THRESHOLD_PCT,
+  STEAL_THRESHOLD_ENV,
   createSampler,
   formatSampleRow,
+  resolveStealThreshold,
+  summariseRunSteal,
   parseCpuStat,
   parseLoad1,
   parsePressureCpu,
@@ -297,6 +301,65 @@ Deno.test("jvc0y: the CLI refuses a wrong invocation instead of sampling nothing
     assertEquals(probeResult.code, 0, "on a disk-backed path the sampler must run, not refuse");
     rmSync(probeOut, { force: true });
   }
+});
+
+/** A run window with samples every 2s at the given steal levels (in order). */
+function runSteal(levels: number[], { startedAt = 5_000_000, valid = true } = {}) {
+  return summariseRunSteal(
+    levels.map((steal, i) => ({ ts: startedAt + i * 2000, steal_pct: steal, valid })),
+    { startedAt, finishedAt: startedAt + levels.length * 2000 },
+  );
+}
+
+Deno.test("tu8w9: below 20% the conditions are MEASURED and the run keeps its full credential", () => {
+  const conditions = runSteal([1.2, 4.0, 19.5, 8.0]);
+  assertEquals(conditions.timing, "MEASURED");
+  assertEquals(conditions.thresholdPct, 20);
+  assertEquals(conditions.startStealPct, 1.2);
+  assertEquals(conditions.endStealPct, 8.0);
+  assertEquals(Math.round(Number(conditions.maxStealPct) * 10) / 10, 19.5);
+  assertEquals(conditions.validSamples, 4);
+});
+
+Deno.test("tu8w9: 20% and 87% are UNMEASURED — the measured peak is named in the reason", () => {
+  for (const peak of [20, 87]) {
+    const conditions = runSteal([3, peak, 2]);
+    assertEquals(conditions.timing, "UNMEASURED", `peak ${peak}% must be UNMEASURED`);
+    assertStringIncludes(String(conditions.reason), "are not evidence");
+    assertEquals(conditions.maxStealPct, peak);
+  }
+  // 58.6% average, the number measured on this VM during a gate that still completed 744/744 files.
+  const measured = runSteal([58.6, 58.6, 58.6, 87, 58.6]);
+  assertEquals(measured.timing, "UNMEASURED");
+  assertEquals(Math.round(Number(measured.avgStealPct) * 10) / 10, 64.3);
+});
+
+Deno.test("tu8w9: invalid or absent samples are UNKNOWN, never an accounting exception", () => {
+  const invalid = runSteal([90, 90], { valid: false });
+  assertEquals(invalid.timing, "UNKNOWN");
+  const none = summariseRunSteal([], { startedAt: 0, finishedAt: 10_000 });
+  assertEquals([none.timing, none.sampled, none.maxStealPct], ["UNKNOWN", false, null]);
+});
+
+Deno.test("tu8w9: the threshold is not a magic constant and cannot be raised silently", () => {
+  // Default, with its source recorded.
+  assertEquals(resolveStealThreshold({}), { thresholdPct: 20, thresholdSource: "default 20 (ADR rxayt / tu8w9)" });
+  // An explicit override is honoured AND named.
+  const explicit = resolveStealThreshold({ [STEAL_THRESHOLD_ENV]: "35" });
+  assertEquals(explicit.thresholdPct, 35);
+  assertStringIncludes(explicit.thresholdSource, "env CAP_HEAVY_STEAL_THRESHOLD_PCT=35");
+  // A value that cannot be justified is refused loudly, never ignored.
+  for (const bad of ["abc", "-1", "51", "100"]) {
+    assertThrows(() => resolveStealThreshold({ [STEAL_THRESHOLD_ENV]: bad }), Error, "must be a percentage in 0..50");
+  }
+  assertEquals(MAX_EXPLICIT_THRESHOLD_PCT, 50);
+  // And the resolved threshold is what the classification uses.
+  const conditions = summariseRunSteal(
+    [{ ts: 0, steal_pct: 30, valid: true }, { ts: 2000, steal_pct: 30, valid: true }],
+    { startedAt: 0, finishedAt: 4000, thresholdPct: explicit.thresholdPct, thresholdSource: explicit.thresholdSource },
+  );
+  assertEquals(conditions.timing, "MEASURED", "35% threshold makes a 30% run measured");
+  assertEquals(conditions.thresholdSource, explicit.thresholdSource);
 });
 
 Deno.test("jvc0y: a RAM-backed log path is refused, deterministically", () => {

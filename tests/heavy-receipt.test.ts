@@ -428,6 +428,99 @@ Deno.test("957s2 round 2: a FLAG-only invocation is neither complete nor silentl
   assertEquals(checkHeavyReceipt(TREE, { now: NOW }).reason, "noncanonical-command");
 }));
 
+Deno.test("tu8w9: the receipt carries the CONDITIONS it was produced under, not just a verdict", withReceipts(async (nextTree) => {
+  const TREE = nextTree();
+  const lowSteal = {
+    sampled: true,
+    samples: 40,
+    validSamples: 40,
+    startStealPct: 2.5,
+    endStealPct: 4.0,
+    maxStealPct: 11.2,
+    avgStealPct: 5.384,
+    thresholdPct: 20,
+    thresholdSource: "default 20 (ADR rxayt / tu8w9)",
+    timing: "MEASURED",
+    reason: "40 valid sample(s) inside timed phases stayed below 20% steal (peak 11.2%)",
+    window: { startedAt: NOW - 600_000, finishedAt: NOW },
+  };
+  const { receipt } = writeHeavyReceipt({
+    tree: TREE,
+    result: "pass",
+    args: [],
+    command: heavyGateCommand(),
+    exitCode: 0,
+    suites: completeSuites(),
+    conditions: { steal: lowSteal, wallClock: { startedAt: NOW - 600_000, finishedAt: NOW } },
+    finishedAt: NOW,
+  });
+  // (c) the numbers are in the receipt body, so the run can be audited later.
+  assertEquals(receipt.timing, "MEASURED");
+  assertEquals(receipt.accountingOnly, false);
+  assertEquals(receipt.conditions.steal.maxStealPct, 11.2);
+  assertEquals(receipt.conditions.steal.avgStealPct, 5.384);
+  assertEquals(receipt.conditions.steal.startStealPct, 2.5);
+  assertEquals(receipt.conditions.steal.endStealPct, 4.0);
+  assertEquals(receipt.conditions.steal.thresholdPct, 20);
+  assertStringIncludes(String(receipt.conditions.steal.thresholdSource), "default 20");
+  // (a) below the threshold the run keeps its full credential.
+  assertEquals(checkHeavyReceipt(TREE, { now: NOW }).ok, true);
+}));
+
+Deno.test("tu8w9: >=20% steal marks the receipt ACCOUNTING-ONLY and names the peak", withReceipts(async (nextTree) => {
+  const TREE = nextTree();
+  const { receipt } = writeHeavyReceipt({
+    tree: TREE,
+    result: "pass",
+    args: [],
+    command: heavyGateCommand(),
+    exitCode: 0,
+    suites: completeSuites(),
+    conditions: {
+      steal: {
+        sampled: true,
+        samples: 12,
+        validSamples: 12,
+        startStealPct: 61.0,
+        endStealPct: 87.0,
+        maxStealPct: 87.0,
+        avgStealPct: 58.6,
+        thresholdPct: 20,
+        thresholdSource: "default 20 (ADR rxayt / tu8w9)",
+        timing: "UNMEASURED",
+        reason: "12/12 valid sample(s) inside a timed phase measured >= 20% steal (peak 87.0%)",
+        window: { startedAt: NOW - 600_000, finishedAt: NOW },
+      },
+    },
+    finishedAt: NOW,
+  });
+  // (b) the starved run is recorded as accounting-only, with the measured evidence beside it.
+  assertEquals(receipt.timing, "UNMEASURED");
+  assertEquals(receipt.accountingOnly, true);
+  assertEquals(receipt.conditions.steal.maxStealPct, 87.0);
+  assertEquals(receipt.conditions.steal.avgStealPct, 58.6);
+  // SCOPE NOTE (tu8w9 as coord specified it): the validator is unchanged, so this receipt still
+  // certifies today. Pinned deliberately — if the validator starts consuming accountingOnly, this
+  // assertion is the thing that must be updated, not silently left to rot.
+  assertEquals(checkHeavyReceipt(TREE, { now: NOW }).ok, true);
+}));
+
+Deno.test("tu8w9: an UNMEASURED timing never upgrades a failing run to accounting-only", withReceipts(async (nextTree) => {
+  const TREE = nextTree();
+  const { receipt } = writeHeavyReceipt({
+    tree: TREE,
+    result: "fail",
+    command: heavyGateCommand(),
+    exitCode: 1,
+    suites: completeSuites(),
+    conditions: { steal: { sampled: true, timing: "UNMEASURED", maxStealPct: 87, thresholdPct: 20 } },
+    finishedAt: NOW,
+  });
+  assertEquals(receipt.timing, "UNMEASURED");
+  assertEquals(receipt.accountingOnly, false, "accounting-only is a credential for a GREEN functional run");
+  assertEquals(checkHeavyReceipt(TREE, { now: NOW }).ok, false);
+}));
+
 Deno.test("juubk: the dirty-worktree rule ignores the passive beads ledger, nothing else", () => {
   // The trap this avoids: every bd write in this fleet dirties .beads/issues.jsonl, including the
   // comment recording the heavy run. Refusing over a file no suite reads would make a CORRECT

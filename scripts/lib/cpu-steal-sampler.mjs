@@ -41,6 +41,15 @@ export const DEFAULT_INTERVAL_MS = 2000;
 export const STEAL_THRESHOLD_PCT = 20;
 /** A gap inside a timed phase longer than this many intervals makes coverage incomplete. */
 export const MAX_GAP_INTERVALS = 2.5;
+/**
+ * The ONLY way to move the threshold (chrome-agent-platform-tu8w9, coord 2026-10-24): an explicit env
+ * var, recorded in the receipt with its source. A constant that can be edited quietly is how a starved
+ * box starts reading as a healthy one.
+ */
+export const STEAL_THRESHOLD_ENV = "CAP_HEAVY_STEAL_THRESHOLD_PCT";
+/** An explicit threshold above this is refused: past halfway, "below the threshold" stops meaning
+ *  anything a reader could trust, and the guard would certify runs it exists to flag. */
+export const MAX_EXPLICIT_THRESHOLD_PCT = 50;
 
 /** The /proc fields summed into the total. guest/guest_nice are EXCLUDED: they are already counted
  *  inside user/nice, and double-counting inflates the denominator, which understates steal. */
@@ -386,6 +395,70 @@ export function classifyTiming(samples, phases = [], { thresholdPct = STEAL_THRE
     ...summary,
     verdict: "TIMING_MEASURED",
     reason: `${valid.length} valid sample(s) inside timed phases stayed below ${thresholdPct}% steal (peak ${maxStealPct.toFixed(1)}%)`,
+  };
+}
+
+/**
+ * Resolve the steal threshold from the environment, recording WHERE it came from.
+ * A bad value THROWS rather than falling back to the default: a silently ignored override is the same
+ * class of defect as a silently raised threshold.
+ */
+export function resolveStealThreshold(env = process.env) {
+  const raw = env?.[STEAL_THRESHOLD_ENV];
+  if (raw === undefined || String(raw).trim() === "") {
+    return { thresholdPct: STEAL_THRESHOLD_PCT, thresholdSource: "default 20 (ADR rxayt / tu8w9)" };
+  }
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value < 0 || value > MAX_EXPLICIT_THRESHOLD_PCT) {
+    throw new Error(
+      `cpu-steal-sampler: ${STEAL_THRESHOLD_ENV}=${JSON.stringify(raw)} must be a percentage in 0..${MAX_EXPLICIT_THRESHOLD_PCT} — ` +
+        `a threshold that cannot be justified must not make a starved run look measured`,
+    );
+  }
+  return { thresholdPct: value, thresholdSource: `env ${STEAL_THRESHOLD_ENV}=${value}` };
+}
+
+/**
+ * Summarise the conditions a heavy run produced UNDER (chrome-agent-platform-tu8w9): the receipt must
+ * carry the conditions of its own production, not just a verdict, because a duration measured on a
+ * box that was 87% stolen is not evidence about the tree.
+ *
+ * Measured on this VM on 2026-10-23/24: average 58.6% steal, peak 87%, 689/698 intervals at or above
+ * 20% — while the gate still completed 744/744 parallel files. That is the pair of facts the policy
+ * rests on: completeness stays certifiable, durations do not.
+ *
+ * timing is MEASURED (every overlapping sample valid and below the threshold), UNMEASURED (some
+ * sample at or above it) or UNKNOWN (no samples, invalid samples, gaps). UNKNOWN is NOT an exception:
+ * missing data cannot authorise one.
+ *
+ * @param {any[]} samples
+ * @param {{ startedAt: number, finishedAt: number, intervalMs?: number, thresholdPct?: number, thresholdSource?: string }} args
+ */
+export function summariseRunSteal(samples, {
+  startedAt,
+  finishedAt,
+  intervalMs = DEFAULT_INTERVAL_MS,
+  thresholdPct = STEAL_THRESHOLD_PCT,
+  thresholdSource = "default 20 (ADR rxayt / tu8w9)",
+} = /** @type {any} */ ({})) {
+  const rows = Array.isArray(samples) ? samples : [];
+  const valid = rows.filter((row) => row?.valid && Number.isFinite(row?.steal_pct));
+  const values = valid.map((row) => row.steal_pct);
+  const verdict = classifyTiming(rows, [{ name: "heavy-run", startedAt, finishedAt }], { thresholdPct, intervalMs });
+  const timing = verdict.verdict === "TIMING_MEASURED" ? "MEASURED" : verdict.verdict === "TIMING_UNMEASURED" ? "UNMEASURED" : "UNKNOWN";
+  return {
+    sampled: rows.length > 0,
+    samples: rows.length,
+    validSamples: valid.length,
+    startStealPct: values.length ? values[0] : null,
+    endStealPct: values.length ? values[values.length - 1] : null,
+    maxStealPct: values.length ? Math.max(...values) : null,
+    avgStealPct: values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null,
+    thresholdPct,
+    thresholdSource,
+    timing,
+    reason: verdict.reason,
+    window: { startedAt, finishedAt },
   };
 }
 

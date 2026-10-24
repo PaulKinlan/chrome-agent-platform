@@ -218,7 +218,7 @@ export function auditSuiteLedger(suites, expected) {
  * Write failure THROWS: the producer must not exit 0 when it could not record what it ran, or the
  * gate would later refuse a tree that looked certified to the operator.
  *
- * @param {{ tree: string, treeEnd?: string, commit?: string, result: "pass"|"fail"|"refusal"|"subset"|"drift",
+ * @param {{ tree: string, treeEnd?: string, commit?: string, result: "pass"|"fail"|"refusal"|"subset"|"drift", conditions?: any,
  *   command?: string, args?: string[], exitCode?: number | null, logPath?: string | null,
  *   suites?: { file: string, phase: string, status: string }[], expected?: string[], dirty?: string[], producer?: string,
  *   startedAt?: number | null, finishedAt?: number }} args
@@ -235,6 +235,7 @@ export function writeHeavyReceipt({
   suites = [],
   expected = expectedHeavyFiles(),
   dirty = [],
+  conditions = null,
   producer = process.env.FLEET_LANE ?? "unknown",
   startedAt = null,
   finishedAt = Date.now(),
@@ -283,6 +284,12 @@ export function writeHeavyReceipt({
     missing,
     skipped,
     dirty,
+    // tu8w9: the CONDITIONS OF ITS OWN PRODUCTION. A receipt that records only a verdict cannot be
+    // audited later for whether the box was starved while the durations were measured, which is the
+    // one thing a reader most needs to know before trusting a timing assertion.
+    conditions,
+    timing: conditions?.steal?.timing ?? "UNKNOWN",
+    accountingOnly: conditions?.steal?.timing === "UNMEASURED" && result === "pass",
     producer,
     host: process.env.HOSTNAME ?? "unknown",
     startedAt,

@@ -21,6 +21,12 @@ import { fileURLToPath } from "node:url";
 import { HEAVY_GATE_FILES, WALL_CLOCK_HEAVY_FILES } from "./test-partition.mjs";
 import { areAllFailuresEnvironmental, combinePhaseExitCodes, ENVIRONMENTAL_REFUSAL_EXIT } from "./lib/environmental-verdict.mjs";
 import { heavyGateCommand, phaseStatusFor } from "./lib/heavy-receipt.mjs";
+import {
+  DEFAULT_INTERVAL_MS as STEAL_INTERVAL_MS,
+  createSampler as createStealSampler,
+  resolveStealThreshold,
+  summariseRunSteal,
+} from "./lib/cpu-steal-sampler.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 export const DEFAULT_HEAVY_GATE_TIMEOUT_MS = 1200_000;
@@ -137,6 +143,33 @@ export async function runHeavyGate(args = Deno.args): Promise<number> {
   // cannot attribute these suites to the tree it happens to hold when they finish, so the drift is
   // recorded and never certifies.
   const treeStart = await currentTreeForReceipt();
+  // chrome-agent-platform-tu8w9: sample CPU steal for the WHOLE run and write the conditions into the
+  // receipt. Measured on this VM: average 58.6%, peak 87% (689/698 intervals >= 20%) while the gate
+  // still completed 744/744 parallel files — completeness stays certifiable, durations do not. The
+  // threshold is 20% and can only be moved by an explicit env var that is RECORDED (resolveStealThreshold);
+  // a quiet constant is how a starved box starts reading as a healthy one. This is producer-side only:
+  // the gate's own pass/fail does not change here.
+  let stealThreshold: { thresholdPct: number; thresholdSource: string } | null = null;
+  try {
+    stealThreshold = resolveStealThreshold();
+  } catch (error) {
+    console.error(`heavy-gate: STEAL THRESHOLD REFUSED (${error instanceof Error ? error.message : String(error)}) — recording timing as UNKNOWN`);
+  }
+  const stealSamples: any[] = [];
+  const stealSampler = createStealSampler({
+    intervalMs: STEAL_INTERVAL_MS,
+    sink: (_line, sample) => stealSamples.push(sample),
+  });
+  // Prime, then take the START sample, so the first recorded observation is a real delta over 2s.
+  stealSampler.prime();
+  stealSampler.sample();
+  const stealTimer = setInterval(() => {
+    try {
+      stealSampler.sample();
+    } catch {
+      // A sampling failure is recorded as a missing sample; it must never abort the tier.
+    }
+  }, STEAL_INTERVAL_MS);
   console.log(`heavy-gate: ${requested.length} heavy test(s) — ${parallel.length} parallel, ${wallClock.length} wall-clock`);
   const timeoutMs = Number(Deno.env.get("CAP_HEAVY_GATE_TIMEOUT_MS") ?? DEFAULT_HEAVY_GATE_TIMEOUT_MS);
 
@@ -158,6 +191,41 @@ export async function runHeavyGate(args = Deno.args): Promise<number> {
       code: await runPhase(`WALL-CLOCK ${file}`, [file], { parallel: false, timeoutMs, capture: true }),
     });
   }
+
+  clearInterval(stealTimer);
+  try {
+    stealSampler.sample();
+  } catch {
+    // An unreadable final /proc/stat leaves the run with a gap, which classifies as UNKNOWN.
+  }
+  const stealConditions = stealThreshold
+    ? summariseRunSteal(stealSamples, {
+      startedAt: runStart,
+      finishedAt: Date.now(),
+      intervalMs: STEAL_INTERVAL_MS,
+      thresholdPct: stealThreshold.thresholdPct,
+      thresholdSource: stealThreshold.thresholdSource,
+    })
+    : {
+      sampled: stealSamples.length > 0,
+      samples: stealSamples.length,
+      validSamples: stealSamples.filter((s: any) => s?.valid).length,
+      startStealPct: null,
+      endStealPct: null,
+      maxStealPct: null,
+      avgStealPct: null,
+      timing: "UNKNOWN",
+      thresholdPct: null,
+      thresholdSource: "REFUSED (invalid CAP_HEAVY_STEAL_THRESHOLD_PCT)",
+      reason: "the steal threshold could not be resolved, so no timing claim can be made",
+      window: { startedAt: runStart, finishedAt: Date.now() },
+    };
+  const stealNumber = (value: number | null | undefined) => (typeof value === "number" ? value.toFixed(1) : "NA");
+  console.log(
+    `heavy-gate: steal during the run — avg ${stealNumber(stealConditions.avgStealPct)}%, peak ${stealNumber(stealConditions.maxStealPct)}%, ` +
+      `${stealConditions.validSamples}/${stealConditions.samples} valid sample(s), threshold ${stealConditions.thresholdPct ?? "NA"}%` +
+      ` (${stealConditions.thresholdSource}) => timing ${stealConditions.timing}`,
+  );
 
   const codes = phases.map((p) => p.code);
   let rc = codes.length ? combinePhaseExitCodes(...codes) : 0;
@@ -190,6 +258,7 @@ export async function runHeavyGate(args = Deno.args): Promise<number> {
       logPath: Deno.env.get("HEAVY_GATE_LOG_PATH") ?? null,
       suites,
       dirty: mod.dirtyTrackedPaths(),
+      conditions: { steal: stealConditions, wallClock: { startedAt: runStart, finishedAt: Date.now() } },
       startedAt: runStart,
       finishedAt: Date.now(),
     });
