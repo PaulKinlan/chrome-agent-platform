@@ -4,8 +4,9 @@
 // out of the default npm test parallel phase into a dedicated tier to prevent RAM spikes and CPU starvation.
 //
 // Enumerated coverage:
-//   19 test files in HEAVY_GATE_FILES covering Pyodide in-process execution, image codecs (AVIF, JXL, ZXing, CompressOps,
-//   ImageOps, OxiPNG), WASI preview1 runtime, UNIX tools, CallExport, external sort, and Emscripten schema-2 module audits.
+//   21 test files in HEAVY_GATE_FILES covering Pyodide in-process execution, image codecs (AVIF, JXL, ZXing, CompressOps,
+//   ImageOps, OxiPNG), WASI preview1 runtime, UNIX tools, CallExport, external sort, Emscripten schema-2 module audits,
+//   and the two mega-suites (chrome-agent-platform-3hbnd: python-documents-bundle, wasm-sync-workspace).
 //
 // TWO PHASES since chrome-agent-platform-rvht7, because one of those files does not belong in a parallel batch:
 //   1. PARALLEL — the RAM/CPU-saturating suites, `deno test --parallel` exactly as before.
@@ -15,7 +16,11 @@
 //      box, so a wall-clock budget measured beside it was measuring the neighbours. A window that never
 //      arrives inside its bound is an ENVIRONMENTAL REFUSAL (exit 75 + CAP_ENVIRONMENTAL_REFUSAL), never a
 //      product FAIL.
-// Ceiling: 1200s (20 minutes). Override with CAP_HEAVY_GATE_TIMEOUT_MS. The ceiling covers BOTH phases.
+// Ceiling: 3600s (60 minutes) since chrome-agent-platform-3hbnd. Override with CAP_HEAVY_GATE_TIMEOUT_MS. The ceiling
+// covers BOTH phases. 3hbnd moved the two mega-suites here AFTER measuring them (python-documents-bundle 1416s,
+// wasm-sync-workspace 894s on a849a9b3e): the previous 1200s ceiling covered the pre-3hbnd tier, and 1200 + the
+// measured additions would not fit, so the tier's own ceiling grows to measured-total + headroom. The parallel
+// phase's own 1800s bound is untouched (that raise is fleet config, hub-owned).
 
 import { fileURLToPath } from "node:url";
 import { HEAVY_GATE_FILES, WALL_CLOCK_HEAVY_FILES } from "./test-partition.mjs";
@@ -29,7 +34,7 @@ import {
 } from "./lib/cpu-steal-sampler.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
-export const DEFAULT_HEAVY_GATE_TIMEOUT_MS = 1200_000;
+export const DEFAULT_HEAVY_GATE_TIMEOUT_MS = 3_600_000;
 
 /** The tree this run is attributed to (juubk). Resolved at the START; null if git cannot answer,
  *  which the receipt writer treats as an unwritable receipt (never a pass). */

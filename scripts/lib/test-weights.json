@@ -16,7 +16,6 @@
     "tests/wasm-sync-workspace-seed-total-limit.test.ts": 145.0,
     "tests/wasm-sync-workspace-transaction-growth.test.ts": 140.0,
     "tests/wasm-sync-workspace-validator-walk.test.ts": 124.0,
-    "tests/python-documents-bundle-3p3e11.test.ts": 95,
     "tests/wasm-sync-workspace-seed-maxima.test.ts": 92.0,
     "tests/serial-phase-resilience.test.ts": 40.7,
     "tests/quiet-window.test.ts": 31.7,
@@ -92,7 +91,6 @@
     "tests/evidence-durable.test.ts": 3,
     "tests/g09i-sidebar-tab.test.ts": 3,
     "tests/sandbox-egress-confinement.test.ts": 3,
-    "tests/site-agent-delegation-attachments.test.ts": 3,
-    "tests/wasm-sync-workspace.test.ts": 3.0
+    "tests/site-agent-delegation-attachments.test.ts": 3
   }
 }
