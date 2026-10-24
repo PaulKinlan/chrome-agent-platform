@@ -239,6 +239,34 @@ export function jsStrings(source, file = "<js>") {
 }
 
 // Candidate references from any shipped/scripts file (attribute URLs + inline script strings + TS/JS imports).
+/**
+ * Inline <script> extraction shared by candidateRefs (reference edges) and the
+ * HTML token pass in checkExportReachability (identifier uses), so the two
+ * paths cannot drift (chrome-agent-platform-9lmsv).
+ *
+ * Excluded: src= tags (browsers ignore any body on them), empty bodies, and
+ * non-JavaScript types. The type exclusion is load-bearing for the token pass:
+ * acorn happily tokenizes a type="text/template" or type="application/json"
+ * body as JS and yields name tokens, so a template body containing
+ * `onclick="resetAllStores()"` would credit an export no script ever executes.
+ */
+export const SCRIPT_TAG_RE = /<script\b([^>]*)>([\s\S]*?)<\/script\s*>/gi;
+const JS_SCRIPT_TYPES = new Set(["", "module", "text/javascript", "application/javascript", "text/ecmascript", "application/ecmascript", "text/jscript"]);
+
+export function extractInlineScripts(html) {
+  const out = [];
+  for (const m of html.matchAll(SCRIPT_TAG_RE)) {
+    const attrs = m[1] ?? "";
+    const body = m[2] ?? "";
+    if (/\bsrc\s*=/i.test(attrs)) continue;
+    if (!body.trim()) continue;
+    const type = (attrs.match(/\btype\s*=\s*["']([^"']*)["']/i)?.[1] ?? "").trim().toLowerCase();
+    if (!JS_SCRIPT_TYPES.has(type)) continue;
+    out.push({ code: body, module: type === "module" });
+  }
+  return out;
+}
+
 export function candidateRefs(rel, source) {
   const ext = rel.slice(rel.lastIndexOf("."));
   const refs = [];
@@ -246,8 +274,8 @@ export function candidateRefs(rel, source) {
     refs.push(...jsStrings(source, rel));
   } else if (ext === ".html") {
     for (const m of source.matchAll(/\b(?:src|href)\s*=\s*["']([^"']+)["']/g)) refs.push(m[1]);
-    for (const m of source.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)) {
-      if (m[1].trim()) refs.push(...jsStrings(m[1], `${rel} (inline script)`));
+    for (const { code } of extractInlineScripts(source)) {
+      refs.push(...jsStrings(code, `${rel} (inline script)`));
     }
   } else if (ext === ".css") {
     for (const m of source.matchAll(/@import\s+(?:url\()?["']?([^"')\s;]+)["']?\)?/g)) refs.push(m[1]);
@@ -531,25 +559,26 @@ export function exportedFunctions(source, file = "<js>") {
 /**
  * Token counts for a reached HTML file's inline scripts.
  *
- * Returns null when acorn cannot tokenize it, which is the outcome the previous
- * inline try/catch produced (no entry in analysesByFile) — the difference is that
- * the null is now recorded in the content memo, so a repeated scan does not
- * re-attempt the same failing tokenization.
- *
- * KNOWN DEFECT (filed as its own bead, chrome-agent-platform-8qy5d review find):
- * this tokenizes the WHOLE document as JavaScript, so every real .html file throws
- * at its first non-JS character (e.g. the '—' in a comment) and returns null. In
- * other words no HTML inline-script token has ever been counted. Fixing it changes
- * export-reachability verdicts, so it is deliberately NOT folded into this
- * performance change; this function only stops the failure being re-paid per scan.
+ * chrome-agent-platform-9lmsv: extracts the inline <script> bodies (shared
+ * extractor with candidateRefs; src=, empty and non-JS-type tags excluded) and
+ * tokenizes each with its own sourceType. The previous version tokenized the
+ * WHOLE document as JavaScript, so every real page threw and returned null —
+ * no HTML inline-script token was ever counted (filed from 8qy5d's review).
+ * A page with no inline script now yields an EMPTY analysis instead of null,
+ * so analysesByFile names it; the null branch survives only for the memo
+ * contract and cannot be reached by extraction alone.
  */
 function analyzeHtmlTokens(html) {
   try {
     const counts = new Map();
-    for (const tok of tokenizer(html, { ecmaVersion: "latest", sourceType: "module", allowHashBang: true })) {
-      if (tok.type?.label === "name" && typeof tok.value === "string") {
-        counts.set(tok.value, (counts.get(tok.value) || 0) + 1);
-      }
+    for (const { code, module: scriptType } of extractInlineScripts(html)) {
+      try {
+        for (const tok of tokenizer(code, { ecmaVersion: "latest", sourceType: scriptType ? "module" : "script", allowHashBang: true })) {
+          if (tok.type?.label === "name" && typeof tok.value === "string") {
+            counts.set(tok.value, (counts.get(tok.value) || 0) + 1);
+          }
+        }
+      } catch {} // one malformed inline script must not hide the others
     }
     return {
       tokens: [],
@@ -597,7 +626,15 @@ export async function checkExportReachability({
 
   const reachedCodeSet = new Set(reachedCode);
 
-  // Also count tokens in reached HTML files (inline scripts)
+  // Also count tokens in reached HTML files' inline scripts.
+  // chrome-agent-platform-9lmsv: the old code tokenized the WHOLE document as
+  // JavaScript, so every real page threw at its first non-JS character and the
+  // try/catch swallowed it — no inline-script token was ever counted (all 11
+  // reached pages threw; every shipped <script> tag is src= today, so the
+  // measured verdict delta on the shipped tree is zero, but any future inline
+  // script now counts). Per-script tokenization (src=/non-JS types excluded by
+  // the shared extractor) lives in analyzeHtmlTokens; the result is memoized by
+  // content so a repeated scan does not re-attempt anything.
   for (const rel of reached) {
     if (reachedCodeSet.has(rel)) continue;
     if (rel.endsWith(".html")) {
