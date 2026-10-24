@@ -110,14 +110,48 @@ Deno.test("mfu4a: a union multiplies through its branches, not just through arra
   assertEquals(compileSchemaToZod(z, viaUnion).fatal, "schema-work-exceeded", "a bomb inside a union branch is refused");
 });
 
-Deno.test("mfu4a: cyclic-by-shape input cannot spin the accounting pass", () => {
-  // The RAW schema reaching this function is parsed JSON, so it cannot be
-  // cyclic — but the accounting must also terminate on a self-referencing
-  // object graph rather than trusting that, because it runs BEFORE the depth
-  // cap can help it (a cycle multiplies depth by structure, not by visit count).
-  const node: any = { type: "array", items: { type: "array", items: { type: "integer" } } };
+// ── The three bypasses chrome-agent-platform-26g5y found in the first cut ──
+// The first implementation decided "container or leaf" from `type` and returned
+// early, so three shapes accounted as work 1 while the BUILDER validated them:
+// each is pinned here with the shape the reviewer used, because "bounded" is a
+// claim about the product and these are the products a hostile server would use.
+
+Deno.test("mfu4a: an UNTYPED container is accounted for (type is not the discriminator)", () => {
+  // No `type` at all: buildFromClean still builds the object and validates every
+  // property (measured pre-fix: 105k leaves in ~99ms while work reported 1).
+  const untyped = { properties: { rows: nestedArrays(4) } };
+  assertEquals(schemaValidationWork(untyped), BUDGET + 1, "the product must be counted without a type tag");
+  assertEquals(compileSchemaToZod(z, untyped).fatal, "schema-work-exceeded");
+});
+
+Deno.test("mfu4a: a union on a TYPED node still adds its branches", () => {
+  // The builder intersects the declared type with each branch, so both run.
+  const typedUnion = { type: "object", anyOf: [{ type: "object", properties: { rows: nestedArrays(4) } }] };
+  assertEquals(compileSchemaToZod(z, typedUnion).fatal, "schema-work-exceeded");
+
+  // The same trick on the array side.
+  const arrayUnion = { type: "array", items: { type: "integer" }, anyOf: [{ type: "array", items: nestedArrays(4) }] };
+  assertEquals(compileSchemaToZod(z, arrayUnion).fatal, "schema-work-exceeded");
+});
+
+Deno.test("mfu4a: a schema-valued additionalProperties is counted (insurance, not a live path)", () => {
+  // This converter DROPS additionalProperties/patternProperties today, so the
+  // budget counts them for the day they are supported — the point is that the
+  // accounting cannot be narrower than the builder without a test noticing.
+  const addProps = { type: "object", additionalProperties: nestedArrays(4) };
+  assertEquals(compileSchemaToZod(z, addProps).fatal, "schema-work-exceeded");
+  const boolAddProps = { type: "object", properties: { a: { type: "string" } }, additionalProperties: false };
+  assertEquals(compileSchemaToZod(z, boolAddProps).fatal, null, "a boolean additionalProperties costs nothing");
+});
+
+Deno.test("mfu4a: a CYCLIC object graph terminates instead of recursing forever", () => {
+  // A cycle cannot arrive as parsed JSON, but the accounting must not depend on
+  // that: it walks BEFORE the builder, so a caller passing a hand-built graph
+  // must not be able to spin it. The depth cap is the termination argument.
+  const cyclic: any = { type: "array" };
+  cyclic.items = cyclic;
   const started = Date.now();
-  const work = schemaValidationWork(node);
-  assert(Number.isFinite(work) && work <= BUDGET + 1, `work must stay finite (got ${work})`);
-  assert(Date.now() - started < 1000, "the accounting pass must be cheap");
+  const work = schemaValidationWork(cyclic);
+  assert(Number.isFinite(work) && work <= BUDGET + 1, `work must stay finite and bounded (got ${work})`);
+  assert(Date.now() - started < 1000, "the accounting pass must be cheap on a cyclic graph");
 });
