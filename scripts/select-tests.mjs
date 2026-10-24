@@ -854,6 +854,7 @@ async function runDeno(files, { build = null, omittedReason = null, fileMappingC
   }
   const fileMapping = fileMappingContext ? explainChangedFileMapping({
     ...fileMappingContext, executedSuites: rc === 0 ? files : [], omitted: inventory.omitted,
+    runExitCode: rc,
   }) : [];
   emitGateLedger({
     manifest: {

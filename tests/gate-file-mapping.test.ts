@@ -129,3 +129,50 @@ Deno.test("sgzyg: fail-closed FULL records changed heavy test as not run, with i
   assertStringIncludes(rows.find((row) => row.file === "tests/python-runtime.test.ts")?.reason ?? "", "test:heavy");
   assertEquals(rows.find((row) => row.file === "extension/background/service-worker.js")?.executed_suites, ["tests/thread-export-sw-entry.test.ts"]);
 });
+
+Deno.test("7w5k1: a FAILED full run names failure, not a selection omission, in fileMapping reasons", () => {
+  // The bead's verbatim repro: fullTierManifestFields zeroes executedSuites on rc!=0
+  // (a failed run certifies nothing) but used to leave the explainer blind to WHY, so
+  // every reachable suite read "not executed" — a selection-omission claim.
+  const fields = fullTierManifestFields({
+    serialFiles: ["tests/quiet-window.test.ts"], parallelFiles: [], rc: 1,
+    fileMappingContext: {
+      changed: ["scripts/lib/quiet-window.ts"],
+      candidates: { "scripts/lib/quiet-window.ts": ["tests/quiet-window.test.ts"] },
+      unmappable: [],
+    },
+  });
+  const rows = (fields as { fileMapping?: Array<{file: string; status: string; reason: string}> } | null)?.fileMapping ?? [];
+  assertEquals(rows.length, 1);
+  assertEquals(rows[0].status, "unmapped");
+  assertStringIncludes(rows[0].reason, "executed suites not attributable (run failed, rc=1)");
+  assert(!rows[0].reason.includes("not executed"), "a failed run must not read as a selection omission");
+});
+
+Deno.test("7w5k1: a GREEN full run keeps the selection-omission wording for genuinely unexecuted suites", () => {
+  const fields = fullTierManifestFields({
+    serialFiles: [], parallelFiles: [], rc: 0,
+    fileMappingContext: {
+      changed: ["scripts/lib/quiet-window.ts"],
+      candidates: { "scripts/lib/quiet-window.ts": ["tests/quiet-window.test.ts"] },
+      unmappable: [],
+    },
+  });
+  const rows = (fields as { fileMapping?: Array<{file: string; reason: string}> } | null)?.fileMapping ?? [];
+  assertStringIncludes(rows[0].reason, "reachable suite(s) not executed");
+});
+
+Deno.test("7w5k1: explainChangedFileMapping defaults to the old wording (runExitCode unset) and a real omission still wins on a failed run", () => {
+  const defaultRows = explainChangedFileMapping({
+    changed: ["a.ts"], candidates: { "a.ts": ["tests/a.test.ts"] }, executedSuites: [],
+  });
+  assertStringIncludes(defaultRows[0].reason, "reachable suite(s) not executed");
+  // A suite with its own omission reason keeps it even when the run failed: the
+  // specific truth (why it did not run) beats the general one (the run failed).
+  const omittedRows = explainChangedFileMapping({
+    changed: ["a.ts"], candidates: { "a.ts": ["tests/a.test.ts"] }, executedSuites: [],
+    omitted: [{ file: "tests/a.test.ts", reason: "heavy tier owns the verdict" }],
+    runExitCode: 1,
+  });
+  assertStringIncludes(omittedRows[0].reason, "reachable suite not run: heavy tier owns the verdict");
+});
