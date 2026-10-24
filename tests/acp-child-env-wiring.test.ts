@@ -14,7 +14,7 @@
 // so an ABSENT result is never vacuous: there is always a run proving the same
 // report can say PRESENT when the policy is turned off.
 
-import { assertEquals } from "jsr:@std/assert@1";
+import { assert, assertEquals } from "jsr:@std/assert@1";
 import { fromFileUrl } from "jsr:@std/path@1/from-file-url";
 import { fileURLToPath } from "node:url";
 import { createAcpServer } from "../scripts/acp-bridge.ts";
@@ -71,6 +71,24 @@ async function fixtureEnvReport(logPath: string, timeoutMs = 20_000): Promise<"P
     await new Promise((r) => setTimeout(r, 100));
   }
   return null;
+}
+
+/** chrome-agent-platform-o4cfk: TRUE only when a report row for THIS harness exists in the log.
+ * The bridge kills an adapter when its connection closes, so the test must close a socket only
+ * AFTER that connection's adapter has reported. The previous fixed 500ms sleep raced the child's
+ * startup under gate load (744 parallel files): the sleep elapsed before the adapter exec'd, the
+ * disconnect killed it, the report row never appeared, and fixtureMcpReport polled its full 20s
+ * and returned null — the union a4468dff2 full-gate red ('Values are not equal: null / true'). */
+async function fixtureRowSeen(logPath: string, harness: string, timeoutMs = 30_000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const rows = Deno.readTextFileSync(logPath).split("\n").filter(Boolean).map((line) => JSON.parse(line));
+      if (rows.some((row) => row?.harness === harness)) return true;
+    } catch { /* not written yet */ }
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  return false;
 }
 
 /** Start the REAL bridge script as a child, with the given environment, and
@@ -264,8 +282,16 @@ Deno.test("nqe6j: the BRIDGE spawns a pi adapter with MCP discovery off, and lea
   try {
     for (const harness of ["pi", "claude-code"]) {
       const ws = await connect(`${authedEndpoint(port)}&harness=${harness}`);
+      // o4cfk: close only AFTER this connection's adapter has reported. The bridge kills the adapter
+      // on disconnect, so closing on a fixed sleep (the old 500ms) killed children before they wrote
+      // their startup report under gate load — the row never appeared and the assertion below read a
+      // bare null. Waiting for the row makes the kill unable to race the report; a child that never
+      // reports now reds HERE, attributable to the spawn, instead of as a null equality.
+      assert(
+        await fixtureRowSeen(logPath, harness),
+        `the ${harness} adapter never reported before its socket closed (spawn or startup failed)`,
+      );
       // The bridge closes the connection when the adapter exits; closing our side too keeps it prompt.
-      await new Promise((r) => setTimeout(r, 500));
       ws.close();
     }
     assertEquals(
