@@ -320,7 +320,14 @@ export function fullTierManifestFields({
     omitted,
     omittedTotal: omitted.length,
     ...(fileMappingContext ? { fileMapping: explainChangedFileMapping({
-      ...fileMappingContext, executedSuites: rc === 0 ? executedSuites : [], omitted,
+      ...fileMappingContext,
+      executedSuites: rc === 0 ? executedSuites : [],
+      omitted,
+      // ea2qv (review finding 7w5k1): the FULL tier zeroes executed_suites on rc != 0 for the same
+      // w6kc0 reason, so it has to say WHY too — without this the fail-closed FULL path (which is what
+      // selector-infrastructure changes get) still accused the selector of an omission that never
+      // happened. Same rule, same wording, one rc.
+      runExitCode: rc,
     }) } : {}),
   };
 }

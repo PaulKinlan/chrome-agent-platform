@@ -177,3 +177,34 @@ Deno.test("ea2qv: a green run's rows are byte-identical to today's, and a real o
   assertStringIncludes(failed[1].reason, "Pyodide tier only");
   assertStringIncludes(failed[0].reason, "run failed, rc=7");
 });
+
+// ea2qv review finding 7w5k1: the FULL tier has the same hole as the fast tier. A selector-infrastructure
+// change fail-closes to FULL, FULL zeroes executed_suites on rc != 0 (w6kc0), and the ledger used to
+// report that as "reachable suite(s) not executed" — the same false accusation, one tier up — which is
+// precisely the path this bead's own branch takes. The full tier must name the failure, and a file whose
+// suite genuinely deferred to another tier must keep its own tier reason.
+Deno.test("7w5k1: a failed FULL run names the failure, and a deferred suite keeps its tier reason", () => {
+  const fields = fullTierManifestFields({
+    parallelFiles: ["tests/thread-export-sw-entry.test.ts"],
+    rc: 1,
+    deferred: [{ file: "tests/python-runtime.test.ts", reason: "Pyodide >10MB; only test:heavy runs it" }],
+    fileMappingContext: {
+      changed: ["tests/python-runtime.test.ts", "extension/background/service-worker.js"],
+      candidates: {
+        "tests/python-runtime.test.ts": ["tests/python-runtime.test.ts"],
+        "extension/background/service-worker.js": ["tests/thread-export-sw-entry.test.ts"],
+      },
+      unmappable: [],
+    },
+  }) as { fileMapping?: Array<{ file: string, status: string, reason: string, executed_suites: string[] }> } | null;
+  const rows = fields?.fileMapping ?? [];
+  const sw = rows.find((row) => row.file === "extension/background/service-worker.js");
+  assertEquals(sw?.status, "unmapped");
+  assertStringIncludes(sw?.reason ?? "", "run failed, rc=1");
+  assert(
+    !(sw?.reason ?? "").includes("not executed"),
+    `the full tier must not accuse the selector of an omission: ${sw?.reason}`,
+  );
+  const py = rows.find((row) => row.file === "tests/python-runtime.test.ts");
+  assertStringIncludes(py?.reason ?? "", "test:heavy", "a genuinely deferred suite keeps its own tier reason");
+});
