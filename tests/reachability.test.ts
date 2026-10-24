@@ -712,3 +712,82 @@ Deno.test("reachability (8qy5d): a changed file is re-analysed, never served fro
     "the uncalled export must be reported unreached after the change",
   );
 });
+
+// ── chrome-agent-platform-9lmsv: the HTML inline-script token pass ──────────
+// The pass used to tokenize the WHOLE .html document as JavaScript, so every
+// real page threw at its first non-JS character, the try/catch swallowed it,
+// and no inline-script token was ever counted. These tests pin the repaired
+// shape: inline <script> bodies are extracted (like candidateRefs already does
+// for references) and tokenized per script; src= and non-JS type= tags are
+// excluded; an inline call must clear an otherwise-unreached export, and the
+// same page without the script must not.
+
+const HTML_FIXTURE_FILES = (inlineBody: string) => ({
+  "lib/provider.js": `export function inlineUsed() { return 1; }\nexport function stillDead() { return 2; }\n`,
+  "page/inline.html": `<!DOCTYPE html><html><body>\n  <div id="app"></div>\n  ${inlineBody}\n</body></html>\n`,
+});
+
+async function htmlFixtureReport(inlineBody: string) {
+  const fixtureFiles = HTML_FIXTURE_FILES(inlineBody);
+  const fixtureIo = {
+    readFile: async (p: string) => {
+      const rel = p.replace(/^mock\//, "");
+      if (fixtureFiles[rel] !== undefined) return fixtureFiles[rel];
+      throw new Error(`File not found: ${p}`);
+    },
+    readdir: async () => [],
+  };
+  return checkExportReachability({
+    root: "mock",
+    reached: new Set(["lib/provider.js", "page/inline.html"]),
+    io: fixtureIo,
+    strictExports: true,
+  });
+}
+
+Deno.test("reachability (9lmsv): an inline <script> call clears an otherwise-unreached export", async () => {
+  const report = await htmlFixtureReport(`<script type="module">inlineUsed();</script>`);
+  assert(
+    report.reachedExports.includes("lib/provider.js:inlineUsed"),
+    "an inline script's call must credit the exported function it names",
+  );
+  assert(
+    report.unreachedExports.some((e: string) => e.startsWith("lib/provider.js:stillDead")),
+    "the sibling export with no caller anywhere stays unreached",
+  );
+});
+
+Deno.test("reachability (9lmsv): the same page without the inline script does not clear anything", async () => {
+  const report = await htmlFixtureReport(`<p>markup only, no scripts</p>`);
+  assert(
+    report.unreachedExports.some((e: string) => e.startsWith("lib/provider.js:inlineUsed")),
+    "no inline script, no credit",
+  );
+});
+
+Deno.test("reachability (9lmsv): a src= script tag contributes no inline tokens", async () => {
+  // A body on a src= tag is IGNORED by browsers; it must not credit anything
+  // here either (the body is deliberately non-empty so the exclusion is the
+  // src= check itself, not the empty-body check).
+  const report = await htmlFixtureReport(`<script type="module" src="../dist/page.bundle.js">inlineUsed();</script>`);
+  assert(
+    report.unreachedExports.some((e: string) => e.startsWith("lib/provider.js:inlineUsed")),
+    "an external script tag must not credit inline identifiers",
+  );
+});
+
+Deno.test("reachability (9lmsv): non-JS script types (template, JSON) are excluded and never credited", async () => {
+  // The template body is deliberately VALID JavaScript text: without the type
+  // exclusion acorn tokenizes it and yields name: inlineUsed — a false credit
+  // from markup no script ever executes. (A <div onclick=...> body would throw
+  // in the tokenizer and be swallowed,crediting nothing — so this test's
+  // killing case must parse.)
+  const report = await htmlFixtureReport(
+    `<script type="text/template">inlineUsed();</script>\n` +
+      `<script type="application/json">{"inlineUsed": 1}</script>`,
+  );
+  assert(
+    report.unreachedExports.some((e: string) => e.startsWith("lib/provider.js:inlineUsed")),
+    "a text/template or application/json body must not credit a named export even when the body is valid JS text",
+  );
+});
