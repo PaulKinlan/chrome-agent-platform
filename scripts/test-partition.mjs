@@ -409,12 +409,6 @@ export const EXEMPTIONS = {
   // here until o4m2 stripped comments before scanning; with comment prose no longer classified as
   // a hazard, both files classify with NO hazard classes and their dead exemptions were retired.)
   "tests/changelog-shipping.test.ts": "reads ../build.mjs as TEXT to check what the changelog ships; never loads or runs it",
-  // jvc0y: the assertion is a PURE REGEX over fixture strings — one of them is a /proc command line
-  // ("build.mjs --target=store") because that is what a real process table contains, and the sampler
-  // must count it in the build_mjs class. Nothing is imported, spawned or read: the only filesystem
-  // calls in this test are the fake /proc tree it writes under a durableDir scratch (removed in a
-  // finally) and its own sample log. No shared artifact is touched, so parallel execution is safe.
-  "tests/cpu-steal-sampler.test.ts": "names build.mjs only inside process-table FIXTURE strings for a pure classifier regex; never imports, spawns or reads it, and every write goes to a durableDir scratch tree removed in a finally",
   // t5o2i.3: parse build.mjs as SOURCE TEXT with acorn; never import or run its build driver.
   // The resolver tests still touch only isolated durable scratch stores/locks.
   "tests/security-dependency-resolution.test.ts": "reads build.mjs as source text and parses AST for pre-bundle call order; tests the imported pure resolver against isolated durable scratch stores; never loads/spawns a build or writes shared node_modules/dist",

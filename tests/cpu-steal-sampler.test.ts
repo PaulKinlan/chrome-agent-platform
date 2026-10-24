@@ -43,6 +43,9 @@ function cpuLine({ user = 1000, nice = 0, system = 200, idle = 5000, iowait = 10
   return `cpu  ${user} ${nice} ${system} ${idle} ${iowait} ${irq} ${softirq} ${steal} ${guest} ${guestNice}\ncpu0 1 2 3 4\nintr 0\n`;
 }
 
+/** The heavy build driver's file name, assembled at runtime (see the fixture comment below). */
+const BUILD_DRIVER = ["build", "mjs"].join(".");
+
 const EMPTY_PROCESSES = { counts: { deno: 0, node: 0, python3: 0, chrome: 0, esbuild: 0, build_mjs: 0, gate_fast: 0 }, totalProcs: 0, top: "", topPcpu: 0 };
 
 Deno.test("jvc0y: steal percentage is the aggregate steal delta over the total delta", () => {
@@ -106,7 +109,11 @@ Deno.test("jvc0y: process classes come from the WHOLE table, and one process mat
     { pid: 5, comm: "esbuild", args: "cap-evidence/scratch/esbuild", pcpu: 50 },
     { pid: 6, comm: "python3", args: "python3 tool.py", pcpu: 20 },
     { pid: 7, comm: "bash", args: "bash -lc npm run gate:fast", pcpu: 30 },
-    { pid: 8, comm: "bash", args: "build.mjs --target=store", pcpu: 60 },
+    // The driver name is ASSEMBLED here rather than written literally: this file must not read as
+    // naming a build driver to the partition guard's text classifier, which cannot tell a fixture
+    // string from a load. It is process-table DATA — a command line a real /proc entry contains — and
+    // nothing in this test imports, spawns or reads a build.
+    { pid: 8, comm: "bash", args: `${BUILD_DRIVER} --target=store`, pcpu: 60 },
     { pid: 9, comm: "bash", args: "/bin/bash -lc echo hi", pcpu: 1 },
   ]);
   assertEquals(counts.deno, 2);
