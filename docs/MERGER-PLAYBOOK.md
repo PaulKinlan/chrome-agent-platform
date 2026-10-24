@@ -180,6 +180,19 @@ npm test > /tmp/npm-test-<bead>.log 2>&1
 npm run test:build > /tmp/npm-test-build-<bead>.log 2>&1
 npm run test:heavy > /tmp/npm-test-heavy-<bead>.log 2>&1
 # Verify exit 0, zero failures (runs build-bootstrap, build-debug-mode, build-tool-bundling; heavy WASM tier)
+#
+# THE RECEIPT DECIDES WHAT THE RUN CERTIFIES (upqhp/juubk/tu8w9/gezg6). `npm run test:heavy`
+# writes a receipt for its exact tree, and `node scripts/gate-receipt.mjs` consumes it. Since
+# tu8w9 that receipt also records the CPU steal it ran under, so a green run is not automatically
+# a TIMING credential:
+#   exit 0  full credential — steal measured, below threshold (default 20%)
+#   exit 2  nothing usable — missing / wrong tree / stale / not a pass / incomplete
+#   exit 3  ACCOUNTING-ONLY — the box was starved (measured avg 58.6%, peak 87% on this VM once),
+#           or the receipt carries no steal evidence. Every enumerated suite passed and 0 were
+#           skipped, so the run is acceptable for ACCOUNTING and claims NO timing.
+# Accept the accounting path explicitly with `node scripts/gate-receipt.mjs --accept-accounting-only`
+# (it prints HEAVY_RECEIPT_ACCOUNTING_ONLY and exits 0). Never accept 3 by ignoring it: the
+# durations from a starved run are not evidence, and re-running on an idle box is what buys one.
 
 # 9. Push explicit SHA to main
 git push origin <commit-sha>:main

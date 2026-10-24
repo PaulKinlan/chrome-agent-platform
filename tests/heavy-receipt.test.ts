@@ -32,6 +32,8 @@ import {
   receiptPath,
   writeHeavyReceipt,
 } from "../scripts/lib/heavy-receipt.mjs";
+import { currentTreeHash, evaluateStealConditions } from "../scripts/lib/heavy-receipt.mjs";
+import { durableDir } from "../scripts/lib/durable-root.mjs";
 
 const ROOT = join(fileURLToPath(import.meta.url), "..", "..");
 
@@ -69,8 +71,42 @@ function certifyingBody(tree: string, overrides: Record<string, unknown> = {}) {
     startedAt: NOW - 1000,
     finishedAt: NOW,
     logPath: "cap-evidence/logs/heavy-gate.log",
+    // gezg6: a certifying fixture must also record that the box was HEALTHY while it ran; the default
+    // is a measured, sub-threshold measurement, so the structural tests keep testing structure.
+    conditions: { steal: measuredSteal() },
     ...overrides,
   };
+}
+
+/** Steal conditions for a run that stayed under the threshold: a timing credential. */
+function measuredSteal(overrides: Record<string, unknown> = {}) {
+  return {
+    sampled: true,
+    samples: 300,
+    validSamples: 300,
+    startStealPct: 1.0,
+    endStealPct: 2.0,
+    maxStealPct: 6.5,
+    avgStealPct: 2.75,
+    thresholdPct: 20,
+    thresholdSource: "default 20 (ADR rxayt / tu8w9)",
+    timing: "MEASURED",
+    reason: "300 valid sample(s) inside timed phases stayed below 20% steal (peak 6.5%)",
+    ...overrides,
+  };
+}
+
+/** Steal conditions from a starved box: the measurement that started all of this. */
+function starvedSteal(overrides: Record<string, unknown> = {}) {
+  return measuredSteal({
+    startStealPct: 61.0,
+    endStealPct: 87.0,
+    maxStealPct: 87.0,
+    avgStealPct: 58.6,
+    timing: "UNMEASURED",
+    reason: "300/300 valid sample(s) inside a timed phase measured >= 20% steal (peak 87.0%)",
+    ...overrides,
+  });
 }
 
 /** Each test gets as many tree ids as it needs; every receipt file it wrote is removed in the
@@ -115,6 +151,7 @@ const NOW = 1_800_000_000_000;
 Deno.test("upqhp: a complete passing receipt for the exact tree certifies it", withReceipts(async (nextTree) => {
   const TREE = nextTree();
   const { path, receipt } = writeHeavyReceipt({
+    conditions: { steal: measuredSteal() },
     tree: TREE,
     treeEnd: TREE,
     commit: "491316ec6",
@@ -156,7 +193,8 @@ Deno.test("upqhp falsifier: a receipt for a DIFFERENT tree does not certify", wi
   // the honest refusal is "missing". The tree-mismatch branch guards a hand-mislabeled file — a
   // receipt whose FILENAME claims tree A but whose contents claim tree B.
   const TREE = nextTree();
-  writeHeavyReceipt({ tree: nextTree(), result: "pass", suites: completeSuites(), finishedAt: NOW });
+  writeHeavyReceipt({
+    conditions: { steal: measuredSteal() }, tree: nextTree(), result: "pass", suites: completeSuites(), finishedAt: NOW });
   const otherTree = checkHeavyReceipt(TREE, { now: NOW });
   assertEquals(otherTree.ok, false);
   assertEquals(otherTree.reason, "missing");
@@ -171,7 +209,8 @@ Deno.test("upqhp falsifier: a receipt for a DIFFERENT tree does not certify", wi
 Deno.test("upqhp falsifier: a refused or failed tier run does not certify", withReceipts(async (nextTree) => {
   for (const result of ["refusal", "fail"] as const) {
     const TREE = nextTree();
-    writeHeavyReceipt({ tree: TREE, result, suites: completeSuites(), finishedAt: NOW });
+    writeHeavyReceipt({
+    conditions: { steal: measuredSteal() }, tree: TREE, result, suites: completeSuites(), finishedAt: NOW });
     const verdict = checkHeavyReceipt(TREE, { now: NOW });
     assertEquals(verdict.ok, false, `result "${result}" must not certify`);
     assertEquals(verdict.reason, `not-pass:${result}`);
@@ -180,12 +219,14 @@ Deno.test("upqhp falsifier: a refused or failed tier run does not certify", with
 
 Deno.test("upqhp: a receipt older than the window is refused as stale", withReceipts(async (nextTree) => {
   const TREE = nextTree();
-  writeHeavyReceipt({ tree: TREE, result: "pass", args: [], command: heavyGateCommand(), exitCode: 0, suites: completeSuites(), finishedAt: NOW - DEFAULT_RECEIPT_MAX_AGE_MS - 1000 });
+  writeHeavyReceipt({
+    conditions: { steal: measuredSteal() }, tree: TREE, result: "pass", args: [], command: heavyGateCommand(), exitCode: 0, suites: completeSuites(), finishedAt: NOW - DEFAULT_RECEIPT_MAX_AGE_MS - 1000 });
   const stale = checkHeavyReceipt(TREE, { now: NOW });
   assertEquals(stale.ok, false);
   assertEquals(stale.reason, "stale");
   // And inside the window it certifies.
-  writeHeavyReceipt({ tree: TREE, result: "pass", args: [], command: heavyGateCommand(), exitCode: 0, suites: completeSuites(), finishedAt: NOW - 1000 });
+  writeHeavyReceipt({
+    conditions: { steal: measuredSteal() }, tree: TREE, result: "pass", args: [], command: heavyGateCommand(), exitCode: 0, suites: completeSuites(), finishedAt: NOW - 1000 });
   assertEquals(checkHeavyReceipt(TREE, { now: NOW }).ok, true);
 }));
 
@@ -215,6 +256,7 @@ Deno.test("juubk falsifier: a ONE-FILE subset run can never certify, even when i
   const TREE = nextTree();
   const probe = expectedHeavyFiles()[0];
   const { receipt } = writeHeavyReceipt({
+    conditions: { steal: measuredSteal() },
     tree: TREE,
     result: "pass",
     args: [probe],
@@ -232,7 +274,8 @@ Deno.test("juubk falsifier: a ONE-FILE subset run can never certify, even when i
 Deno.test("juubk falsifier: a pass claim with an unrun suite is downgraded and refused", withReceipts(async (nextTree) => {
   const TREE = nextTree();
   const short = completeSuites().slice(0, -1); // one enumerated suite never ran
-  const { receipt } = writeHeavyReceipt({ tree: TREE, result: "pass", args: [], exitCode: 0, suites: short, finishedAt: NOW });
+  const { receipt } = writeHeavyReceipt({
+    conditions: { steal: measuredSteal() }, tree: TREE, result: "pass", args: [], exitCode: 0, suites: short, finishedAt: NOW });
   assertEquals(receipt.complete, false);
   assertEquals(receipt.missing, [expectedHeavyFiles().at(-1)]);
   assertEquals(checkHeavyReceipt(TREE, { now: NOW }).ok, false);
@@ -265,6 +308,7 @@ Deno.test("juubk falsifier: a killed, refused, failed or unknown suite blocks ce
 Deno.test("juubk falsifier: a worktree that mutated mid-run is recorded as drift, never a pass", withReceipts(async (nextTree) => {
   const TREE = nextTree();
   const { receipt } = writeHeavyReceipt({
+    conditions: { steal: measuredSteal() },
     tree: TREE,
     treeEnd: nextTree(), // the tree changed while the suites ran
     result: "pass",
@@ -280,10 +324,12 @@ Deno.test("juubk falsifier: a worktree that mutated mid-run is recorded as drift
 
 Deno.test("juubk falsifier: a certifying receipt is never replaced by a weaker run", withReceipts(async (nextTree) => {
   const TREE = nextTree();
-  writeHeavyReceipt({ tree: TREE, result: "pass", args: [], command: heavyGateCommand(), exitCode: 0, suites: completeSuites(), finishedAt: NOW });
+  writeHeavyReceipt({
+    conditions: { steal: measuredSteal() }, tree: TREE, result: "pass", args: [], command: heavyGateCommand(), exitCode: 0, suites: completeSuites(), finishedAt: NOW });
   assertEquals(checkHeavyReceipt(TREE, { now: NOW }).ok, true);
 
-  const second = writeHeavyReceipt({ tree: TREE, result: "fail", command: heavyGateCommand(), exitCode: 1, suites: completeSuites(), finishedAt: NOW + 1 });
+  const second = writeHeavyReceipt({
+    conditions: { steal: measuredSteal() }, tree: TREE, result: "fail", command: heavyGateCommand(), exitCode: 1, suites: completeSuites(), finishedAt: NOW + 1 });
   assertEquals(second.preserved, true, "the weaker run must not overwrite the certifying receipt");
   const verdict = checkHeavyReceipt(TREE, { now: NOW + 2 });
   assertEquals(verdict.ok, true);
@@ -298,7 +344,8 @@ Deno.test("juubk falsifier: an unwritable receipt throws and leaves no temp file
   mkdirSync(receiptPath(TREE), { recursive: true });
   let threw: unknown = null;
   try {
-    writeHeavyReceipt({ tree: TREE, result: "pass", args: [], command: heavyGateCommand(), exitCode: 0, suites: completeSuites(), finishedAt: NOW });
+    writeHeavyReceipt({
+    conditions: { steal: measuredSteal() }, tree: TREE, result: "pass", args: [], command: heavyGateCommand(), exitCode: 0, suites: completeSuites(), finishedAt: NOW });
   } catch (error) {
     threw = error;
   }
@@ -313,6 +360,7 @@ Deno.test("juubk falsifier: a run from a DIRTY worktree never certifies", withRe
   const TREE = nextTree();
   // The suites ran against bytes that are not in the tree hash the gate checks.
   const { receipt } = writeHeavyReceipt({
+    conditions: { steal: measuredSteal() },
     tree: TREE,
     result: "pass",
     args: [],
@@ -409,6 +457,7 @@ Deno.test("957s2 round 2: a FLAG-only invocation is neither complete nor silentl
   // canonical one — and the receipt names the cause ("fail", not a coverage subset).
   const TREE = nextTree();
   const { receipt } = writeHeavyReceipt({
+    conditions: { steal: measuredSteal() },
     tree: TREE,
     result: "pass",
     args: ["--json"],
@@ -427,6 +476,137 @@ Deno.test("957s2 round 2: a FLAG-only invocation is neither complete nor silentl
   writeFileSync(receiptPath(TREE), JSON.stringify(certifyingBody(TREE, { command: heavyGateCommand(["--json"]), args: ["--json"] })));
   assertEquals(checkHeavyReceipt(TREE, { now: NOW }).reason, "noncanonical-command");
 }));
+
+Deno.test("gezg6: a healthy run is a TIMING credential and says so", withReceipts(async (nextTree) => {
+  const TREE = nextTree();
+  writeHeavyReceipt({
+    ...certifyingBody(TREE) } as any);
+  const verdict = checkHeavyReceipt(TREE, { now: NOW });
+  assertEquals([verdict.ok, verdict.outcome], [true, "full"]);
+  assertEquals(verdict.steal.maxStealPct, 6.5);
+  assertEquals(verdict.steal.thresholdPct, 20);
+}));
+
+Deno.test("gezg6: the threshold is read from the RECEIPT, not hardcoded — a 35% run certifies at a 40% threshold", withReceipts(async (nextTree) => {
+  const TREE = nextTree();
+  writeHeavyReceipt({
+    ...certifyingBody(TREE, { conditions: { steal: measuredSteal({ maxStealPct: 35, timing: "MEASURED", thresholdPct: 40, thresholdSource: "env CAP_HEAVY_STEAL_THRESHOLD_PCT=40" }) } }),
+  } as any);
+  const verdict = checkHeavyReceipt(TREE, { now: NOW });
+  assertEquals([verdict.ok, verdict.outcome], [true, "full"]);
+  // ...and the same numbers are refused when the receipt says the threshold was 20%.
+  const OTHER = nextTree();
+  writeHeavyReceipt({
+    ...certifyingBody(OTHER, { conditions: { steal: measuredSteal({ maxStealPct: 35, timing: "MEASURED" }) } }),
+  } as any);
+  const refused = checkHeavyReceipt(OTHER, { now: NOW });
+  assertEquals([refused.ok, refused.outcome, refused.reason], [false, "accounting-only", "accounting-only:starved"]);
+}));
+
+Deno.test("gezg6: the refusal NAMES the tree, the steal numbers and the threshold source", withReceipts(async (nextTree) => {
+  const TREE = nextTree();
+  writeHeavyReceipt({ ...certifyingBody(TREE, { conditions: { steal: starvedSteal() } }) } as any);
+  const verdict = checkHeavyReceipt(TREE, { now: NOW });
+  assertStringIncludes(verdict.line, `NOT A TIMING CREDENTIAL for tree ${TREE.slice(0, 12)}`);
+  assertStringIncludes(verdict.line, "STARVED");
+  assertStringIncludes(verdict.line, "avg 58.6%");
+  assertStringIncludes(verdict.line, "peak 87%");
+  assertStringIncludes(verdict.line, "threshold 20% (default 20 (ADR rxayt / tu8w9))");
+  assertStringIncludes(verdict.line, "--accept-accounting-only");
+  assertEquals(verdict.payload.accepted, undefined, "the verdict itself never claims acceptance");
+}));
+
+Deno.test("gezg6: accountingOnly is enough on its own, and UNKNOWN is not an exception", withReceipts(async (nextTree) => {
+  // (i) the producer DERIVES accountingOnly from the numbers, so a caller cannot claim it on a calm run...
+  const MARKED = nextTree();
+  const written = writeHeavyReceipt({ ...certifyingBody(MARKED, { conditions: { steal: measuredSteal() }, accountingOnly: true }) } as any);
+  assertEquals(written.receipt.accountingOnly, false, "a caller's accountingOnly claim is not trusted over the numbers");
+  assertEquals(checkHeavyReceipt(MARKED, { now: NOW }).outcome, "full");
+  // ...while a starved run is marked automatically.
+  const AUTO = nextTree();
+  const auto = writeHeavyReceipt({ ...certifyingBody(AUTO, { conditions: { steal: starvedSteal() } }) } as any);
+  assertEquals(auto.receipt.accountingOnly, true);
+  // And at the evaluator level a hand-set flag alone is enough to refuse, whatever the numbers say.
+  assertEquals(evaluateStealConditions({ accountingOnly: true, conditions: { steal: measuredSteal() } }).reason, "starved");
+
+  // (ii) UNKNOWN timing: nothing measured, so nothing to claim.
+  const UNKNOWN = nextTree();
+  writeHeavyReceipt({ ...certifyingBody(UNKNOWN, { conditions: { steal: measuredSteal({ timing: "UNKNOWN", maxStealPct: null, avgStealPct: null }) } }) } as any);
+  const unknown = checkHeavyReceipt(UNKNOWN, { now: NOW });
+  assertEquals([unknown.ok, unknown.reason], [false, "accounting-only:steal-unmeasured"]);
+
+  // (iii) a receipt from before tu8w9 carries no conditions at all: accounting-only, never "probably fine".
+  const OLD = nextTree();
+  writeHeavyReceipt({ ...certifyingBody(OLD, { conditions: undefined }) } as any);
+  const old = checkHeavyReceipt(OLD, { now: NOW });
+  assertEquals([old.ok, old.reason], [false, "accounting-only:no-steal-evidence"]);
+  assertStringIncludes(old.line, "NO steal evidence");
+}));
+
+Deno.test("gezg6: the accounting path still requires completeness — a starved run with a skip is REFUSED, not accepted", withReceipts(async (nextTree) => {
+  const TREE = nextTree();
+  const suites = completeSuites();
+  suites[0] = { ...suites[0], status: "skipped" };
+  writeHeavyReceipt({ ...certifyingBody(TREE, { suites, conditions: { steal: starvedSteal() } }) } as any);
+  const verdict = checkHeavyReceipt(TREE, { now: NOW });
+  // Structural refusal wins: accounting-only is a credential for a COMPLETE functional run only, and the
+  // writer records the run's real result rather than the suite ledger's most charitable reading.
+  assertEquals([verdict.ok, verdict.outcome], [false, "refused"]);
+  assertEquals(verdict.reason, "not-pass:fail");
+  assertEquals(verdict.marker, "HEAVY_RECEIPT_REFUSAL");
+}));
+
+Deno.test("gezg6: the CLI separates 'bad box' (exit 3) from 'no receipt' (exit 2), and only --accept-accounting-only passes", async () => {
+  // The real CLI, against a SCRATCH receipt store (never the shared evidence root): same tree id, so this
+  // exercises tree resolution and the exit-code contract without leaving evidence behind.
+  const scratch = join(durableDir("scratch"), `gezg6-cli-${crypto.randomUUID().slice(0, 8)}`);
+  const store = join(scratch, "heavy-receipts");
+  const tree = currentTreeHash();
+  const cli = (extra: string[] = []) =>
+    new Deno.Command(Deno.execPath(), {
+      args: ["run", "-A", join(ROOT, "scripts", "gate-receipt.mjs"), ...extra],
+      cwd: ROOT,
+      env: { CAP_DURABLE_ROOT: scratch, CAP_DURABLE_DIR_MIN_FREE_BYTES: "1" },
+      stdout: "piped",
+      stderr: "piped",
+    }).outputSync();
+  const text = (bytes: Uint8Array) => new TextDecoder().decode(bytes);
+  try {
+    // (c) no receipt at all => exit 2, and it is NOT the accounting marker.
+    const missing = cli();
+    assertEquals(missing.code, 2);
+    assertStringIncludes(text(missing.stderr), "HEAVY RECEIPT MISSING");
+    assertEquals(text(missing.stdout).includes("HEAVY_RECEIPT_ACCOUNTING_ONLY"), false);
+
+    // (b) a starved receipt => exit 3 by default...
+    mkdirSync(store, { recursive: true });
+    writeFileSync(
+      join(store, `${tree}.json`),
+      JSON.stringify({ ...certifyingBody(tree, { conditions: { steal: starvedSteal() } }), finishedAt: Date.now() - 60_000, startedAt: Date.now() - 600_000 }),
+    );
+    const starved = cli();
+    assertEquals(starved.code, 3, "a starved box is a DISTINCT failure from a missing receipt");
+    assertStringIncludes(text(starved.stderr), "NOT A TIMING CREDENTIAL");
+    assertStringIncludes(text(starved.stdout), "HEAVY_RECEIPT_ACCOUNTING_ONLY");
+
+    // ...and exit 0 for the accounting path when that is explicitly accepted.
+    const accepted = cli(["--accept-accounting-only"]);
+    assertEquals(accepted.code, 0);
+    assertStringIncludes(text(accepted.stdout), "ACCOUNTING-ONLY accepted");
+    assertEquals(text(accepted.stdout).includes('"accepted":"accounting-only"'), true);
+
+    // (a) a healthy receipt => exit 0 as a full timing credential, with the numbers on the line.
+    writeFileSync(
+      join(store, `${tree}.json`),
+      JSON.stringify({ ...certifyingBody(tree, { conditions: { steal: measuredSteal() } }), finishedAt: Date.now() - 60_000, startedAt: Date.now() - 600_000 }),
+    );
+    const full = cli();
+    assertEquals(full.code, 0);
+    assertStringIncludes(text(full.stdout), "timing credential: steal peak 6.5%");
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+});
 
 Deno.test("tu8w9: the receipt carries the CONDITIONS it was produced under, not just a verdict", withReceipts(async (nextTree) => {
   const TREE = nextTree();
@@ -499,10 +679,14 @@ Deno.test("tu8w9: >=20% steal marks the receipt ACCOUNTING-ONLY and names the pe
   assertEquals(receipt.accountingOnly, true);
   assertEquals(receipt.conditions.steal.maxStealPct, 87.0);
   assertEquals(receipt.conditions.steal.avgStealPct, 58.6);
-  // SCOPE NOTE (tu8w9 as coord specified it): the validator is unchanged, so this receipt still
-  // certifies today. Pinned deliberately — if the validator starts consuming accountingOnly, this
-  // assertion is the thing that must be updated, not silently left to rot.
-  assertEquals(checkHeavyReceipt(TREE, { now: NOW }).ok, true);
+  // gezg6 FLIPPED THIS DELIBERATELY (it was pinned here by tu8w9 precisely so it could not rot): the
+  // validator now consumes the numbers, so a starved-but-green receipt is ACCOUNTING-ONLY, not a
+  // timing credential — and it is refused by default.
+  const verdict = checkHeavyReceipt(TREE, { now: NOW });
+  assertEquals(verdict.ok, false);
+  assertEquals(verdict.outcome, "accounting-only");
+  assertEquals(verdict.reason, "accounting-only:starved");
+  assertEquals(verdict.marker, "HEAVY_RECEIPT_ACCOUNTING_ONLY");
 }));
 
 Deno.test("tu8w9: an UNMEASURED timing never upgrades a failing run to accounting-only", withReceipts(async (nextTree) => {
@@ -567,7 +751,8 @@ Deno.test("juubk: the writer refuses to mint a receipt with an invalid result", 
   const TREE = nextTree();
   let threw: unknown = null;
   try {
-    writeHeavyReceipt({ tree: TREE, result: "green" as never, finishedAt: NOW });
+    writeHeavyReceipt({
+    conditions: { steal: measuredSteal() }, tree: TREE, result: "green" as never, finishedAt: NOW });
   } catch (error) {
     threw = error;
   }
