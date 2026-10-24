@@ -65,6 +65,22 @@ export const SUITE_STATUSES = Object.freeze(["passed", "failed", "refused", "kil
 /** Result classes. Only `pass` may certify; everything else is recorded so the ledger is honest. */
 export const RECEIPT_RESULTS = Object.freeze(["pass", "fail", "refusal", "subset", "drift"]);
 
+/**
+ * The ONE invocation that can produce a certifying receipt (review finding 957s2, round 2).
+ *
+ * `command` was recorded but never checked, so a receipt could name `echo not-a-heavy-test` beside a
+ * perfect ledger and certify. It is now compared EXACTLY, and both sides build it from this constant
+ * (`heavyGateCommand`) so the producer and the validator cannot drift apart. Any argv at all — files
+ * or flags — is a non-canonical invocation: `filesFor()` ignores flags, so a flag-only run executes
+ * the full set while `args` looked empty, which is why the writer now records the RAW argv.
+ */
+export const CANONICAL_HEAVY_GATE_COMMAND = "deno run -A scripts/heavy-gate.ts";
+
+/** The exact command string for a run, for the receipt and for the check to compare. */
+export function heavyGateCommand(args = []) {
+  return [CANONICAL_HEAVY_GATE_COMMAND, ...args].join(" ");
+}
+
 export function receiptDir() {
   // durableDir mkdir -p's its arguments, so the FILENAME is joined here, never passed in.
   return durableDir(RECEIPT_DIR_NAME);
@@ -236,6 +252,7 @@ export function writeHeavyReceipt({
     result === "pass" &&
     ledger.ok &&
     args.length === 0 &&
+    command === CANONICAL_HEAVY_GATE_COMMAND &&
     tree === treeEnd &&
     dirty.length === 0;
 
@@ -243,7 +260,10 @@ export function writeHeavyReceipt({
   // quietly as a pass: downgrade it here so nothing downstream can be tempted to trust the flag.
   const claimed = result;
   if (result === "pass" && !complete) {
-    result = tree !== treeEnd ? "drift" : args.length > 0 || missing.length > 0 ? "subset" : "fail";
+    // Name the CAUSE: a genuine coverage shortfall is a subset, a moved tree is drift, and anything
+    // else (non-canonical invocation, dirty worktree, a non-passing suite) is a plain fail. The check
+    // refuses all of them, but the recorded reason has to be true.
+    result = tree !== treeEnd ? "drift" : missing.length > 0 ? "subset" : "fail";
   }
 
   const receipt = {
@@ -376,6 +396,15 @@ export function checkHeavyReceipt(tree, { now = Date.now(), maxAgeMs = DEFAULT_R
   // and `suites` are producer-written fields, and a receipt is exactly the kind of evidence an
   // operator trusts without re-deriving — so an empty ledger beside claimed completion, a subset
   // invocation, or a run whose tree moved must each be refused on their own terms.
+  if (receipt.command !== CANONICAL_HEAVY_GATE_COMMAND) {
+    return refuse(
+      "noncanonical-command",
+      `gate-receipt: HEAVY RECEIPT RECORDS A NON-CANONICAL COMMAND for tree ${tree.slice(0, 12)} — ` +
+        `found ${JSON.stringify(String(receipt.command))}, expected ${JSON.stringify(CANONICAL_HEAVY_GATE_COMMAND)}. ` +
+        `Only that exact no-argument tier invocation certifies (juubk/957s2).`,
+      { command: receipt.command ?? null, expectedCommand: CANONICAL_HEAVY_GATE_COMMAND },
+    );
+  }
   if (!Array.isArray(receipt.args) || receipt.args.length > 0) {
     return refuse(
       "subset-invocation",

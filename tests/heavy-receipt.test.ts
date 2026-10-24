@@ -22,8 +22,10 @@ import { fileURLToPath } from "node:url";
 import {
   DEFAULT_RECEIPT_MAX_AGE_MS,
   RECEIPT_FUTURE_SKEW_MS,
+  CANONICAL_HEAVY_GATE_COMMAND,
   RECEIPT_VERSION,
   auditSuiteLedger,
+  heavyGateCommand,
   checkHeavyReceipt,
   expectedHeavyFiles,
   isRelevantDirtyPath,
@@ -178,12 +180,12 @@ Deno.test("upqhp falsifier: a refused or failed tier run does not certify", with
 
 Deno.test("upqhp: a receipt older than the window is refused as stale", withReceipts(async (nextTree) => {
   const TREE = nextTree();
-  writeHeavyReceipt({ tree: TREE, result: "pass", args: [], exitCode: 0, suites: completeSuites(), finishedAt: NOW - DEFAULT_RECEIPT_MAX_AGE_MS - 1000 });
+  writeHeavyReceipt({ tree: TREE, result: "pass", args: [], command: heavyGateCommand(), exitCode: 0, suites: completeSuites(), finishedAt: NOW - DEFAULT_RECEIPT_MAX_AGE_MS - 1000 });
   const stale = checkHeavyReceipt(TREE, { now: NOW });
   assertEquals(stale.ok, false);
   assertEquals(stale.reason, "stale");
   // And inside the window it certifies.
-  writeHeavyReceipt({ tree: TREE, result: "pass", args: [], exitCode: 0, suites: completeSuites(), finishedAt: NOW - 1000 });
+  writeHeavyReceipt({ tree: TREE, result: "pass", args: [], command: heavyGateCommand(), exitCode: 0, suites: completeSuites(), finishedAt: NOW - 1000 });
   assertEquals(checkHeavyReceipt(TREE, { now: NOW }).ok, true);
 }));
 
@@ -278,10 +280,10 @@ Deno.test("juubk falsifier: a worktree that mutated mid-run is recorded as drift
 
 Deno.test("juubk falsifier: a certifying receipt is never replaced by a weaker run", withReceipts(async (nextTree) => {
   const TREE = nextTree();
-  writeHeavyReceipt({ tree: TREE, result: "pass", args: [], exitCode: 0, suites: completeSuites(), finishedAt: NOW });
+  writeHeavyReceipt({ tree: TREE, result: "pass", args: [], command: heavyGateCommand(), exitCode: 0, suites: completeSuites(), finishedAt: NOW });
   assertEquals(checkHeavyReceipt(TREE, { now: NOW }).ok, true);
 
-  const second = writeHeavyReceipt({ tree: TREE, result: "fail", exitCode: 1, suites: completeSuites(), finishedAt: NOW + 1 });
+  const second = writeHeavyReceipt({ tree: TREE, result: "fail", command: heavyGateCommand(), exitCode: 1, suites: completeSuites(), finishedAt: NOW + 1 });
   assertEquals(second.preserved, true, "the weaker run must not overwrite the certifying receipt");
   const verdict = checkHeavyReceipt(TREE, { now: NOW + 2 });
   assertEquals(verdict.ok, true);
@@ -296,7 +298,7 @@ Deno.test("juubk falsifier: an unwritable receipt throws and leaves no temp file
   mkdirSync(receiptPath(TREE), { recursive: true });
   let threw: unknown = null;
   try {
-    writeHeavyReceipt({ tree: TREE, result: "pass", args: [], exitCode: 0, suites: completeSuites(), finishedAt: NOW });
+    writeHeavyReceipt({ tree: TREE, result: "pass", args: [], command: heavyGateCommand(), exitCode: 0, suites: completeSuites(), finishedAt: NOW });
   } catch (error) {
     threw = error;
   }
@@ -344,7 +346,7 @@ Deno.test("957s2 falsifier: claimed completion over an EMPTY ledger does not cer
       covered: expectedHeavyFiles(),
       treeEnd: nextTree(),
       args: [expectedHeavyFiles()[0]],
-      command: "deno run -A scripts/heavy-gate.ts tests/python-runtime.test.ts",
+      command: heavyGateCommand(),
     })),
   );
   const verdict = checkHeavyReceipt(TREE, { now: NOW });
@@ -382,6 +384,49 @@ Deno.test("957s2: the ledger audit is one function, shared by producer and check
   const lib = readFileSync(join(ROOT, "scripts", "lib", "heavy-receipt.mjs"), "utf8");
   assertEquals((lib.match(/auditSuiteLedger\(/g) ?? []).length >= 3, true, "writer and checker must both call the shared audit");
 });
+
+Deno.test("957s2 round 2: a NON-CANONICAL command cannot certify a perfect ledger", withReceipts(async (nextTree) => {
+  // Round-2 reviewer repro: full ledger, empty args, correct trees — and command "echo not-a-heavy-test".
+  // The command was recorded but never compared, so the receipt certified.
+  const TREE = nextTree();
+  for (const command of ["echo not-a-heavy-test", `${CANONICAL_HEAVY_GATE_COMMAND} tests/python-runtime.test.ts`, "deno run -A scripts/heavy-gate.ts --json"]) {
+    writeFileSync(receiptPath(TREE), JSON.stringify(certifyingBody(TREE, { command })));
+    const verdict = checkHeavyReceipt(TREE, { now: NOW });
+    assertEquals(verdict.ok, false, `command ${JSON.stringify(command)} must not certify`);
+    assertEquals(verdict.reason, "noncanonical-command");
+    assertStringIncludes(refusalLine(verdict), CANONICAL_HEAVY_GATE_COMMAND);
+    assertStringIncludes(refusalLine(verdict), command.slice(0, 20));
+  }
+  // The canonical command is the one the producer writes, and it is built from one constant.
+  assertEquals(heavyGateCommand(), CANONICAL_HEAVY_GATE_COMMAND);
+  writeFileSync(receiptPath(TREE), JSON.stringify(certifyingBody(TREE, { command: heavyGateCommand() })));
+  assertEquals(checkHeavyReceipt(TREE, { now: NOW }).ok, true);
+}));
+
+Deno.test("957s2 round 2: a FLAG-only invocation is neither complete nor silently empty", withReceipts(async (nextTree) => {
+  // filesFor() ignores flags, so this run executes the whole enumerated set while a file-filtered
+  // args list looks empty. The writer records the RAW argv, so the run cannot be mistaken for the
+  // canonical one — and the receipt names the cause ("fail", not a coverage subset).
+  const TREE = nextTree();
+  const { receipt } = writeHeavyReceipt({
+    tree: TREE,
+    result: "pass",
+    args: ["--json"],
+    command: heavyGateCommand(["--json"]),
+    exitCode: 0,
+    suites: completeSuites(),
+    finishedAt: NOW,
+  });
+  assertEquals(receipt.args, ["--json"]);
+  assertEquals(receipt.complete, false);
+  assertEquals(receipt.result, "fail");
+  const refusal = checkHeavyReceipt(TREE, { now: NOW });
+  assertEquals(refusal.ok, false);
+  assertEquals(refusal.reason, "not-pass:fail", "the writer classifies a flag run by cause, so the gate refuses it as a non-pass before the command comparison");
+  // If a producer ever claimed a pass for a flagged run, the command/args comparisons catch it.
+  writeFileSync(receiptPath(TREE), JSON.stringify(certifyingBody(TREE, { command: heavyGateCommand(["--json"]), args: ["--json"] })));
+  assertEquals(checkHeavyReceipt(TREE, { now: NOW }).reason, "noncanonical-command");
+}));
 
 Deno.test("juubk: the dirty-worktree rule ignores the passive beads ledger, nothing else", () => {
   // The trap this avoids: every bd write in this fleet dirties .beads/issues.jsonl, including the
@@ -463,10 +508,11 @@ Deno.test("upqhp/juubk wiring: the receipt stays out of npm test, and the produc
   const heavyGate = readFileSync(join(ROOT, "scripts", "heavy-gate.ts"), "utf8");
   assertStringIncludes(heavyGate, "writeHeavyReceipt({");
   assertStringIncludes(heavyGate, "result: rc === 0 ? \"pass\" : rc === ENVIRONMENTAL_REFUSAL_EXIT ? \"refusal\" : \"fail\"");
-  assertStringIncludes(heavyGate, "command: argv.join(\" \")");
+  assertStringIncludes(heavyGate, "command: heavyGateCommand(args)");
   assertStringIncludes(heavyGate, "exitCode: rc");
   assertStringIncludes(heavyGate, "treeEnd: mod.currentTreeHash()");
   assertStringIncludes(heavyGate, "args: cliArgs");
+  assertStringIncludes(heavyGate, "const cliArgs = [...args];", "the RAW argv must be recorded, flags included (957s2)");
   assertStringIncludes(heavyGate, "suites,");
   assertStringIncludes(heavyGate, "dirty: mod.dirtyTrackedPaths()");
   assertStringIncludes(heavyGate, "if (rc === 0) rc = 1;", "an unwritable receipt must not leave a successful producer exit (juubk)");

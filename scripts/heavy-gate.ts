@@ -20,7 +20,7 @@
 import { fileURLToPath } from "node:url";
 import { HEAVY_GATE_FILES, WALL_CLOCK_HEAVY_FILES } from "./test-partition.mjs";
 import { areAllFailuresEnvironmental, combinePhaseExitCodes, ENVIRONMENTAL_REFUSAL_EXIT } from "./lib/environmental-verdict.mjs";
-import { phaseStatusFor } from "./lib/heavy-receipt.mjs";
+import { heavyGateCommand, phaseStatusFor } from "./lib/heavy-receipt.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 export const DEFAULT_HEAVY_GATE_TIMEOUT_MS = 1200_000;
@@ -176,14 +176,15 @@ export async function runHeavyGate(args = Deno.args): Promise<number> {
   try {
     const mod = await import("./lib/heavy-receipt.mjs");
     if (!treeStart) throw new Error("could not resolve this tree at the START of the run");
-    const argv = ["deno", "run", "-A", "scripts/heavy-gate.ts", ...args];
-    const cliArgs = args.filter((a) => !a.startsWith("-"));
+    // The RAW argv: `filesFor()` ignores flags, so a flag-only run executes the full enumerated set
+    // while a file-filtered `args` would look empty — and looking empty is what certifies (957s2).
+    const cliArgs = [...args];
     const written = mod.writeHeavyReceipt({
       tree: treeStart,
       treeEnd: mod.currentTreeHash(),
       commit: mod.currentCommitSha(),
       result: rc === 0 ? "pass" : rc === ENVIRONMENTAL_REFUSAL_EXIT ? "refusal" : "fail",
-      command: argv.join(" "),
+      command: heavyGateCommand(args),
       args: cliArgs,
       exitCode: rc,
       logPath: Deno.env.get("HEAVY_GATE_LOG_PATH") ?? null,
