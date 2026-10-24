@@ -156,6 +156,104 @@ export function zodCjsInputs(metafile) {
 // The npm lock is NOT the build resolver: esbuild ships the Deno-store copy.
 // Inspect both locks and the actual metafile inputs for the fast-uri mismatch
 // in lf9xe; also prevent future SDK drift (im9q8's 1.30 report was stale).
+
+/**
+ * The fast-uri advisory ledger. THE PATCH FLOOR IS DERIVED FROM THIS TABLE,
+ * never hand-raised (chrome-agent-platform-4c3mp). 7jv95 raised the constant,
+ * the drift message and the test together, so when the next advisories shipped
+ * all three still certified the tarball they called patched: the guard and its
+ * test shared one stale number, and a bump passed through unchanged.
+ *
+ * Each row is ONE advisory, taken from the GitHub advisory feed
+ * (`https://api.github.com/advisories/<id>`): the ranges it affects and the
+ * first published fix on each affected major line. Adding an advisory is one
+ * row here plus one row in the independent expectation table in
+ * tests/security-dependency-locks.test.ts — `fastUriFloors()` recomputes what
+ * the gate requires, and `fastUriAdvisoryRequirement()` writes the message, so
+ * neither can describe a different policy from the predicate.
+ */
+export const FAST_URI_ADVISORIES = Object.freeze([
+  Object.freeze({
+    id: "GHSA-qw65-cvwx-89v3",
+    summary: "URI parsing confusion / denial of service",
+    affects: Object.freeze({ 2: "<2.4.6", 3: ">=3.0.0 <3.1.7", 4: ">=4.0.0 <4.1.4" }),
+    fixed: Object.freeze({ 2: "2.4.6", 3: "3.1.7", 4: "4.1.4" }),
+  }),
+  Object.freeze({
+    id: "GHSA-58mr-gqgx-xq4g",
+    summary: "URI parsing confusion on the exact published lines",
+    affects: Object.freeze({ 2: "2.4.5", 3: "3.1.6", 4: "4.1.3" }),
+    fixed: Object.freeze({ 2: "2.4.6", 3: "3.1.7", 4: "4.1.4" }),
+  }),
+  Object.freeze({
+    id: "GHSA-hrr3-gc8f-f4qj",
+    summary: "host normalization confusion",
+    affects: Object.freeze({ 2: "<2.4.7", 3: ">=3.0.0 <3.1.8", 4: ">=4.0.0 <4.1.5" }),
+    fixed: Object.freeze({ 2: "2.4.7", 3: "3.1.8", 4: "4.1.5" }),
+  }),
+  Object.freeze({
+    id: "GHSA-w74x-v6f9-j3xg",
+    severity: "moderate",
+    summary: "URI scheme spoofing via percent-encoded scheme decoding",
+    affects: Object.freeze({ 2: "<2.4.8", 3: ">=3.0.0 <3.1.9", 4: ">=4.0.0 <4.2.3" }),
+    fixed: Object.freeze({ 2: "2.4.8", 3: "3.1.9", 4: "4.2.3" }),
+  }),
+  Object.freeze({
+    id: "GHSA-xhq7-xmqj-769h",
+    severity: "low",
+    summary: "improper path equivalence in relative reference normalization",
+    affects: Object.freeze({ 2: "<2.4.8", 3: ">=3.0.0 <3.1.9", 4: ">=4.0.0 <4.2.3" }),
+    fixed: Object.freeze({ 2: "2.4.8", 3: "3.1.9", 4: "4.2.3" }),
+  }),
+  Object.freeze({
+    id: "GHSA-wjr9-j795-jxcr",
+    severity: "moderate",
+    summary: "host confusion via unchecked WHATWG host canonicalization",
+    affects: Object.freeze({ 2: ">=2.4.2 <2.4.8", 3: ">=3.1.3 <3.1.9", 4: ">=4.0.1 <4.2.3" }),
+    fixed: Object.freeze({ 2: "2.4.8", 3: "3.1.9", 4: "4.2.3" }),
+  }),
+  Object.freeze({
+    id: "GHSA-333x-w4r6-6crp",
+    severity: "low",
+    summary: "scheme injection via an unescaped first-segment colon in suffix references",
+    affects: Object.freeze({ 2: "<2.4.8", 3: ">=3.0.0 <3.1.9", 4: ">=4.0.0 <4.2.3" }),
+    fixed: Object.freeze({ 2: "2.4.8", 3: "3.1.9", 4: "4.2.3" }),
+  }),
+]);
+
+/** Numeric major.minor.patch comparison; anything unparseable never wins. */
+function compareSemver(a, b) {
+  const pa = String(a).split(".").map(Number);
+  const pb = String(b).split(".").map(Number);
+  for (let i = 0; i < 3; i += 1) {
+    const d = (pa[i] ?? 0) - (pb[i] ?? 0);
+    if (Number.isFinite(d) && d !== 0) return d > 0 ? 1 : -1;
+  }
+  return 0;
+}
+
+/** The newest published fix per major line across EVERY advisory in the ledger. */
+export function fastUriFloors() {
+  const floors = {};
+  for (const advisory of FAST_URI_ADVISORIES) {
+    for (const [major, fixed] of Object.entries(advisory.fixed ?? {})) {
+      if (!floors[major] || compareSemver(fixed, floors[major]) > 0) floors[major] = fixed;
+    }
+  }
+  return floors;
+}
+
+/** "GHSA-a / GHSA-b ..." — the ledger ids, in table order. */
+export function fastUriAdvisoryIds() {
+  return FAST_URI_ADVISORIES.map((advisory) => advisory.id);
+}
+
+/** ">=2.4.8 on 2.x, >=3.1.9 on 3.x, >=4.2.3 on 4.x" — derived, never typed twice. */
+export function fastUriAdvisoryRequirement() {
+  const floors = fastUriFloors();
+  return Object.keys(floors).sort((a, b) => Number(a) - Number(b))
+    .map((major) => `>=${floors[major]} on ${major}.x`).join(", ");
+}
 const SECURITY_PACKAGES = Object.freeze([
   ["fast-uri", "fast-uri"],
   ["@modelcontextprotocol/sdk", "@modelcontextprotocol+sdk"],
@@ -179,19 +277,20 @@ export function securityDependencyDrift(metafile, npmLock, denoLock) {
       mismatches.push(`${name}: npm=${npmVersion ?? "missing"}; deno=${denoVersions.join(",") || "missing"}; shipped=${shipped.join(",")}`);
     }
     if (name === "fast-uri" && npmVersion && !isPatchedFastUriVersion(npmVersion)) {
-      mismatches.push(`fast-uri ${npmVersion}: GHSA-qw65-cvwx-89v3 / GHSA-58mr-gqgx-xq4g / GHSA-hrr3-gc8f-f4qj require patched version (>=3.1.8 on 3.x, >=4.1.5 on 4.x, or >=2.4.7 on 2.x)`);
+      mismatches.push(`fast-uri ${npmVersion}: ${fastUriAdvisoryIds().join(" / ")} require ` +
+        `${fastUriAdvisoryRequirement()} (ledger: scripts/bundle-budget.mjs FAST_URI_ADVISORIES)`);
     }
   }
   return mismatches;
 }
 
+/** TRUE only when the version is at or above the ledger floor for its OWN
+ * major line. A major with no ledger row fails closed, as do prereleases and
+ * anything that is not bare semver. */
 export function isPatchedFastUriVersion(value) {
   if (typeof value !== "string" || !/^\d+\.\d+\.\d+$/.test(value)) return false;
-  const [major, minor, patch] = value.split(".").map(Number);
-  if (major === 2) return minor > 4 || (minor === 4 && patch >= 7);
-  if (major === 3) return minor > 1 || (minor === 1 && patch >= 8);
-  if (major === 4) return minor > 1 || (minor === 1 && patch >= 5);
-  return false;
+  const floor = fastUriFloors()[String(Number(value.split(".", 1)[0]))];
+  return Boolean(floor) && compareSemver(value, floor) >= 0;
 }
 
 /** Fail BEFORE esbuild on the ACTUAL SDK -> AJV -> fast-uri dependency path,
