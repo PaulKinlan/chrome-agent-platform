@@ -156,6 +156,7 @@ import {
 } from "../lib/ask-agent-entry.js";
 import { appendRunEndCleanupNote, autoCloseTabPlan, createLifecycleTracker, liveLifecycleSnapshot } from "../lib/lifecycle-cleanup.js";
 import { hasUntrustedMarker, tagUntrusted } from "../lib/untrusted-fence.js";
+import { untrustedEventDataBlock } from "../lib/hook-event-fence.js";
 import {
   canonicalOrigin,
   journalAppend,
@@ -1317,7 +1318,6 @@ import {
   redactSecrets,
   redactDeep,
   safeProviderError,
-  serializeUntrustedEventData,
   sanitizeToolName as safeToolName,
   seedSnapshotGate,
   rebindSnapshotGate,
@@ -13637,12 +13637,13 @@ async function dispatchHook(hookId, payload) {
     // a storage change, ...). It must be delimited as DATA, never instructions:
     // a malicious title must not prompt-inject the management-capable hub model.
     // The delimiter is a FIXED literal, so the payload cannot be trusted to
-    // leave it alone: `serializeUntrustedEventData` emits every `<` as the JSON
-    // escape `\u003c`, so no value inside can spell the closing tag and close
-    // the DATA block early, while the block stays parseable JSON (nothing is
-    // stripped). chrome-agent-platform-ypafy — a hostile tab title containing
-    // `</untrusted-event-data>` used to escape the block here.
-    const dataBlock = `<untrusted-event-data>\n${serializeUntrustedEventData(safePayload)}\n</untrusted-event-data>`;
+    // leave it alone — `untrustedEventDataBlock` (lib/hook-event-fence.js)
+    // escapes every `<` in the serialized event, so no value inside can spell
+    // the closing tag and close the DATA block early, while the block stays
+    // parseable JSON (nothing is stripped). chrome-agent-platform-ypafy — a
+    // hostile tab title containing `</untrusted-event-data>` used to escape the
+    // block here.
+    const dataBlock = untrustedEventDataBlock(safePayload);
     let task;
     if (sub.promptTemplate) {
       // A FUNCTION replacement, not the string: String.replaceAll interprets
