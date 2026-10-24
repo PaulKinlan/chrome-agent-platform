@@ -807,9 +807,18 @@ Deno.test("mujlt runner boundary: abnormal exit before test summary preserves ex
   Deno.writeTextFileSync(
     fixture,
     `import { ENVIRONMENTAL_REFUSAL_MARKER } from "${new URL("../scripts/lib/ntp-boot-attribution.ts", import.meta.url).href}";\n` +
-      `Deno.test("fixture: abnormal exit after marker", () => {\n` +
+      `Deno.test("fixture: abnormal exit after marker", async () => {\n` +
       `  console.error("fixture: abnormal exit after marker\\n" + ENVIRONMENTAL_REFUSAL_MARKER + ' {"reason":"test-refusal"}');\n` +
+      // chrome-agent-platform-umj72: die DETERMINISTICALLY. The fixture used to return right after
+      // killing itself, which left two races a starved scheduler could win (measured at 84% steal:
+      // the marker line lost in the pipe, and a pending SIGTERM discarded when a runner thread's
+      // voluntary exit_group(0) beat signal delivery — the incident's "0 vs 143"). Drain the marker,
+      // then park forever: the ONLY way out is signal delivery (default disposition → 143), so the
+      // boundary assertion observes the runner's mapping, not a scheduling lottery. No assertion is
+      // weakened here — both are exact, and this makes them honest under load.
+      `  await new Promise((r) => setTimeout(r, 250));\n` +
       `  Deno.kill(Deno.pid, "SIGTERM");\n` +
+      `  await new Promise(() => {});\n` +
       `});\n`,
   );
 
@@ -836,8 +845,11 @@ Deno.test("mujlt runner boundary: child killed by SIGKILL preserves exact signal
   const fixture = `${scratch}/sigkill-exit.test.ts`;
   Deno.writeTextFileSync(
     fixture,
-    `Deno.test("fixture: die by sigkill", () => {\n` +
+    `Deno.test("fixture: die by sigkill", async () => {\n` +
+      // chrome-agent-platform-umj72: same voluntary-exit race as the SIGTERM fixture — park after the
+      // kill so SIGKILL delivery, not a runner thread's exit_group(0), ends the process.
       `  Deno.kill(Deno.pid, "SIGKILL");\n` +
+      `  await new Promise(() => {});\n` +
       `});\n`,
   );
 
