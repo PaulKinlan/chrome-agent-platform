@@ -6,7 +6,7 @@
 
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { fromFileUrl } from "jsr:@std/path@1/from-file-url";
-import { acpEndpointWithHarness, acpEndpointWithToken, acpHealthUrl, acpPermissionMode, acpSessionKey, ACP_PERMISSION_TIMEOUT_MS, probeAcpBridgeHealth, requestAcpPermission, runAcpTaskTurn } from "../extension/lib/acp-runner.js";
+import { acpConnectionFixHints, acpEndpointWithHarness, acpEndpointWithToken, acpHealthUrl, acpPermissionMode, acpSessionKey, ACP_PERMISSION_TIMEOUT_MS, probeAcpBridgeHealth, requestAcpPermission, runAcpTaskTurn } from "../extension/lib/acp-runner.js";
 import { createAcpServer } from "../scripts/acp-bridge.ts";
 import { TEST_BRIDGE_TOKEN } from "./fixtures/acp-bridge-token.ts";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
@@ -800,3 +800,34 @@ Deno.test("runAcpTaskTurn: requested harness is honoured and completes turn", as
   }
 });
 
+
+// chrome-agent-platform-q9g8x: the SAME connect() rejection covers a refused/revoked nativeMessaging grant
+// and a genuinely absent host. The remedy must name the state that is actually wrong — telling an owner who
+// only has to press "Test connection" to reinstall a host they already have is the reported defect.
+Deno.test("q9g8x: the connection remedy names the GRANT path when the permission is what is missing", () => {
+  const fixes = acpConnectionFixHints({ nativeError: "native messaging is not available in this context" });
+  assertEquals(fixes[0].includes("grant native messaging"), true, `the first remedy must be the grant path: ${fixes.join(" | ")}`);
+  assertEquals(fixes[0].includes("Test connection"), true, "and it must name the gesture that grants it");
+  assertEquals(
+    fixes.some((fix) => fix.includes("npm run acp:native:install")),
+    false,
+    `a present-but-ungranted permission must NOT be answered with a host install: ${fixes.join(" | ")}`,
+  );
+  assertEquals(fixes[fixes.length - 1].includes("npm run acp:bridge"), true, "the WebSocket fallback is still offered");
+});
+
+Deno.test("q9g8x: a genuinely absent host still says install, and an unknown failure offers both", () => {
+  const missing = acpConnectionFixHints({
+    nativeError: 'native host "com.cap.host" is not installed or exited (Specified native messaging host not found.)',
+  });
+  assertEquals(missing[0].includes("install the local host"), true, `a missing host still installs: ${missing.join(" | ")}`);
+
+  const unknown = acpConnectionFixHints({ nativeError: "some transport error we have not seen" });
+  const both = unknown[0];
+  assertEquals(both.includes("grant native messaging") && both.includes("install the local host"), true,
+    `an unrecognised failure must offer BOTH remedies rather than guess: ${both}`);
+
+  // The pre-existing arms are untouched: a live-but-silent native transport, and a WS-only failure.
+  assertEquals(acpConnectionFixHints({ nativeTransport: {} })[0].includes("not answering"), true);
+  assertEquals(acpConnectionFixHints({}).length, 1);
+});
