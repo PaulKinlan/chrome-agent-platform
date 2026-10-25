@@ -2384,9 +2384,10 @@ Deno.test("fbg7i: host CPU steal above the bound invalidates the run — contend
       longTasks: [{ name: "self", duration: 92, startTime: 30 }],
     },
     [stolenSample],
+    { stealBoundPct: 25 }, // et2oh: INJECTED bound — an ambient override cannot rewrite this assertion
   );
   assertEquals(run.validMeasurement, false, "steal above the bound must invalidate the measurement");
-  assertStringIncludes(run.invalidReason!, "host CPU steal 62% > 10%");
+  assertStringIncludes(run.invalidReason!, "host CPU steal 62% > 25%");
   assertStringIncludes(run.invalidReason!, "chrome-agent-platform-fbg7i");
   assertEquals(run.hostWorstStealPct, 62);
   assertEquals(run.hostLoaded, true);
@@ -2407,6 +2408,7 @@ Deno.test("fbg7i: steal within the bound keeps the run valid; a null reading is 
     1,
     { composerReadyEndMs: 40, threadListHydratedEndMs: 90, longTasks: [] },
     [quietSample],
+    { stealBoundPct: 25 },
   );
   assertEquals(run.validMeasurement, true);
   assertEquals(run.hostWorstStealPct, 4);
@@ -2427,9 +2429,39 @@ Deno.test("fbg7i: steal within the bound keeps the run valid; a null reading is 
     2,
     { composerReadyEndMs: 40, threadListHydratedEndMs: 90, longTasks: [] },
     [noStealSignal],
+    { stealBoundPct: 25 },
   );
   assertEquals(run2.validMeasurement, true);
   assertEquals(run2.hostWorstStealPct, null);
+});
+
+Deno.test("et2oh: an ambient CAP_QUIET_MAX_STEAL_PCT override changes the UNINJECTED classification, and an injected bound wins over ambient", () => {
+  const key = "CAP_QUIET_MAX_STEAL_PCT";
+  const saved = Deno.env.get(key);
+  try {
+    Deno.env.set(key, "70"); // operator widens the bound to 70%
+    const stolenSample: any = {
+      measurable: true,
+      load1: 0.4,
+      load5: 0.3,
+      cores: 8,
+      loadPerCore: 0.05,
+      activeCompilers: 0,
+      compilerNames: [],
+      stealPct: 62,
+    };
+    const metrics = { composerReadyEndMs: 40, threadListHydratedEndMs: 90, longTasks: [] };
+    // No injection: the ambient spec decides — 62% <= 70% keeps the run valid.
+    const ambientRun = attributeBootRun(1, metrics, [stolenSample]);
+    assertEquals(ambientRun.validMeasurement, true, "the ambient override widened the bound, so 62% steal is within it");
+    // Injected bound wins over ambient: 62% > 25% invalidates even with the env override set.
+    const injectedRun = attributeBootRun(2, metrics, [stolenSample], { stealBoundPct: 25 });
+    assertEquals(injectedRun.validMeasurement, false, "the injected bound must take precedence over the ambient override");
+    assertStringIncludes(injectedRun.invalidReason!, "host CPU steal 62% > 25%");
+  } finally {
+    if (saved === undefined) Deno.env.delete(key);
+    else Deno.env.set(key, saved);
+  }
 });
 
 Deno.test("fbg7i: a boot measured entirely on a stolen host is an environmental refusal, not a contract breach", () => {
@@ -2454,6 +2486,7 @@ Deno.test("fbg7i: a boot measured entirely on a stolen host is an environmental 
         longTasks: [{ name: "self", duration: 89, startTime: 100 }],
       },
       [stolenSample],
+      { stealBoundPct: 25 },
     )
   );
   const policy = evaluateBootStagingPolicy(runs);
