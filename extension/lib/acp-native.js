@@ -108,6 +108,50 @@ export class AcpNativeTransport {
 }
 
 /**
+ * WHY the native leg failed, classified (chrome-agent-platform-q9g8x).
+ *
+ * The optional `nativeMessaging` permission is granted at the moment of need, so the SAME
+ * `nativeTransport.connect()` rejection covers two very different states: the permission was
+ * refused/revoked (Chrome never exposes `chrome.runtime.connectNative`, so `connect()` rejects
+ * "native messaging is not available in this context") and the host is genuinely absent or exited
+ * (Chrome reports that as a disconnect, with the install hint already in the message). Treating
+ * both as "install the local host" sends an owner who merely has to click "Test connection" down
+ * a reinstall path for a host they already have, so the caller must be able to tell them apart.
+ *
+ * Deliberately string-based: this is the boundary where the only evidence is the message Chrome
+ * produced, and each shape below is asserted by a test so a reworded error cannot silently fall
+ * back to the wrong remedy.
+ *
+ * @param {unknown} nativeError the message AcpNativeTransport.connect() rejected with
+ * @returns {"permission-grant" | "host-missing" | "unknown"}
+ */
+export function classifyNativeFailure(nativeError) {
+  const message = String(
+    typeof nativeError === "string" ? nativeError : (nativeError?.message ?? nativeError ?? ""),
+  ).toLowerCase();
+  if (!message.trim()) return "unknown";
+  // The permission is absent: connectNative is undefined, so the transport rejected before Chrome
+  // was ever asked about a host. A permissions-denied request lands here too.
+  if (
+    message.includes("not available in this context") ||
+    (message.includes("permission") &&
+      (message.includes("not granted") || message.includes("denied") || message.includes("grant")))
+  ) {
+    return "permission-grant";
+  }
+  // Chrome's own wording for a host that is not registered, or that exited, plus our wrapped forms.
+  if (
+    message.includes("is not installed") ||
+    message.includes("could not be started") ||
+    message.includes("not found") ||
+    message.includes("forbidden")
+  ) {
+    return "host-missing";
+  }
+  return "unknown";
+}
+
+/**
  * Ensure the optional `nativeMessaging` permission is granted (chrome-agent-platform-o65r).
  *
  * The shipped manifest lists `nativeMessaging` in `optional_permissions` — install never

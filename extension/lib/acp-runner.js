@@ -5,7 +5,7 @@
 // streaming thoughts, tool progress, and message chunks into the conversation surface.
 
 import { AcpClient, acpAllowOptionId, acpDenyOptionId, loopbackAcpRefusalReason } from "./acp-client.js";
-import { AcpNativeTransport, DEFAULT_NATIVE_HOST } from "./acp-native.js";
+import { AcpNativeTransport, classifyNativeFailure, DEFAULT_NATIVE_HOST } from "./acp-native.js";
 import { acpExecutionId } from "./acp-thread-journal.js";
 import { sha256Hex } from "./pure.js";
 import {
@@ -447,6 +447,41 @@ const activeTurns = new Map();
 const retainedSessions = new Map();
 
 /** Get active retained session record if connected and valid. Pure. */
+/**
+ * The remedies offered when the ACP connection fails, split by CAUSE (chrome-agent-platform-q9g8x).
+ *
+ * `nativeError` is the message AcpNativeTransport.connect() rejected with. Two different states share
+ * that one rejection — a refused/revoked `nativeMessaging` grant (Chrome never exposes
+ * `chrome.runtime.connectNative`, so the transport rejects before Chrome is asked about a host) and a
+ * genuinely absent/exited host — and the old single remedy ("install the local host") sent an owner who
+ * only had to press "Test connection" down a reinstall path for a host they already had. An
+ * unrecognised message keeps BOTH remedies rather than guessing.
+ *
+ * @param {{ nativeError?: string, nativeTransport?: unknown }} [opts]
+ * @returns {string[]} the remedies, in the order they are shown
+ */
+export function acpConnectionFixHints({ nativeError = "", nativeTransport = null } = {}) {
+  const fixes = [];
+  if (nativeError) {
+    const cause = classifyNativeFailure(nativeError);
+    if (cause === "permission-grant") {
+      fixes.push(
+        'grant native messaging: select "Native host" again (or press "Test connection") in Settings → Agents',
+      );
+    } else if (cause === "host-missing") {
+      fixes.push("install the local host: npm run acp:native:install");
+    } else {
+      fixes.push(
+        'check the native leg: grant native messaging (Settings → Agents, select "Native host" again) or install the local host: npm run acp:native:install',
+      );
+    }
+  } else if (nativeTransport) {
+    fixes.push("the local host is not answering: npm run acp:native:install");
+  }
+  fixes.push("or run the bridge: npm run acp:bridge");
+  return fixes;
+}
+
 export function getRetainedAcpSession(sessionKey) {
   const rec = retainedSessions.get(sessionKey);
   if (!rec) return null;
@@ -1053,10 +1088,7 @@ export async function runAcpTaskTurn(options) {
       const errorMsg = `Cannot connect to ACP harness (${harnessId}) at ${effectiveEndpoint}.`;
       // Name EVERY transport that was unavailable, so the fix is one command away
       // whichever way the operator wants to run it.
-      const fixes = [];
-      if (nativeError) fixes.push("install the local host: npm run acp:native:install");
-      else if (nativeTransport) fixes.push("the local host is not answering: npm run acp:native:install");
-      fixes.push("or run the bridge: npm run acp:bridge");
+      const fixes = acpConnectionFixHints({ nativeError, nativeTransport });
       const actionMsg = `${fixes.join(" — ")} (both in the CAP repo)`;
       if (!stale()) {
         if (typeof container?.appendError === "function") {
