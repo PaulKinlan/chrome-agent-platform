@@ -126,6 +126,10 @@ export interface BootStagingRunResult {
   hostAboveQuietBound: boolean;
   /** The worst (highest) load/core observed during the run, or null when unmeasurable. (mr1ak) */
   hostWorstLoadPerCore: number | null;
+  /** The worst (highest) host CPU steal% observed during the run, or null when no
+   *  sample could measure it (fbg7i). Steal is the contention loadavg cannot see:
+   *  it stretches every task's wall clock on every process at once. */
+  hostWorstStealPct: number | null;
   /** The bound that decision used, so a reader can see what "loaded" meant. (mr1ak) */
   hostQuietBound: number;
   validMeasurement: boolean;
@@ -354,6 +358,7 @@ export function failedSample(err: any): LoadSample {
     compilerNames: [],
     activeCompilers: 0,
     activeCompilerNames: [],
+    stealPct: null,
   };
 }
 
@@ -576,6 +581,22 @@ export function attributeBootRun(
       validMeasurement = false;
       const comps = formatActiveBuilders(activeSample);
       invalidReason = `concurrent heavy builder detected during boot: [${comps}] (${hostEnvironment})`;
+    } else {
+      // chrome-agent-platform-fbg7i: host CPU steal invalidates the run too. The
+      // FIRST heavy-tier producer run reddened on 6-11 "long tasks" of 85-93 ms
+      // per boot at load/core 0.22-0.32 — a CDP trace showed 77-105 ms RunTasks
+      // with ~0 ms of traced work inside on the renderer, the browser process
+      // AND the GPU compositor simultaneously, and /proc/stat measured 40-88%
+      // steal during the boot. A stolen vCPU stretches a 25-45 ms task past the
+      // 50 ms ceiling without a single extra millisecond of page work, and load
+      // average never sees it. That is a contended measurement, not a boot
+      // defect, and it must refuse rather than red.
+      const stealBound = resolveSpec().maxStealPct;
+      const stolenSample = samples.find((s) => typeof s.stealPct === "number" && (s.stealPct as number) > stealBound);
+      if (stolenSample) {
+        validMeasurement = false;
+        invalidReason = `host CPU steal ${(stolenSample.stealPct as number).toFixed(0)}% > ${stealBound}% during the boot interval — hypervisor-stolen vCPU time stretches every task's wall clock without touching load average (chrome-agent-platform-fbg7i) [${hostEnvironment}]`;
+      }
     }
   }
 
@@ -593,6 +614,10 @@ export function attributeBootRun(
     ? Math.max(...measuredSamples.map((s) => s.loadPerCore))
     : null;
   const hostAboveQuietBound = worstLoadPerCore != null && worstLoadPerCore > quietBound;
+  const stealReadings = measuredSamples
+    .map((s) => s.stealPct)
+    .filter((v): v is number => typeof v === "number");
+  const worstStealPct = stealReadings.length > 0 ? Math.max(...stealReadings) : null;
 
   const loafEntries = rawMetrics.loafEntries || [];
   // Unrounded 50.0 ms threshold — no weak rounding bypass
@@ -631,6 +656,7 @@ export function attributeBootRun(
     hostLoaded,
     hostAboveQuietBound,
     hostWorstLoadPerCore: worstLoadPerCore,
+    hostWorstStealPct: worstStealPct,
     hostQuietBound: quietBound,
     validMeasurement,
     invalidReason,

@@ -2361,3 +2361,104 @@ Deno.test("mr1ak review: a QUIET run's latency breach is NOT hidden behind a loa
   assertStringIncludes(policy.error!, "on uncontended host");
   assertStringIncludes(policy.error!, "composer-ready took 320ms");
 });
+
+Deno.test("fbg7i: host CPU steal above the bound invalidates the run — contended, never a product red", () => {
+  // The fbg7i evidence: load/core 0.05 (quiet by the old signal) with 62% steal
+  // is a contended box — a 92ms "long task" on it is ~34ms of real work.
+  const stolenSample: any = {
+    measurable: true,
+    load1: 0.4,
+    load5: 0.3,
+    cores: 8,
+    loadPerCore: 0.05,
+    activeCompilers: 0,
+    compilerNames: [],
+    stealPct: 62,
+  };
+
+  const run = attributeBootRun(
+    1,
+    {
+      composerReadyEndMs: 40,
+      threadListHydratedEndMs: 90,
+      longTasks: [{ name: "self", duration: 92, startTime: 30 }],
+    },
+    [stolenSample],
+  );
+  assertEquals(run.validMeasurement, false, "steal above the bound must invalidate the measurement");
+  assertStringIncludes(run.invalidReason!, "host CPU steal 62% > 10%");
+  assertStringIncludes(run.invalidReason!, "chrome-agent-platform-fbg7i");
+  assertEquals(run.hostWorstStealPct, 62);
+  assertEquals(run.hostLoaded, true);
+});
+
+Deno.test("fbg7i: steal within the bound keeps the run valid; a null reading is no verdict either way", () => {
+  const quietSample: any = {
+    measurable: true,
+    load1: 0.4,
+    load5: 0.3,
+    cores: 8,
+    loadPerCore: 0.05,
+    activeCompilers: 0,
+    compilerNames: [],
+    stealPct: 4,
+  };
+  const run = attributeBootRun(
+    1,
+    { composerReadyEndMs: 40, threadListHydratedEndMs: 90, longTasks: [] },
+    [quietSample],
+  );
+  assertEquals(run.validMeasurement, true);
+  assertEquals(run.hostWorstStealPct, 4);
+
+  // macOS / failed probe: stealPct null must neither invalidate nor whitewash —
+  // the run's validity comes from the signals that DID answer.
+  const noStealSignal: any = {
+    measurable: true,
+    load1: 0.4,
+    load5: 0.3,
+    cores: 8,
+    loadPerCore: 0.05,
+    activeCompilers: 0,
+    compilerNames: [],
+    stealPct: null,
+  };
+  const run2 = attributeBootRun(
+    2,
+    { composerReadyEndMs: 40, threadListHydratedEndMs: 90, longTasks: [] },
+    [noStealSignal],
+  );
+  assertEquals(run2.validMeasurement, true);
+  assertEquals(run2.hostWorstStealPct, null);
+});
+
+Deno.test("fbg7i: a boot measured entirely on a stolen host is an environmental refusal, not a contract breach", () => {
+  const stolenSample: any = {
+    measurable: true,
+    load1: 1.2,
+    load5: 1.0,
+    cores: 8,
+    loadPerCore: 0.15,
+    activeCompilers: 0,
+    compilerNames: [],
+    stealPct: 71,
+  };
+  // Five runs, each with the 85-93ms "long tasks" fbg7i measured — all contended
+  // by steal, so the policy must REFUSE (exit 75) rather than red the tree.
+  const runs = [1, 2, 3, 4, 5].map((run) =>
+    attributeBootRun(
+      run,
+      {
+        composerReadyEndMs: 120,
+        threadListHydratedEndMs: 200,
+        longTasks: [{ name: "self", duration: 89, startTime: 100 }],
+      },
+      [stolenSample],
+    )
+  );
+  const policy = evaluateBootStagingPolicy(runs);
+  assertEquals(policy.ok, false);
+  assertEquals(policy.environmentalRefusal, true, "all-stolen runs refuse environmentally");
+  assertEquals(policy.validRuns.length, 0);
+  assertStringIncludes(policy.error ?? "", "host CPU steal");
+});
