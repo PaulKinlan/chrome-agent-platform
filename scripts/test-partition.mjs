@@ -238,9 +238,12 @@ export const WALL_CLOCK_HEAVY_FILES = Object.freeze(["tests/ntp-boot-staging-tim
  * declares, and `checkHeavyReceipt()` refuses a receipt that omits a declared quarantine row (the exclusion must be
  * named) as well as one that invents a row for a file this table does not name.
  *
- * EXPIRY IS A CONDITION, NOT A DATE: each entry names the bead whose result ends the quarantine. When the CPU-time
- * discriminator (chrome-agent-platform-63o3v) lands, either the budget is shown to be measurable (reference it in
- * 8tgnt's close and delete this entry) or the jank is confirmed and fbg7i reopens as P1 with the measurement.
+ * EXPIRY IS A CONDITION, NOT A DATE: each entry names the bead whose result ends the quarantine. The measurement
+ * that lifts it is chrome-agent-platform-ksnsa (per-task CPU time over the same boot phases, discriminating real
+ * jank from tenant steal). If CPU time is SMALL, the wall-clock budget is the thing that is wrong and the
+ * remediation is chrome-agent-platform-63o3v (budget/steal model) before the suite rejoins the cert set; if CPU
+ * time is GENUINELY large in stage1-composer, fbg7i reopens as P1 with that evidence. Either way the entry is
+ * deleted in the same commit that records ksnsa's result on 8tgnt.
  */
 export const QUARANTINED_HEAVY_FILES = Object.freeze({
   "tests/ntp-boot-staging-timing.test.ts": Object.freeze({
@@ -248,8 +251,9 @@ export const QUARANTINED_HEAVY_FILES = Object.freeze({
     reason:
       "quarantined from the heavy CERT set: its zero-long-task budget failed on a guard-certified quiet window " +
       "(median 3 long tasks, 77-208ms, load/core 0.14) while the same tree also REFUSED environmentally at ~49% steal, " +
-      "so neither classification is evidence about the product until per-task CPU time is measured (63o3v)",
-    expiresWith: "chrome-agent-platform-63o3v",
+      "so neither classification is evidence about the product until per-task CPU time is measured (ksnsa); " +
+      "if CPU time proves small, the budget model is fixed by 63o3v before this suite rejoins the cert set",
+    expiresWith: "chrome-agent-platform-ksnsa",
   }),
 });
 
