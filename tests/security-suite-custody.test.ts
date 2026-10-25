@@ -21,6 +21,8 @@ import {
   readProcIdentity,
   residueForReceipt,
   resolveSupervisorConfig,
+  selfTestReadyDeadlineMs,
+  SELF_TEST_READY_MAX_SCALE,
   selfTestTermWaitMs,
   SELF_TEST_TERM_WAIT_FLOOR_MS,
   SELF_TEST_TERM_WAIT_MAX_SCALE,
@@ -54,9 +56,34 @@ const RETIRED_POISON = "/tmp/cap-chrome-slot-POISON";
 // loadavg ~10). Before this the fixture's private 1_500 ms deadline decided the outcome, so the BOX
 // decided the red: the fixture gave up and exited 97 before the supervisor could observe the escape,
 // and the red looked like a custody failure.
+// chrome-agent-platform-4vmn7: the ACK window is the one number in this contract that a LOADED box can
+// exceed on its own — the stubborn child's cold boot plus the handshake is exactly what load delays, and
+// the flat 12 s redded the complete gate on 2026-10-23 at load 6-11 (exit 97, "stubborn-unconfirmed":
+// the FIXTURE's backstop fired before the supervisor could prove TERM-then-KILL). So the declaration is
+// DERIVED from ABSOLUTE load, capped, exactly like the TERM window (whl7d) and the serial ready marker
+// (kzy5x): the contract is still the numbers, they are just chosen from the box instead of assumed for it.
 const ESCAPE_SELF_TEST_BUDGET_MS = 10_000;
-const ESCAPE_ACK_DEADLINE_MS = 12_000;
-const STUBBORN_ACK_DEADLINE_MS = 12_000;
+const ESCAPE_ACK_DEADLINE_BASE_MS = 12_000;
+const STUBBORN_ACK_DEADLINE_BASE_MS = 12_000;
+// rblji: the box is sampled ONCE, into the declaration, and every later check reads that SAME sample.
+// The first cut re-sampled inside declaredAckDeadlineMs(), so the test asserted a module-load value
+// against a LIVE load average: whenever the load drifted (it does, between module evaluation and test
+// execution) the derived numbers legitimately differed and the assertion failed. A declaration must be
+// a snapshot — re-deriving it from a moving box is not a stricter check, it is a different number.
+const DECLARED_READY_LOAD = { loadavg: loadAverageSample(), loadPerCpu: loadPerCpuSample() } as const;
+/** The declared ACK window for THIS box: the base, scaled by absolute load, capped (see SELF_TEST_READY_MAX_SCALE). */
+function declaredAckDeadlineMs(
+  baseMs: number,
+  load: { loadavg: number | null; loadPerCpu: number | null } = DECLARED_READY_LOAD,
+): number {
+  return selfTestReadyDeadlineMs({
+    baseMs,
+    loadavg: load.loadavg ?? 1,
+    loadPerCpu: load.loadPerCpu ?? 1,
+  });
+}
+const ESCAPE_ACK_DEADLINE_MS = declaredAckDeadlineMs(ESCAPE_ACK_DEADLINE_BASE_MS);
+const STUBBORN_ACK_DEADLINE_MS = declaredAckDeadlineMs(STUBBORN_ACK_DEADLINE_BASE_MS);
 const ESCAPE_SAMPLE_FREEZE_MS = 400;
 // chrome-agent-platform-2zqd: how long the reap/cleanup assertions wait for a recorded pid to STOP being a
 // live process before calling it a survivor. The PROPERTY is unchanged (a survivor still REDs) - only the
@@ -595,6 +622,82 @@ Deno.test("security-suite custody: hard timeout sends TERM and returns 124", asy
   } finally {
     await removeEvidence(result);
   }
+});
+
+// chrome-agent-platform-4vmn7: the stubborn readiness deadline is a LOAD-DERIVED window, not a flat
+// one. Before this, a loaded box spent the flat 12 s on the child's cold boot and the supervisor exited
+// 97 ("stubborn-readiness-timeout") instead of proving TERM-then-KILL — which is how the complete gate
+// redded this suite on 2026-10-23 at load 6-11. Two pins: the arithmetic (pure) and the grant (receipt).
+Deno.test("4vmn7: the stubborn readiness window scales with ABSOLUTE load and is capped", () => {
+  const base = 12_000;
+  assertEquals(selfTestReadyDeadlineMs({ baseMs: base, loadavg: 1 }), base, "an idle box keeps the declared window, unchanged");
+  assertEquals(selfTestReadyDeadlineMs({ baseMs: base, loadavg: 0.4 }), base, "a quiet box must not be shrunk below the declared window");
+  assertEquals(selfTestReadyDeadlineMs({ baseMs: base, loadavg: 2 }), base * 2, "absolute load multiplies the window");
+  assertEquals(
+    selfTestReadyDeadlineMs({ baseMs: base, loadavg: 11.7 }),
+    base * SELF_TEST_READY_MAX_SCALE,
+    "the measured full-gate load (11.7 on 8 cpus) grants the bounded maximum",
+  );
+  assertEquals(
+    selfTestReadyDeadlineMs({ baseMs: base, loadavg: 99 }),
+    base * SELF_TEST_READY_MAX_SCALE,
+    `extreme load stays capped at x${SELF_TEST_READY_MAX_SCALE} — a bounded grace, not an unbounded wait`,
+  );
+  assertEquals(
+    selfTestReadyDeadlineMs({ baseMs: base, loadavg: 0.4, loadPerCpu: 2.5 }),
+    base * 2.5,
+    "load-per-CPU may only RAISE the window (the whl7d rule), never lower the absolute reading",
+  );
+  assertEquals(selfTestReadyDeadlineMs({ baseMs: base, loadavg: NaN, loadPerCpu: NaN }), base, "unmeasurable load is idle, never a licence");
+});
+
+// 4vmn7: the DECLARATION is the fix, so pin the declaration — not a clock race. The contract the suite
+// relies on is FREEZE_MS < BUDGET_MS < ACK_DEADLINE_MS (2zqd), and the ACK window is the one bound that
+// has to survive load; if a future edit flattens it again, this reds on arithmetic instead of on a loaded
+// box. It also proves the derived window is never WORSE than the flat one at any load.
+Deno.test("4vmn7: the declared ACK window is derived from absolute load and keeps the 2zqd contract", () => {
+  for (const base of [ESCAPE_ACK_DEADLINE_BASE_MS, STUBBORN_ACK_DEADLINE_BASE_MS]) {
+    assertEquals(declaredAckDeadlineMs(base) >= base, true, "the derived window is never shorter than the declared base");
+    assert(
+      declaredAckDeadlineMs(base) * 1.0 >= base,
+      "a derived window below the base would shrink the 2zqd contract and red under load",
+    );
+    assert(
+      selfTestReadyDeadlineMs({ baseMs: base, loadavg: 11.7 }) > ESCAPE_SELF_TEST_BUDGET_MS,
+      "at the measured full-gate load the ACK window must stay ABOVE the self-test budget (2zqd: FREEZE < BUDGET < ACK)",
+    );
+    assert(
+      selfTestReadyDeadlineMs({ baseMs: base, loadavg: 11.7 }) >= base * 2,
+      "the measured full-gate load (11.7) must actually WIDEN the window - a flat declaration is what redded " +
+        "the complete gate on 2026-10-23, so a derivation that ignores load has to red here",
+    );
+    assert(
+      selfTestReadyDeadlineMs({ baseMs: base, loadavg: 99 }) <= base * SELF_TEST_READY_MAX_SCALE,
+      "the grace is bounded: extreme load cannot declare an unbounded wait",
+    );
+  }
+  assertEquals(
+    ESCAPE_SAMPLE_FREEZE_MS < ESCAPE_SELF_TEST_BUDGET_MS && ESCAPE_SELF_TEST_BUDGET_MS < ESCAPE_ACK_DEADLINE_MS,
+    true,
+    `the contract must hold on this box: freeze ${ESCAPE_SAMPLE_FREEZE_MS} < budget ${ESCAPE_SELF_TEST_BUDGET_MS} < ack ${ESCAPE_ACK_DEADLINE_MS}`,
+  );
+  // Only bites on a loaded box - which is the case this exists for: if the consts above are ever
+  // re-flattened to their literal bases while the box is busy, the declaration stops matching the rule.
+  assertEquals(
+    STUBBORN_ACK_DEADLINE_MS,
+    declaredAckDeadlineMs(STUBBORN_ACK_DEADLINE_BASE_MS),
+    "the stubborn ACK window must still be the DERIVED one, not a re-flattened literal",
+  );
+  assertEquals(
+    ESCAPE_ACK_DEADLINE_MS,
+    declaredAckDeadlineMs(ESCAPE_ACK_DEADLINE_BASE_MS),
+    "the escape ACK window must still be the DERIVED one, not a re-flattened literal",
+  );
+  assertEquals(
+    ESCAPE_SELF_TEST_BUDGET_MS < STUBBORN_ACK_DEADLINE_MS,
+    true,
+    `stubborn must get the same treatment: budget ${ESCAPE_SELF_TEST_BUDGET_MS} < ack ${STUBBORN_ACK_DEADLINE_MS}`,
+  );
 });
 
 Deno.test("security-suite custody: stubborn owned group receives TERM then KILL and leaves no survivor", async () => {
