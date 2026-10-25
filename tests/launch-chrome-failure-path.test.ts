@@ -86,7 +86,7 @@ Deno.test(
           profile,
           lockPath,
           fleetSlot: { slotPath, gate: "test-gate", boundMs: 5000 },
-          requireQuiet: { maxLoadPerCore: 999, maxCompilers: 999, sampleMs: 10, sustainedSamples: 1 },
+          requireQuiet: { maxLoadPerCore: 999, maxCompilers: 999, maxStealPct: 999, sampleMs: 10, sustainedSamples: 1 },
           timeoutMs: 5000,
           processTable: refuses("spawn EAGAIN: simulated process table read failure"),
           teardown: async (target) => {
@@ -174,7 +174,7 @@ Deno.test(
           profile,
           lockPath,
           fleetSlot: { slotPath, gate: "test-gate", boundMs: 5000 },
-          requireQuiet: { maxLoadPerCore: 999, maxCompilers: 999, sampleMs: 10, sustainedSamples: 1 },
+          requireQuiet: { maxLoadPerCore: 999, maxCompilers: 999, maxStealPct: 999, sampleMs: 10, sustainedSamples: 1 },
           timeoutMs: 150,
           teardown: async (target) => {
             teardownRan = true;
@@ -405,7 +405,7 @@ Deno.test(
             binary: fake,
             args: ["--remote-debugging-port=9999"],
             fleetSlot: { slotPath, gate: "test-gate", boundMs: 5000 },
-            requireQuiet: { maxLoadPerCore: 999, maxCompilers: 999, sampleMs: 10, sustainedSamples: 1 },
+            requireQuiet: { maxLoadPerCore: 999, maxCompilers: 999, maxStealPct: 999, sampleMs: 10, sustainedSamples: 1 },
           });
         },
         Error,
@@ -458,7 +458,7 @@ Deno.test(
             profile,
             lockPath,
             fleetSlot: { slotPath, gate: "test-gate", boundMs: 5000 },
-            requireQuiet: { maxLoadPerCore: 999, maxCompilers: 999, sampleMs: 10, sustainedSamples: 1 },
+            requireQuiet: { maxLoadPerCore: 999, maxCompilers: 999, maxStealPct: 999, sampleMs: 10, sustainedSamples: 1 },
             timeoutMs: 150,
             teardown: async (target) => {
               teardownAttempts++;

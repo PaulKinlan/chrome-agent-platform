@@ -654,7 +654,10 @@ Deno.test("mkax: the launcher refuses to START the browser when the box is not q
     // that as a red made this test fail for the suite's own churn. The retry in readLoadSample makes
     // it rare; when it still happens this branch says INCONCLUSIVE with the cause instead of red.
     const permissive = {
-      maxLoadPerCore: 1e9, maxCompilers: 1e9, maxWaitMs: 2000, sampleMs: 50, sustainedSamples: 1,
+      // fbg7i: every dimension of the spec must be permissive — steal is one
+      // now, and a box under real hypervisor steal (this fleet's VM measured
+      // 40-88%) must not make a "permissive spec launches" pin read as a red.
+      maxLoadPerCore: 1e9, maxCompilers: 1e9, maxStealPct: 1e9, maxWaitMs: 2000, sampleMs: 50, sustainedSamples: 1,
     };
     const launched = await (async () => {
       try {
