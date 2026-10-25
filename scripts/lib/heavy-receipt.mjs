@@ -181,6 +181,32 @@ export function certifyingHeavyFiles() {
 }
 
 /**
+ * ONE human-readable description of what a receipt actually covers (2udrl).
+ *
+ * The acceptance line is the single line a person reads before landing, so it must not claim more than the receipt
+ * holds: a receipt with a quarantined suite covers 20 of 21 and says which suite and which bead excluded it. Before
+ * 8tgnt there was no exclusion, so "every enumerated suite passed" was true; with one, it is a lie even though the
+ * gate's LOGIC is right.
+ */
+export function describeReceiptCoverage(receipt) {
+  const covered = Array.isArray(receipt?.covered) ? receipt.covered.length : 0;
+  const expected = Array.isArray(receipt?.expected) ? receipt.expected.length : 0;
+  const declared = Array.isArray(receipt?.quarantined) ? receipt.quarantined : [];
+  const rows = declared.length
+    ? declared
+    : (Array.isArray(receipt?.suites) ? receipt.suites : [])
+      .filter((row) => row?.status === "quarantined")
+      .map((row) => ({ file: row.file, bead: row.bead ?? QUARANTINED_HEAVY_FILES[String(row.file)]?.bead ?? "unstated-bead" }));
+  const skipped = Array.isArray(receipt?.skipped) ? receipt.skipped.length : 0;
+  const parts = [`${covered}/${expected} covered`];
+  if (rows.length > 0) {
+    parts.push(`${rows.length} quarantined: ${rows.map((row) => `${row.file} (${row.bead})`).join(", ")}`);
+  }
+  parts.push(`${skipped} skips`);
+  return parts.join(", ");
+}
+
+/**
  * Classify one phase's exit code into a per-suite terminal status.
  *
  * The parallel batch reports one code for the whole phase, so its files share the phase's verdict:
@@ -758,7 +784,7 @@ export function checkHeavyReceipt(tree, { now = Date.now(), maxAgeMs = DEFAULT_R
       line:
         `${headline}\n` +
         `  ${why}: ${numbers}.\n` +
-        `  Functional completeness (every enumerated suite passed, 0 skips, rc 0) is certified; the DURATIONS from ` +
+        `  Functional completeness (${describeReceiptCoverage(receipt)}) is certified; the DURATIONS from ` +
         `this run are not evidence (tu8w9/gezg6).\n` +
         `  Fix the BOX: re-run \`npm run test:heavy\` with no arguments on an idle host for a timing credential.\n` +
         `  Or accept it for ACCOUNTING only: node scripts/gate-receipt.mjs --accept-accounting-only`,

@@ -15,7 +15,7 @@
 // without mutating the parent process's durable root — a test that does that races parallel suites,
 // which is why tests/durable-root.test.ts fails the gate on the pattern (bead zuo0i).
 
-import { assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
+import { assert, assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
 import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -25,6 +25,7 @@ import {
   CANONICAL_HEAVY_GATE_COMMAND,
   RECEIPT_VERSION,
   auditSuiteLedger,
+  describeReceiptCoverage,
   heavyGateCommand,
   checkHeavyReceipt,
   expectedHeavyFiles,
@@ -1014,4 +1015,33 @@ Deno.test("8tgnt: a receipt that simply OMITS the quarantined suite cannot certi
   })));
   const accepted = checkHeavyReceipt(TREE, { now: Date.now() });
   assertEquals(accepted.ok, true, accepted.line);
+});
+
+Deno.test("2udrl: the accounting-only line states covered/expected/quarantined and never claims full coverage", () => {
+  // The acceptance line is the ONE line a person reads before landing, so a receipt with an excluded suite must not
+  // read as full coverage. Before 8tgnt there was no exclusion and "every enumerated suite passed" was true;
+  // with one it is a lie, even though the gate's logic is correct.
+  const TREE = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  const suites = [
+    ...expectedHeavyFiles().filter((file) => file !== QUARANTINED).map((file) => ({ file, status: "passed" })),
+    { file: QUARANTINED, status: "quarantined", bead: QUARANTINE_BEAD, reason: "unmeetable zero-long-task budget" },
+  ];
+  const receipt = {
+    tree: TREE,
+    suites,
+    expected: expectedHeavyFiles(),
+    covered: suites.filter((s) => s.status === "passed").map((s) => s.file),
+    quarantined: [{ file: QUARANTINED, bead: QUARANTINE_BEAD, reason: "unmeetable zero-long-task budget" }],
+    skipped: [],
+    missing: [],
+  };
+  const summary = describeReceiptCoverage(receipt as any);
+  assertEquals(
+    summary,
+    `20/21 covered, 1 quarantined: ${QUARANTINED} (${QUARANTINE_BEAD}), 0 skips`,
+  );
+  assert(!summary.includes("every enumerated suite"), "the summary must not claim full coverage");
+  // Same description from a receipt that predates the `quarantined` field: derive it from the ledger rows.
+  const legacy = describeReceiptCoverage({ ...receipt, quarantined: undefined } as any);
+  assertStringIncludes(legacy, `1 quarantined: ${QUARANTINED} (${QUARANTINE_BEAD})`);
 });
