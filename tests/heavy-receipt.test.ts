@@ -937,3 +937,81 @@ Deno.test("gutt3 (b3): the environmental path still demands the canonical no-arg
   // The subset-invocation gate fires before the coverage gate would, and either way it is exit 2.
   assertEquals(verdict.outcome, "refused");
 }));
+
+// ---------------------------------------------------------------------------------------------------------------
+// chrome-agent-platform-8tgnt: the quarantined heavy suite.
+//
+// Why these exist: on 2026-10-24 a zero-long-task budget could not be met on a box its own quiet-window guard
+// called quiet, so the producer recorded `result: fail` on every tree and `checkHeavyReceipt` refused them all —
+// landings stopped fleet-wide. Quarantining the file restores shipping ONLY IF the exclusion cannot become silent
+// coverage, so the audit is pinned in both directions here.
+// ---------------------------------------------------------------------------------------------------------------
+
+const QUARANTINED = "tests/ntp-boot-staging-timing.test.ts";
+const QUARANTINE_BEAD = "chrome-agent-platform-8tgnt";
+
+Deno.test("8tgnt: a named quarantine is not coverage, and the rest of the set still has to pass", () => {
+  const suites = [
+    ...expectedHeavyFiles().filter((file) => file !== QUARANTINED).map((file) => ({ file, status: "passed" })),
+    { file: QUARANTINED, status: "quarantined", bead: QUARANTINE_BEAD, reason: "zero-long-task budget unmeetable" },
+  ];
+  const ledger = auditSuiteLedger(suites, expectedHeavyFiles());
+  assertEquals(ledger.ok, true);
+  // The quarantined file must NOT be counted as covered: that is the whole distinction.
+  assertEquals(ledger.covered.includes(QUARANTINED), false);
+  assertEquals(ledger.covered.length, expectedHeavyFiles().length - 1);
+  assertEquals(ledger.quarantined, [QUARANTINED]);
+});
+
+Deno.test("8tgnt: a receipt cannot relieve itself of a suite the tree does not quarantine", () => {
+  const suites = [
+    ...expectedHeavyFiles().filter((file) => file !== QUARANTINED).map((file) => ({ file, status: "passed" })),
+    { file: "tests/not-in-the-heavy-set.test.ts", status: "quarantined", bead: "made-up", reason: "inconvenient" },
+    { file: QUARANTINED, status: "quarantined", bead: QUARANTINE_BEAD, reason: "zero-long-task budget unmeetable" },
+  ];
+  const ledger = auditSuiteLedger(suites, expectedHeavyFiles());
+  assertEquals(ledger.ok, false);
+  assertEquals(ledger.undeclaredQuarantine, ["tests/not-in-the-heavy-set.test.ts"]);
+  // It is also not part of this tree's enumerated set, so the ledger carries an extra row too.
+  assertEquals(ledger.extra.includes("tests/not-in-the-heavy-set.test.ts"), true);
+});
+
+Deno.test("8tgnt: a quarantine row without the declared bead, or without a reason, does not count", () => {
+  const base = expectedHeavyFiles().filter((file) => file !== QUARANTINED).map((file) => ({ file, status: "passed" }));
+  const wrongBead = auditSuiteLedger(
+    [...base, { file: QUARANTINED, status: "quarantined", bead: "someone-else", reason: "because" }],
+    expectedHeavyFiles(),
+  );
+  assertEquals(wrongBead.ok, false);
+  assertEquals(wrongBead.bad, [{ file: QUARANTINED, status: "quarantined" }]);
+  assertEquals(wrongBead.quarantined, []);
+  const noReason = auditSuiteLedger(
+    [...base, { file: QUARANTINED, status: "quarantined", bead: QUARANTINE_BEAD, reason: "   " }],
+    expectedHeavyFiles(),
+  );
+  assertEquals(noReason.ok, false);
+});
+
+Deno.test("8tgnt: a receipt that simply OMITS the quarantined suite cannot certify (the exclusion must be named)", () => {
+  const TREE = "ffffffffffffffffffffffffffffffffffffffff";
+  mkdirSync(dirname(receiptPath(TREE)), { recursive: true });
+  const suites = expectedHeavyFiles().filter((file) => file !== QUARANTINED).map((file) => ({ file, status: "passed" }));
+  const fresh = { startedAt: Date.now() - 60_000, finishedAt: Date.now() };
+  writeFileSync(receiptPath(TREE), JSON.stringify(certifyingBody(TREE, {
+    ...fresh,
+    suites,
+    covered: suites.map((s) => s.file),
+  })));
+  const verdict = checkHeavyReceipt(TREE, { now: Date.now() });
+  assertEquals(verdict.ok, false);
+  assertEquals(verdict.reason, "coverage-mismatch");
+  assertStringIncludes(verdict.line, QUARANTINED);
+  // A pass receipt that DID name the quarantine certifies, and still shows it as uncovered.
+  writeFileSync(receiptPath(TREE), JSON.stringify(certifyingBody(TREE, {
+    ...fresh,
+    suites: [...suites, { file: QUARANTINED, status: "quarantined", bead: QUARANTINE_BEAD, reason: "unmeetable budget" }],
+    covered: suites.map((s) => s.file),
+  })));
+  const accepted = checkHeavyReceipt(TREE, { now: Date.now() });
+  assertEquals(accepted.ok, true, accepted.line);
+});

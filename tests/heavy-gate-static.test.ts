@@ -4,9 +4,11 @@ import { fileURLToPath } from "node:url";
 import { classifyPhaseExit, DEFAULT_HEAVY_GATE_TIMEOUT_MS, filesFor, main, partitionByPhase } from "../scripts/heavy-gate.ts";
 import {
   BUILD_GATE,
+  CERT_HEAVY_FILES,
   HEAVY_GATE,
   HEAVY_GATE_FILES,
   HEAVY_GATE_REASONS,
+  QUARANTINED_HEAVY_FILES,
   SERIAL,
   WALL_CLOCK_HEAVY_FILES,
 } from "../scripts/test-partition.mjs";
@@ -16,9 +18,14 @@ const ROOT = fileURLToPath(new URL("..", import.meta.url));
 Deno.test("heavy-gate static: exports main and filesFor, matching HEAVY_GATE_FILES exactly", () => {
   assertEquals(typeof main, "function");
   assertEquals(typeof filesFor, "function");
-  assertEquals(filesFor([]), [...HEAVY_GATE_FILES]);
+  // 8tgnt: the enumerated run drives the CERT set — the enumerated suites minus the declared quarantines. The
+  // quarantined file stays in HEAVY_GATE_FILES (the tier still owes it, and a receipt must account for it) but it
+  // must not run, or its unmeetable zero-long-task budget fails every producer run and refuses every tree.
+  assertEquals(filesFor([]), [...CERT_HEAVY_FILES]);
+  assertEquals(filesFor([]).includes("tests/ntp-boot-staging-timing.test.ts"), false);
   assertEquals(filesFor(["tests/foo.test.ts", "--flag"]), ["tests/foo.test.ts"]);
   assertEquals(HEAVY_GATE_FILES.length, 21);
+  assertEquals(CERT_HEAVY_FILES.length, HEAVY_GATE_FILES.length - Object.keys(QUARANTINED_HEAVY_FILES).length);
   assertEquals(DEFAULT_HEAVY_GATE_TIMEOUT_MS, 3_600_000);
 });
 
