@@ -539,6 +539,7 @@ export function attributeBootRun(
   run: number,
   rawMetrics: RawBootPageMetrics,
   sample: BootStagingSampleInput = null,
+  bounds: { stealBoundPct?: number } = {},
 ): BootStagingRunResult {
   const samples: LoadSample[] = [];
   if (Array.isArray(sample)) {
@@ -591,7 +592,11 @@ export function attributeBootRun(
       // 50 ms ceiling without a single extra millisecond of page work, and load
       // average never sees it. That is a contended measurement, not a boot
       // defect, and it must refuse rather than red.
-      const stealBound = resolveSpec().maxStealPct;
+      // et2oh: the steal bound is INJECTED by the caller (tests pin it; the
+      // harness resolves it once from the spec); only an omitted bound falls
+      // back to the ambient resolveSpec() so an operator override can never
+      // silently rewrite a pinned assertion.
+      const stealBound = bounds.stealBoundPct ?? resolveSpec().maxStealPct;
       const stolenSample = samples.find((s) => typeof s.stealPct === "number" && (s.stealPct as number) > stealBound);
       if (stolenSample) {
         validMeasurement = false;
