@@ -630,6 +630,62 @@ export function checkHeavyReceipt(tree, { now = Date.now(), maxAgeMs = DEFAULT_R
       { undeclaredQuarantine: ledger.undeclaredQuarantine },
     );
   }
+  // chrome-agent-platform-mv1jw: the receipt's OWN coverage claim has to be internally possible, and the printed
+  // numbers must come from THIS recomputation rather than from the receipt's fields. Round 2 of the 8tgnt review
+  // proved the gap: a crafted receipt could list the quarantined file in BOTH `covered` and `quarantined`, pass every
+  // structural gate, classify accounting-only, and print "21/21 covered, 1 quarantined" — an impossible claim that
+  // certified a landing. So: a set cannot be both covered and quarantined, the two sets must partition the
+  // enumerated set exactly, and the claimed sets must equal the ones the ledger recomputes.
+  const claimedCovered = Array.isArray(receipt.covered) ? receipt.covered.map(String) : [];
+  const claimedQuarantined = (Array.isArray(receipt.quarantined) ? receipt.quarantined : [])
+    .map((row) => String(row?.file ?? row));
+  const overlap = claimedCovered.filter((file) => claimedQuarantined.includes(file));
+  if (overlap.length > 0) {
+    return refuse(
+      "coverage-overlap",
+      `gate-receipt: HEAVY RECEIPT CLAIMS A SUITE IS BOTH COVERED AND QUARANTINED for tree ${tree.slice(0, 12)} — ` +
+        `${overlap.join(", ")}. A suite either ran or it was excluded; a receipt cannot hold both, and the ` +
+        `contradiction makes its coverage numbers meaningless (mv1jw).`,
+      { overlap, covered: claimedCovered, quarantined: claimedQuarantined },
+    );
+  }
+  const union = new Set([...ledger.covered, ...ledger.quarantined]);
+  const unaccounted = expected.filter((file) => !union.has(file));
+  if (union.size !== expected.length || unaccounted.length > 0) {
+    return refuse(
+      "coverage-incomplete",
+      `gate-receipt: HEAVY RECEIPT'S COVERAGE DOES NOT ACCOUNT FOR THE ENUMERATED SET for tree ${tree.slice(0, 12)} — ` +
+        `covered ${ledger.covered.length} + quarantined ${ledger.quarantined.length} accounts for ${union.size} of ` +
+        `${expected.length}${unaccounted.length ? `; unaccounted: ${unaccounted.join(", ")}` : ""} (mv1jw).`,
+      { covered: ledger.covered, quarantined: ledger.quarantined, unaccounted },
+    );
+  }
+  const sameSet = (a, b) => a.length === b.length && a.every((file) => b.includes(file));
+  // A receipt written before a field existed makes no claim in it, so the cross-check applies only to claims that
+  // are present. Omitting a field cannot gain coverage: the ledger is what certifies and what gets printed.
+  const claimsCovered = Array.isArray(receipt.covered);
+  const claimsQuarantined = Array.isArray(receipt.quarantined);
+  const coverageContradicts =
+    (claimsCovered && !sameSet(claimedCovered, ledger.covered)) ||
+    (claimsQuarantined && !sameSet(claimedQuarantined, ledger.quarantined));
+  if (coverageContradicts) {
+    return refuse(
+      "contradictory-coverage",
+      `gate-receipt: HEAVY RECEIPT'S COVERAGE CONTRADICTS ITS OWN LEDGER for tree ${tree.slice(0, 12)} — ` +
+        `it claims covered [${claimedCovered.join(", ")}] / quarantined [${claimedQuarantined.join(", ")}] but the ` +
+        `ledger's terminal statuses recompute to covered [${ledger.covered.join(", ")}] / quarantined ` +
+        `[${ledger.quarantined.join(", ")}] (mv1jw).`,
+      { claimedCovered, claimedQuarantined, ledgerCovered: ledger.covered, ledgerQuarantined: ledger.quarantined },
+    );
+  }
+  // The numbers every human-facing message prints come from HERE, never from the receipt's own fields.
+  const coverage = {
+    covered: [...ledger.covered],
+    quarantined: ledger.quarantined.map((file) => ({ file, bead: QUARANTINED_HEAVY_FILES[file]?.bead ?? "unstated-bead" })),
+    expected: [...expected],
+    skipped: ledger.bad.map((entry) => entry.file),
+  };
+
   // gutt3: on the environmental-refusal path a wall-clock suite's terminal status IS "refused"
   // (rc 75 by construction), so it is accounted; failed/killed/unknown suites still refuse — a
   // failed suite is a product red no box condition can account for.
@@ -745,6 +801,7 @@ export function checkHeavyReceipt(tree, { now = Date.now(), maxAgeMs = DEFAULT_R
       },
       receipt,
       path,
+      coverage,
     };
   }
   // gezg6: structure is not the whole credential. The receipt's own conditions decide whether this is a
@@ -795,5 +852,5 @@ export function checkHeavyReceipt(tree, { now = Date.now(), maxAgeMs = DEFAULT_R
       path,
     };
   }
-  return { ok: true, outcome: "full", reason: "certified", receipt, path, steal: steal.payload };
+  return { ok: true, outcome: "full", reason: "certified", receipt, path, steal: steal.payload, coverage };
 }

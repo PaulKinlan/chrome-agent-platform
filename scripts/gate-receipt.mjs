@@ -69,7 +69,7 @@ if (!verdict.ok) {
     console.log(verdict.marker, JSON.stringify({ ...verdict.payload, accepted: "accounting-only", timingClaim: "none" }));
     console.log(
       `ACCOUNTING-ONLY ACCEPTED: ${verdict.headline.replace(/^ACCOUNTING-ONLY: /, "")} ` +
-        `(${describeReceiptCoverage(verdict.receipt)}; accounting only, timingClaim none).`,
+        `(${describeReceiptCoverage(verdict.coverage ?? verdict.receipt)}; accounting only, timingClaim none).`,
     );
     process.exit(0);
   }
@@ -82,6 +82,6 @@ console.log(
   `gate-receipt: heavy tier certified for tree ${tree.slice(0, 12)} (timing credential: steal peak ` +
     `${verdict.steal?.maxStealPct === null || verdict.steal?.maxStealPct === undefined ? "NA" : Number(verdict.steal.maxStealPct).toFixed(1)}%, ` +
     `threshold ${verdict.steal?.thresholdPct ?? "NA"}%) ` +
-    `(result ${receipt.result}, ${describeReceiptCoverage(receipt)}, ` +
+    `(result ${receipt.result}, ${describeReceiptCoverage(verdict.coverage ?? receipt)}, ` +
     `rc ${receipt.exitCode}, finished ${new Date(receipt.finishedAt).toISOString()}, producer ${receipt.producer})`,
 );
