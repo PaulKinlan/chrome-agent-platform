@@ -629,6 +629,9 @@ Deno.test("mkax: the launcher refuses to START the browser when the box is not q
   );
   await Deno.chmod(fake, 0o755);
   const scope = await Deno.makeTempFile({ prefix: "cap-mkax-scope-" });
+  // r2l8n: the permissive-launch pin's 2000ms bound PREDATES the steal dimension; declared here
+  // (outside the try) so the finally can restore it.
+  const savedStealWindow = Deno.env.get("CAP_QUIET_STEAL_WINDOW_MS");
   try {
     // An impossible threshold and a short bound: the box is never quiet enough.
     const err = await assertRejects(
@@ -653,6 +656,11 @@ Deno.test("mkax: the launcher refuses to START the browser when the box is not q
     // /proc walk — an unmeasurable box is a refusal by 1io9's contract, deliberately — and treating
     // that as a red made this test fail for the suite's own churn. The retry in readLoadSample makes
     // it rare; when it still happens this branch says INCONCLUSIVE with the cause instead of red.
+    // r2l8n: every sample now pays the steal probe window (CAP_QUIET_STEAL_WINDOW_MS, default
+    // 120ms), which under gate saturation pushed this permissive launch to 2098ms — the probe
+    // window, not this pin's subject (the launcher's admission behaviour), broke the pin. It is
+    // narrowed to its operator-knob floor (20ms) for this branch, restored in the finally.
+    Deno.env.set("CAP_QUIET_STEAL_WINDOW_MS", "20");
     const permissive = {
       // fbg7i: every dimension of the spec must be permissive — steal is one
       // now, and a box under real hypervisor steal (this fleet's VM measured
@@ -682,6 +690,8 @@ Deno.test("mkax: the launcher refuses to START the browser when the box is not q
     assert(launched.quietWaitMs < 2000, `a quiet-enough box starts at once (${launched.quietWaitMs} ms)`);
     await teardownChrome(launched);
   } finally {
+    if (savedStealWindow === undefined) Deno.env.delete("CAP_QUIET_STEAL_WINDOW_MS");
+    else Deno.env.set("CAP_QUIET_STEAL_WINDOW_MS", savedStealWindow);
     await Deno.remove(fake).catch(() => {});
     await Deno.remove(started).catch(() => {});
     await Deno.remove(scope).catch(() => {});
