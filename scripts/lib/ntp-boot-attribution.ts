@@ -130,6 +130,11 @@ export interface BootStagingRunResult {
    *  sample could measure it (fbg7i). Steal is the contention loadavg cannot see:
    *  it stretches every task's wall clock on every process at once. */
   hostWorstStealPct: number | null;
+  /** True when THIS run's invalidation came from the host CPU steal bound (fbg7i/r2l8n).
+   *  A steal-invalidated run can never produce a severe-breach product red: steal
+   *  inflates wall duration without bound (measured: a ~200ms-class task read
+   *  1995ms at 89% steal), so its severeBreaches carry no product signal. */
+  invalidatedBySteal: boolean;
   /** The bound that decision used, so a reader can see what "loaded" meant. (mr1ak) */
   hostQuietBound: number;
   validMeasurement: boolean;
@@ -564,6 +569,7 @@ export function attributeBootRun(
   //    a run. Contention requires positive evidence of an external compiling process.
   let validMeasurement = true;
   let invalidReason: string | undefined;
+  let invalidatedBySteal = false;
 
   if (samples.length === 0 || samples.some((s) => !s || !s.measurable)) {
     validMeasurement = false;
@@ -600,6 +606,7 @@ export function attributeBootRun(
       const stolenSample = samples.find((s) => typeof s.stealPct === "number" && (s.stealPct as number) > stealBound);
       if (stolenSample) {
         validMeasurement = false;
+        invalidatedBySteal = true;
         invalidReason = `host CPU steal ${(stolenSample.stealPct as number).toFixed(0)}% > ${stealBound}% during the boot interval — hypervisor-stolen vCPU time stretches every task's wall clock without touching load average (chrome-agent-platform-fbg7i) [${hostEnvironment}]`;
       }
     }
@@ -662,6 +669,7 @@ export function attributeBootRun(
     hostAboveQuietBound,
     hostWorstLoadPerCore: worstLoadPerCore,
     hostWorstStealPct: worstStealPct,
+    invalidatedBySteal,
     hostQuietBound: quietBound,
     validMeasurement,
     invalidReason,
@@ -707,7 +715,10 @@ export interface BootStagingPolicyEvaluation {
  * - Over VALID runs: median-0 contract is strictly enforced; persistent regressions (median > 0)
  *   fail as contract breaches with full attribution, while isolated cold-start tasks absorbed
  *   by median-0 pass with recorded warnings.
- * - Catastrophic stalls (> 500.0ms) fail immediately on any run.
+ * - Catastrophic stalls (> 500.0ms) fail immediately on any run NOT invalidated by host CPU
+ *   steal (r2l8n): steal inflates wall duration without bound — a ~200ms-class task measured
+ *   1995ms at 89% steal — so a stolen run's severe breaches are contention, never product
+ *   signal; load-contended runs keep the pre-steal immediate-red behaviour.
  * - On valid runs, strictly enforces composer-ready < 150ms and thread-list-hydrated <= 250ms.
  */
 export function evaluateBootStagingPolicy(
@@ -728,8 +739,18 @@ export function evaluateBootStagingPolicy(
     );
   }
 
-  // 2. Check 1: Catastrophic stalls (> 500ms) fail immediately even if the host was loaded
+  // 2. Check 1: Catastrophic stalls (> 500ms) fail immediately even if the host was loaded —
+  // EXCEPT on runs invalidated by host CPU steal (r2l8n): at 89% steal a ~200ms-class task
+  // measured 1995ms wall (fbg7i exit-run, 2026-10-25), so a stolen run's severe breach is
+  // contention, not product evidence. Those runs stay excluded; if no valid run remains,
+  // Check 2 refuses environmentally.
   for (const r of runs) {
+    if (r.severeBreaches.length > 0 && r.invalidatedBySteal) {
+      warnings.push(
+        `[ntp-boot-staging] Run ${r.run}: severe stall (>${500}ms) observed INSIDE a steal-invalidated run — wall duration cannot be attributed to the product at ${(r.hostWorstStealPct ?? 0).toFixed(0)}% steal; excluded from the severe check (chrome-agent-platform-r2l8n)`,
+      );
+      continue;
+    }
     if (r.severeBreaches.length > 0) {
       const details = r.severeBreaches.map(formatTaskAttribution).join("; ");
       return {
