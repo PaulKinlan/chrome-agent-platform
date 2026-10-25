@@ -23,7 +23,7 @@
 // phase's own 1800s bound is untouched (that raise is fleet config, hub-owned).
 
 import { fileURLToPath } from "node:url";
-import { HEAVY_GATE_FILES, WALL_CLOCK_HEAVY_FILES } from "./test-partition.mjs";
+import { CERT_HEAVY_FILES, HEAVY_GATE_FILES, QUARANTINED_HEAVY_FILES, WALL_CLOCK_HEAVY_FILES } from "./test-partition.mjs";
 import { areAllFailuresEnvironmental, combinePhaseExitCodes, ENVIRONMENTAL_REFUSAL_EXIT } from "./lib/environmental-verdict.mjs";
 import { heavyGateCommand, phaseStatusFor } from "./lib/heavy-receipt.mjs";
 import {
@@ -49,7 +49,13 @@ async function currentTreeForReceipt(): Promise<string | null> {
 
 export function filesFor(args: string[] = []): string[] {
   const cliFiles = args.filter((a) => !a.startsWith("-"));
-  return cliFiles.length > 0 ? cliFiles : [...HEAVY_GATE_FILES];
+  // 8tgnt: the enumerated run skips suites this tree declares QUARANTINED. They are still owed by the tier (they
+  // stay in HEAVY_GATE_FILES so a receipt must account for them) but they do not run, because their budget cannot
+  // be met on this host right now and a failing wall-clock file made EVERY producer run record `result: fail`,
+  // which refused every tree and stopped landings fleet-wide. A CLI-named file is run as asked: naming a file
+  // explicitly is a deliberate act and the receipt records the argv (a subset invocation cannot certify).
+  if (cliFiles.length > 0) return cliFiles;
+  return [...CERT_HEAVY_FILES];
 }
 
 const WALL_CLOCK = new Set(WALL_CLOCK_HEAVY_FILES);
@@ -234,9 +240,20 @@ export async function runHeavyGate(args = Deno.args): Promise<number> {
 
   const codes = phases.map((p) => p.code);
   let rc = codes.length ? combinePhaseExitCodes(...codes) : 0;
-  const suites = phases.flatMap((p) =>
+  const suites: { file: string; phase: string; status: string; bead?: string; reason?: string }[] = phases.flatMap((p) =>
     p.files.map((file) => ({ file, phase: p.phase, status: phaseStatusFor(p.code) }))
   );
+  // 8tgnt: a quarantined suite is NAMED in the ledger with the bead and reason that excluded it, and it is not a
+  // phase result: it never ran, so it must not be counted as covered and it must not move the exit code. Appended
+  // only for the enumerated run — a CLI-named subset records exactly what it ran, and can never certify anyway.
+  for (const [file, entry] of Object.entries(QUARANTINED_HEAVY_FILES)) {
+    if (args.some((arg) => !arg.startsWith("-") && arg === file)) continue;
+    suites.push({ file, phase: "quarantined", status: "quarantined", bead: entry.bead, reason: entry.reason });
+    console.log(
+      `heavy-gate: QUARANTINED ${file} — not run, not covered (${entry.bead}): ${entry.reason}; ` +
+        `expires with ${entry.expiresWith ?? "an unstated bead"}`,
+    );
+  }
 
   // chrome-agent-platform-upqhp: every tier run writes a receipt for the exact tree it ran on
   // (keyed by TREE hash). The gate-command stage (`node scripts/gate-receipt.mjs`) fails closed without a

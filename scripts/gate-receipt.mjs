@@ -30,12 +30,12 @@
 //
 //   exit 0  full credential (steal measured, below threshold)
 //   exit 0  accounting-only ACCEPTED, only with --accept-accounting-only: the hub's accounting path
-//           (every enumerated suite passed, 0 skips, tracked failures, rc 0) still lands, and the run
+//           (every enumerated suite passed or named as quarantined, 0 skips, tracked failures, rc 0) still lands, and the run
 //           claims no timing. The marker on stdout says so, so a later reader cannot mistake it.
 //   exit 2  structurally refused: missing / mismatched / stale / not a pass / incomplete (get a receipt)
 //   exit 3  accounting-only and NOT accepted: starved, unmeasured, or no steal evidence (fix the box)
 
-import { checkHeavyReceipt, currentTreeHash, expectedHeavyFiles } from "./lib/heavy-receipt.mjs";
+import { checkHeavyReceipt, currentTreeHash, describeReceiptCoverage, expectedHeavyFiles } from "./lib/heavy-receipt.mjs";
 
 const args = process.argv.slice(2);
 const known = new Set(["--accept-accounting-only", "--help"]);
@@ -69,7 +69,7 @@ if (!verdict.ok) {
     console.log(verdict.marker, JSON.stringify({ ...verdict.payload, accepted: "accounting-only", timingClaim: "none" }));
     console.log(
       `ACCOUNTING-ONLY ACCEPTED: ${verdict.headline.replace(/^ACCOUNTING-ONLY: /, "")} ` +
-        `(every enumerated suite passed; accounting only, timingClaim none).`,
+        `(${describeReceiptCoverage(verdict.coverage ?? verdict.receipt)}; accounting only, timingClaim none).`,
     );
     process.exit(0);
   }
@@ -82,6 +82,6 @@ console.log(
   `gate-receipt: heavy tier certified for tree ${tree.slice(0, 12)} (timing credential: steal peak ` +
     `${verdict.steal?.maxStealPct === null || verdict.steal?.maxStealPct === undefined ? "NA" : Number(verdict.steal.maxStealPct).toFixed(1)}%, ` +
     `threshold ${verdict.steal?.thresholdPct ?? "NA"}%) ` +
-    `(result ${receipt.result}, ${receipt.covered.length}/${receipt.expected.length} enumerated suites all passed, ` +
+    `(result ${receipt.result}, ${describeReceiptCoverage(verdict.coverage ?? receipt)}, ` +
     `rc ${receipt.exitCode}, finished ${new Date(receipt.finishedAt).toISOString()}, producer ${receipt.producer})`,
 );

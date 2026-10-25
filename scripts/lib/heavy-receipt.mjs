@@ -43,7 +43,7 @@ import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { durableDir } from "./durable-root.mjs";
 import { STEAL_THRESHOLD_PCT } from "./cpu-steal-sampler.mjs";
-import { HEAVY_GATE_FILES } from "../test-partition.mjs";
+import { HEAVY_GATE_FILES, QUARANTINED_HEAVY_FILES } from "../test-partition.mjs";
 import { ENVIRONMENTAL_REFUSAL_EXIT } from "./environmental-verdict.mjs";
 
 export const RECEIPT_DIR_NAME = "heavy-receipts";
@@ -61,8 +61,8 @@ export const DEFAULT_RECEIPT_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 // tolerated (NTP corrections, a machine without a battery); anything past that is a refusal.
 export const RECEIPT_FUTURE_SKEW_MS = 5 * 60 * 1000;
 
-/** Terminal per-suite statuses. Only `passed` may appear on a certifying receipt. */
-export const SUITE_STATUSES = Object.freeze(["passed", "failed", "refused", "killed", "unknown"]);
+/** Terminal per-suite statuses. Only `passed` certifies, and `quarantined` never counts as coverage. */
+export const SUITE_STATUSES = Object.freeze(["passed", "failed", "refused", "killed", "unknown", "quarantined"]);
 
 /** Result classes. Only `pass` may certify; everything else is recorded so the ledger is honest. */
 export const RECEIPT_RESULTS = Object.freeze(["pass", "fail", "refusal", "subset", "drift"]);
@@ -157,6 +157,56 @@ export function expectedHeavyFiles() {
 }
 
 /**
+ * The quarantined subset of the enumerated set (chrome-agent-platform-8tgnt).
+ *
+ * A quarantined suite is still OWED by the tier — it stays in `expectedHeavyFiles()` so a receipt can never
+ * pretend it does not exist — but it is excluded from `covered` and must appear in the ledger as
+ * `quarantined` with the reason and bead this table declares. Both directions are enforced: an omitted
+ * exclusion refuses (the exclusion must be NAMED) and an invented one refuses (a receipt cannot mint an
+ * exclusion for a file the repository does not quarantine).
+ */
+export function quarantinedHeavyFiles() {
+  return Object.entries(QUARANTINED_HEAVY_FILES).map(([file, entry]) => ({
+    file,
+    status: "quarantined",
+    reason: entry.reason,
+    bead: entry.bead,
+    expiresWith: entry.expiresWith ?? null,
+  }));
+}
+
+/** Files a certifying receipt must report as `passed` — the enumerated set minus the declared quarantines. */
+export function certifyingHeavyFiles() {
+  return expectedHeavyFiles().filter((file) => !(file in QUARANTINED_HEAVY_FILES));
+}
+
+/**
+ * ONE human-readable description of what a receipt actually covers (2udrl).
+ *
+ * The acceptance line is the single line a person reads before landing, so it must not claim more than the receipt
+ * holds: a receipt with a quarantined suite covers 20 of 21 and says which suite and which bead excluded it. Before
+ * 8tgnt there was no exclusion, so "every enumerated suite passed" was true; with one, it is a lie even though the
+ * gate's LOGIC is right.
+ */
+export function describeReceiptCoverage(receipt) {
+  const covered = Array.isArray(receipt?.covered) ? receipt.covered.length : 0;
+  const expected = Array.isArray(receipt?.expected) ? receipt.expected.length : 0;
+  const declared = Array.isArray(receipt?.quarantined) ? receipt.quarantined : [];
+  const rows = declared.length
+    ? declared
+    : (Array.isArray(receipt?.suites) ? receipt.suites : [])
+      .filter((row) => row?.status === "quarantined")
+      .map((row) => ({ file: row.file, bead: row.bead ?? QUARANTINED_HEAVY_FILES[String(row.file)]?.bead ?? "unstated-bead" }));
+  const skipped = Array.isArray(receipt?.skipped) ? receipt.skipped.length : 0;
+  const parts = [`${covered}/${expected} covered`];
+  if (rows.length > 0) {
+    parts.push(`${rows.length} quarantined: ${rows.map((row) => `${row.file} (${row.bead})`).join(", ")}`);
+  }
+  parts.push(`${skipped} skips`);
+  return parts.join(", ");
+}
+
+/**
  * Classify one phase's exit code into a per-suite terminal status.
  *
  * The parallel batch reports one code for the whole phase, so its files share the phase's verdict:
@@ -194,11 +244,11 @@ function certifies(receipt) {
  * duplicated or non-passing is refused. Writer and checker share this one function, so a producer
  * cannot mint a shape the checker would not recompute for itself.
  *
- * @param {{ file?: string, status?: string }[]} suites
+ * @param {{ file?: string, status?: string, bead?: string, reason?: string }[]} suites
  * @param {string[]} expected
- * @returns {{ ok: boolean, missing: string[], extra: string[], duplicate: string[], bad: { file: string, status: string }[] }}
+ * @returns {{ ok: boolean, missing: string[], extra: string[], duplicate: string[], bad: { file: string, status: string }[], covered: string[], quarantined: string[], undeclaredQuarantine: string[] }}
  */
-export function auditSuiteLedger(suites, expected) {
+export function auditSuiteLedger(suites, expected, { quarantined = QUARANTINED_HEAVY_FILES } = {}) {
   const entries = Array.isArray(suites) ? suites : [];
   const files = entries.map((entry) => (typeof entry?.file === "string" ? entry.file : ""));
   const counts = new Map();
@@ -206,10 +256,45 @@ export function auditSuiteLedger(suites, expected) {
   const missing = expected.filter((file) => !counts.has(file));
   const extra = [...counts.keys()].filter((file) => !expected.includes(file));
   const duplicate = [...counts.entries()].filter(([, count]) => count > 1).map(([file]) => file);
-  const bad = entries
-    .filter((entry) => entry?.status !== "passed")
-    .map((entry) => ({ file: String(entry?.file ?? "unknown"), status: String(entry?.status ?? "unknown") }));
-  return { ok: missing.length === 0 && extra.length === 0 && duplicate.length === 0 && bad.length === 0, missing, extra, duplicate, bad };
+  // 8tgnt: a `quarantined` row is only legitimate when THIS tree declares that exact file with the same bead, and
+  // the row carries a reason. Anything else — an undeclared quarantine, a mismatched bead, no stated reason — is a
+  // non-passing suite like any other, so a receipt cannot invent coverage relief for itself.
+  const quarantinedRows = [];
+  const undeclaredQuarantine = [];
+  const bad = [];
+  for (const entry of entries) {
+    const file = String(entry?.file ?? "unknown");
+    const status = String(entry?.status ?? "unknown");
+    if (status === "quarantined") {
+      const declared = quarantined[file];
+      if (declared && String(entry?.bead ?? "") === declared.bead && String(entry?.reason ?? "").trim().length > 0) {
+        quarantinedRows.push(file);
+        continue;
+      }
+      // A row for a file this tree does NOT quarantine, or one that skips the bead/reason, is a non-passing suite.
+      if (!declared) undeclaredQuarantine.push(file);
+      bad.push({ file, status });
+      continue;
+    }
+    if (status !== "passed") bad.push({ file, status });
+  }
+  // A declared quarantine that the ledger does not NAME is a missing row, not silent relief — but only when the
+  // caller's expected set actually contains that suite (a narrow expected set, as every unit test uses, says
+  // nothing about the quarantined file).
+  for (const file of Object.keys(quarantined)) {
+    if (expected.includes(file) && !counts.has(file) && !missing.includes(file)) missing.push(file);
+  }
+  const covered = files.filter((file) => !quarantinedRows.includes(file));
+  return {
+    ok: missing.length === 0 && extra.length === 0 && duplicate.length === 0 && bad.length === 0,
+    missing,
+    extra,
+    duplicate,
+    bad,
+    covered,
+    quarantined: quarantinedRows,
+    undeclaredQuarantine,
+  };
 }
 
 /**
@@ -222,7 +307,7 @@ export function auditSuiteLedger(suites, expected) {
  *
  * @param {{ tree: string, treeEnd?: string, commit?: string, result: "pass"|"fail"|"refusal"|"subset"|"drift", conditions?: any,
  *   command?: string, args?: string[], exitCode?: number | null, logPath?: string | null,
- *   suites?: { file: string, phase: string, status: string }[], expected?: string[], dirty?: string[], producer?: string,
+ *   suites?: { file: string, phase: string, status: string, bead?: string, reason?: string }[], expected?: string[], dirty?: string[], producer?: string,
  *   startedAt?: number | null, finishedAt?: number }} args
  */
 export function writeHeavyReceipt({
@@ -247,9 +332,18 @@ export function writeHeavyReceipt({
   }
   if (!tree) throw new Error("heavy-receipt: a receipt must name the tree it ran on");
 
-  const covered = suites.map((s) => s.file);
   const ledger = auditSuiteLedger(suites, expected);
   const missing = ledger.missing;
+  // 8tgnt: `covered` is what the receipt CLAIMS ran. A quarantined row is not coverage, so it is excluded here by
+  // construction (auditSuiteLedger returns covered without them), and the quarantine rows are recorded separately so
+  // a reader can see exactly which suites this receipt does NOT cover and why.
+  const covered = ledger.covered ?? suites.map((s) => s.file);
+  const quarantinedRows = (ledger.quarantined ?? []).map((file) => ({
+    file,
+    reason: QUARANTINED_HEAVY_FILES[file]?.reason ?? null,
+    bead: QUARANTINED_HEAVY_FILES[file]?.bead ?? null,
+    expiresWith: QUARANTINED_HEAVY_FILES[file]?.expiresWith ?? null,
+  }));
   const skipped = ledger.bad.map((entry) => entry.file);
   const complete =
     result === "pass" &&
@@ -286,6 +380,7 @@ export function writeHeavyReceipt({
     missing,
     skipped,
     dirty,
+    quarantined: quarantinedRows,
     // tu8w9: the CONDITIONS OF ITS OWN PRODUCTION. A receipt that records only a verdict cannot be
     // audited later for whether the box was starved while the durations were measured, which is the
     // one thing a reader most needs to know before trusting a timing assertion.
@@ -518,6 +613,79 @@ export function checkHeavyReceipt(tree, { now = Date.now(), maxAgeMs = DEFAULT_R
       { duplicate: ledger.duplicate },
     );
   }
+  // 8tgnt: the quarantine table is CODE in this tree, and the receipt has to agree with it in BOTH directions.
+  // (i) A declared quarantine must be ACCOUNTED FOR in the ledger: either as a named `quarantined` row carrying the
+  // bead and a reason (the tier skipped it and says so), or as `passed` (a run that did execute it — an older
+  // receipt, or a deliberate run of that file — which is more coverage, not less, and must not be retro-invalidated).
+  // A row that is present but neither is a non-passing suite and refuses through `bad`. A declared quarantine with NO
+  // row at all refuses through `missing` above, so a silent omission cannot read as coverage.
+  // (ii) A receipt cannot quarantine a file this tree's table does not name, or a producer could relieve itself
+  // of the suites it finds inconvenient.
+  if (ledger.undeclaredQuarantine.length > 0) {
+    return refuse(
+      "undeclared-quarantine",
+      `gate-receipt: HEAVY RECEIPT QUARANTINES AN UNDECLARED SUITE for tree ${tree.slice(0, 12)} — ` +
+        `${ledger.undeclaredQuarantine.join(", ")}; only QUARANTINED_HEAVY_FILES in scripts/test-partition.mjs ` +
+        `can exclude a suite, with the matching bead and a stated reason (8tgnt).`,
+      { undeclaredQuarantine: ledger.undeclaredQuarantine },
+    );
+  }
+  // chrome-agent-platform-mv1jw: the receipt's OWN coverage claim has to be internally possible, and the printed
+  // numbers must come from THIS recomputation rather than from the receipt's fields. Round 2 of the 8tgnt review
+  // proved the gap: a crafted receipt could list the quarantined file in BOTH `covered` and `quarantined`, pass every
+  // structural gate, classify accounting-only, and print "21/21 covered, 1 quarantined" — an impossible claim that
+  // certified a landing. So: a set cannot be both covered and quarantined, the two sets must partition the
+  // enumerated set exactly, and the claimed sets must equal the ones the ledger recomputes.
+  const claimedCovered = Array.isArray(receipt.covered) ? receipt.covered.map(String) : [];
+  const claimedQuarantined = (Array.isArray(receipt.quarantined) ? receipt.quarantined : [])
+    .map((row) => String(row?.file ?? row));
+  const overlap = claimedCovered.filter((file) => claimedQuarantined.includes(file));
+  if (overlap.length > 0) {
+    return refuse(
+      "coverage-overlap",
+      `gate-receipt: HEAVY RECEIPT CLAIMS A SUITE IS BOTH COVERED AND QUARANTINED for tree ${tree.slice(0, 12)} — ` +
+        `${overlap.join(", ")}. A suite either ran or it was excluded; a receipt cannot hold both, and the ` +
+        `contradiction makes its coverage numbers meaningless (mv1jw).`,
+      { overlap, covered: claimedCovered, quarantined: claimedQuarantined },
+    );
+  }
+  const union = new Set([...ledger.covered, ...ledger.quarantined]);
+  const unaccounted = expected.filter((file) => !union.has(file));
+  if (union.size !== expected.length || unaccounted.length > 0) {
+    return refuse(
+      "coverage-incomplete",
+      `gate-receipt: HEAVY RECEIPT'S COVERAGE DOES NOT ACCOUNT FOR THE ENUMERATED SET for tree ${tree.slice(0, 12)} — ` +
+        `covered ${ledger.covered.length} + quarantined ${ledger.quarantined.length} accounts for ${union.size} of ` +
+        `${expected.length}${unaccounted.length ? `; unaccounted: ${unaccounted.join(", ")}` : ""} (mv1jw).`,
+      { covered: ledger.covered, quarantined: ledger.quarantined, unaccounted },
+    );
+  }
+  const sameSet = (a, b) => a.length === b.length && a.every((file) => b.includes(file));
+  // A receipt written before a field existed makes no claim in it, so the cross-check applies only to claims that
+  // are present. Omitting a field cannot gain coverage: the ledger is what certifies and what gets printed.
+  const claimsCovered = Array.isArray(receipt.covered);
+  const claimsQuarantined = Array.isArray(receipt.quarantined);
+  const coverageContradicts =
+    (claimsCovered && !sameSet(claimedCovered, ledger.covered)) ||
+    (claimsQuarantined && !sameSet(claimedQuarantined, ledger.quarantined));
+  if (coverageContradicts) {
+    return refuse(
+      "contradictory-coverage",
+      `gate-receipt: HEAVY RECEIPT'S COVERAGE CONTRADICTS ITS OWN LEDGER for tree ${tree.slice(0, 12)} — ` +
+        `it claims covered [${claimedCovered.join(", ")}] / quarantined [${claimedQuarantined.join(", ")}] but the ` +
+        `ledger's terminal statuses recompute to covered [${ledger.covered.join(", ")}] / quarantined ` +
+        `[${ledger.quarantined.join(", ")}] (mv1jw).`,
+      { claimedCovered, claimedQuarantined, ledgerCovered: ledger.covered, ledgerQuarantined: ledger.quarantined },
+    );
+  }
+  // The numbers every human-facing message prints come from HERE, never from the receipt's own fields.
+  const coverage = {
+    covered: [...ledger.covered],
+    quarantined: ledger.quarantined.map((file) => ({ file, bead: QUARANTINED_HEAVY_FILES[file]?.bead ?? "unstated-bead" })),
+    expected: [...expected],
+    skipped: ledger.bad.map((entry) => entry.file),
+  };
+
   // gutt3: on the environmental-refusal path a wall-clock suite's terminal status IS "refused"
   // (rc 75 by construction), so it is accounted; failed/killed/unknown suites still refuse — a
   // failed suite is a product red no box condition can account for.
@@ -633,6 +801,7 @@ export function checkHeavyReceipt(tree, { now = Date.now(), maxAgeMs = DEFAULT_R
       },
       receipt,
       path,
+      coverage,
     };
   }
   // gezg6: structure is not the whole credential. The receipt's own conditions decide whether this is a
@@ -672,7 +841,7 @@ export function checkHeavyReceipt(tree, { now = Date.now(), maxAgeMs = DEFAULT_R
       line:
         `${headline}\n` +
         `  ${why}: ${numbers}.\n` +
-        `  Functional completeness (every enumerated suite passed, 0 skips, rc 0) is certified; the DURATIONS from ` +
+        `  Functional completeness (${describeReceiptCoverage(receipt)}) is certified; the DURATIONS from ` +
         `this run are not evidence (tu8w9/gezg6).\n` +
         `  Fix the BOX: re-run \`npm run test:heavy\` with no arguments on an idle host for a timing credential.\n` +
         `  Or accept it for ACCOUNTING only: node scripts/gate-receipt.mjs --accept-accounting-only`,
@@ -683,5 +852,5 @@ export function checkHeavyReceipt(tree, { now = Date.now(), maxAgeMs = DEFAULT_R
       path,
     };
   }
-  return { ok: true, outcome: "full", reason: "certified", receipt, path, steal: steal.payload };
+  return { ok: true, outcome: "full", reason: "certified", receipt, path, steal: steal.payload, coverage };
 }
