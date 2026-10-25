@@ -2495,3 +2495,96 @@ Deno.test("fbg7i: a boot measured entirely on a stolen host is an environmental 
   assertEquals(policy.validRuns.length, 0);
   assertStringIncludes(policy.error ?? "", "host CPU steal");
 });
+
+Deno.test("r2l8n: a severe stall INSIDE a steal-invalidated run refuses environmentally — it is never a product red", () => {
+  // Live reproduction (fbg7i exit-run, 2026-10-25 04:54Z): the quiet-window acquirer opened at
+  // steal=0%, load/core=0.04, then the host spiked to 89% steal mid-measurement and a
+  // ~200ms-class task ballooned to 1995ms wall. The pre-r2l8n policy reddened the tree with
+  // 'severe long task breach' — a FAIL verdict from a starved box, which the acceptance
+  // forbids: a starved box yields a refusal.
+  const stolenSample: any = {
+    measurable: true,
+    load1: 1.13,
+    load5: 1.89,
+    cores: 8,
+    loadPerCore: 0.14,
+    activeCompilers: 0,
+    compilerNames: [],
+    stealPct: 89,
+  };
+  const runs = [1, 2, 3, 4, 5].map((run) =>
+    attributeBootRun(
+      run,
+      {
+        composerReadyEndMs: 120,
+        threadListHydratedEndMs: 200,
+        longTasks: run === 1
+          ? [{ name: "self", duration: 1995, startTime: 5906 }, { name: "self", duration: 100, startTime: 1201 }]
+          : [{ name: "self", duration: 93, startTime: 205 }],
+      },
+      [stolenSample],
+      { stealBoundPct: 10 },
+    )
+  );
+  assertEquals(runs[0].invalidatedBySteal, true);
+  assertEquals(runs[0].severeBreaches.length, 1, "1995ms is severe by duration alone");
+  const policy = evaluateBootStagingPolicy(runs);
+  assertEquals(policy.ok, false);
+  assertEquals(policy.environmentalRefusal, true, "all-stolen runs refuse; the stolen run's severe stall must not red the tree");
+  assertStringIncludes((policy.error ?? ""), "host CPU steal");
+  assert(
+    policy.warnings.some((w) => w.includes("severe stall") && w.includes("steal-invalidated")),
+    "the excluded severe stall must still be warned about, not silently dropped",
+  );
+});
+
+Deno.test("r2l8n: valid runs still decide the verdict when a stolen sibling carried a severe stall", () => {
+  const stolenSample: any = {
+    measurable: true, load1: 1.1, load5: 1.0, cores: 8, loadPerCore: 0.14,
+    activeCompilers: 0, compilerNames: [], stealPct: 72,
+  };
+  const quietSample: any = {
+    measurable: true, load1: 0.4, load5: 0.3, cores: 8, loadPerCore: 0.05,
+    activeCompilers: 0, compilerNames: [], stealPct: 2,
+  };
+  const stolenRun = attributeBootRun(
+    1,
+    { composerReadyEndMs: 120, threadListHydratedEndMs: 200, longTasks: [{ name: "self", duration: 800, startTime: 100 }] },
+    [stolenSample],
+    { stealBoundPct: 10 },
+  );
+  const cleanRuns = [2, 3].map((n) =>
+    attributeBootRun(
+      n,
+      { composerReadyDurationMs: 40, composerReadyEndMs: 120, threadListHydratedDurationMs: 60, threadListHydratedEndMs: 200, longTasks: [] },
+      [quietSample],
+      { stealBoundPct: 10 },
+    )
+  );
+  const policy = evaluateBootStagingPolicy([stolenRun, ...cleanRuns]);
+  assertEquals(policy.ok, true, "valid quiet runs with 0 long tasks pass; the stolen sibling cannot red them");
+  assertEquals(policy.environmentalRefusal, false);
+  assertEquals(policy.validRuns.length, 2);
+  assert(
+    policy.warnings.some((w) => w.includes("steal-invalidated")),
+    "the severe stall inside the stolen run is warned, not hidden",
+  );
+});
+
+Deno.test("r2l8n: a severe stall on a LOAD-contended run keeps the pre-steal immediate red", () => {
+  const loadedSample: any = {
+    measurable: true, load1: 22.0, load5: 18.0, cores: 14, loadPerCore: 1.57,
+    activeCompilers: 1, compilerNames: ["cargo"],
+  };
+  const run = attributeBootRun(
+    1,
+    { composerReadyEndMs: 40, threadListHydratedEndMs: 80, longTasks: [{ name: "self", duration: 520, startTime: 30 }] },
+    loadedSample,
+    { stealBoundPct: 10 },
+  );
+  assertEquals(run.invalidatedBySteal, false, "load/builder contention is not steal invalidation");
+  const policy = evaluateBootStagingPolicy([run]);
+  assertEquals(policy.ok, false);
+  assertEquals(policy.environmentalRefusal, false);
+  assertStringIncludes(policy.error!, "severe long task breach");
+});
