@@ -853,7 +853,11 @@ async function runDeno(files, { build = null, omittedReason = null, fileMappingC
     );
   }
   const fileMapping = fileMappingContext ? explainChangedFileMapping({
-    ...fileMappingContext, executedSuites: rc === 0 ? files : [], omitted: inventory.omitted,
+    ...fileMappingContext,
+    executedSuites: rc === 0 ? files : [],
+    omitted: inventory.omitted,
+    // ea2qv: tell the ledger WHY the executed list is empty, so a failed run stops reading as a
+    // selection omission. 0 is a green run and must produce exactly the old rows.
     runExitCode: rc,
   }) : [];
   emitGateLedger({

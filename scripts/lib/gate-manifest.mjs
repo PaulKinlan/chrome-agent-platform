@@ -33,7 +33,7 @@ export function normalizeSuiteList(files = []) {
  * Candidates come from the selector's reverse graph / exact mappings; executed_suites
  * comes only from the runner. The fleet's independent extractor may find additional
  * gaps, but this ledger never claims a selected or omitted suite actually ran.
- * @param {{changed?: string[], candidates?: Record<string, string[]>, executedSuites?: string[], omitted?: Array<{file: string, reason: string}>, unmappable?: Array<{file: string, mechanism: string}>, runExitCode?: number | null}} args
+ * @param {{changed?: string[], candidates?: Record<string, string[]>, executedSuites?: string[], omitted?: Array<{file: string, reason: string}>, unmappable?: Array<{file: string, mechanism: string}>, runExitCode?: number|null}} args
  */
 export function explainChangedFileMapping({ changed = [], candidates = {}, executedSuites = [], omitted = [], unmappable = [], runExitCode = null } = {}) {
   const ran = new Set(executedSuites);
@@ -55,13 +55,24 @@ export function explainChangedFileMapping({ changed = [], candidates = {}, execu
       return { file, status: "mapped", executed_suites: executed, reason: "reachable inspecting suite executed" };
     }
     const omittedReason = reachable.map((suite) => omittedByFile.get(suite)).filter(Boolean);
-    // 7w5k1: on a FAILED run the caller zeroes executedSuites (a failed run certifies
-    // nothing), so every reachable suite reads "not executed" — which falsely implies a
-    // SELECTION omission. Name the real cause: the run failed, so execution cannot be
-    // attributed. A genuinely omitted suite keeps its own omission reason either way.
-    const failedRun = Number.isFinite(runExitCode) && runExitCode !== 0;
+    // chrome-agent-platform-ea2qv: a FAILED run zeroes executedSuites (select-tests.mjs:861, w6kc0 —
+    // correct: a failed run certifies nothing), and the old code then explained the empty list as a
+    // SELECTION omission. It is not one. Reporting a selection hole for a run that failed elsewhere
+    // sends the next reader to inspect the selector instead of the failure — on 2026-10-23 that cost
+    // coord and me a wrong instruction each (chrome-agent-platform-4ml4b, withdrawn for this reason).
+    // A genuinely omitted/unselected suite keeps its own reason: that stays true whatever the rc.
+    const failedRun = Number.isInteger(runExitCode) && runExitCode !== 0;
+    if (failedRun && reachable.length > omittedReason.length) {
+      return {
+        file,
+        status: "unmapped",
+        executed_suites: [],
+        reason:
+          `executed suites not attributable (run failed, rc=${String(runExitCode)}) — see the failure; ` +
+          `no selection omission is claimed for this file`,
+      };
+    }
     const reason = omittedReason.length ? `reachable suite not run: ${omittedReason.join("; ")}`
-      : failedRun && reachable.length ? `executed suites not attributable (run failed, rc=${runExitCode}) — see the failure; no selection omission is claimed for this file`
       : reachable.length ? `reachable suite(s) not executed: ${reachable.join(", ")}`
       : "no executable inspecting suite is reachable from this changed path";
     return { file, status: "unmapped", executed_suites: [], reason };
@@ -309,9 +320,13 @@ export function fullTierManifestFields({
     omitted,
     omittedTotal: omitted.length,
     ...(fileMappingContext ? { fileMapping: explainChangedFileMapping({
-      ...fileMappingContext, executedSuites: rc === 0 ? executedSuites : [], omitted,
-      // 7w5k1: without the exit code the explainer cannot distinguish "the selector
-      // omitted this" from "the run failed", and mislabels the latter as an omission.
+      ...fileMappingContext,
+      executedSuites: rc === 0 ? executedSuites : [],
+      omitted,
+      // ea2qv (review finding 7w5k1): the FULL tier zeroes executed_suites on rc != 0 for the same
+      // w6kc0 reason, so it has to say WHY too — without this the fail-closed FULL path (which is what
+      // selector-infrastructure changes get) still accused the selector of an omission that never
+      // happened. Same rule, same wording, one rc.
       runExitCode: rc,
     }) } : {}),
   };
