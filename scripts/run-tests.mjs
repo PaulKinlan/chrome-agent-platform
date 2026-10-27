@@ -506,6 +506,19 @@ export async function main(args = process.argv.slice(2)) {
     });
     emitGateLedger({ manifest, fileMapping: manifest?.fileMapping ?? [] });
   }
+  // chrome-agent-platform-5xg1w: the LAST line of an incomplete run is the marker the fleet's per-tree
+  // gate cache greps for (fleet-check reads tail -c 8000 of the log for "ABORTED: incomplete suite
+  // run" / "phase not entered, skipped=" and classifies st=INCOMPLETE, which is re-gateable instead of
+  // a cached FAIL). It must come AFTER the manifest JSON, which with hundreds of `omitted` entries can
+  // be far larger than the 8000-byte tail window and would otherwise push every other signal out of it.
+  if (effectiveRc === INCOMPLETE_EXIT) {
+    const detail = unrunCount > 0
+      ? `phase not entered, skipped=${unrunCount}: ${gaps.join("; ")}`
+      : `killed phase(s): ${killedPhases.join("; ")}`;
+    console.error(
+      `run-tests: ABORTED: incomplete suite run — NOT a verdict on the tree (exit ${INCOMPLETE_EXIT}); ${detail}`,
+    );
+  }
   process.exit(effectiveRc);
 }
 

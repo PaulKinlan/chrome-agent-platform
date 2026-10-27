@@ -6,9 +6,17 @@
 // and the always-on guards live in the parallel set. Measured cost: two guard violations reached main
 // from one landing while its full-suite gate reported the guards green, because the guards never ran.
 //
-// THE RULE: a guard result must never be conditional on an unrelated phase passing. So a serial
-// failure now still runs the always-on guard subset, and the run SAYS how much it skipped — a gate
-// that cannot tell you what it ran is the other half of this bead's family.
+// THE RULE: a guard result must never be conditional on an unrelated phase passing.
+//
+// 0o0um/5xg1w UPGRADE: kz27's first compromise ran only the 48-file guard subset after a serial
+// failure and skipped the other ~711 files. That turned ONE serial death (an assertion, or a driver
+// OOM-killed with SIGKILL — not even a product red) into an unadjudicable gate record: 94% of the
+// evidence never ran, yet the run was indistinguishable from a completed FAIL, and a content-addressed
+// cache filed it against the tree permanently. A serial death is a finding about ONE file, not a
+// licence to skip the rest — so a failed serial phase now STILL RUNS the parallel phase in full, and
+// the run is a COMPLETED verdict (red on the serial failure, with every parallel result known).
+// The skip vocabulary below (skipped/gaps/INCOMPLETE) survives only for runs that genuinely cannot
+// continue: test seams and phases killed by their bounds.
 //
 // Pure on purpose: the acceptance is about which files run in which state, so it is unit-tested
 // rather than inferred from the shape of a print statement in a script.
@@ -60,7 +68,8 @@ export function computeParallelPhaseTimeout(filesCount, options = {}) {
   return Math.max(minMs, scaledMs);
 }
 
-/** The always-on files that are also in this run's parallel set. */
+/** The always-on files that are also in this run's parallel set. Kept as the intersection primitive
+ *  select-tests and the unit tests use; the failure plan no longer narrows to it (0o0um/5xg1w). */
 export function guardSubset(parallel, alwaysOn) {
   const on = new Set(alwaysOn);
   return parallel.filter((f) => on.has(f));
@@ -85,28 +94,23 @@ export function parallelPlan({ serialRc, parallel, alwaysOn, failingFiles = [] }
         `running the full parallel phase (${parallel.length} file(s)) with the refusal stated; never quietly skipping files on environmental contention.`,
     };
   }
-  const files = guardSubset(parallel, alwaysOn);
-  const skipped = parallel.length - files.length;
   const names = Array.isArray(failingFiles) && failingFiles.length > 0
     ? ` [${failingFiles.join(", ")}]`
     : "";
-  // chrome-agent-platform-w6kc0: the outcome must never read as a certification of the tree. The run is
-  // INCOMPLETE in the marker a reader greps for, and it names the count, because "698 skipped" inside a
-  // sentence was read past twice while the guard subset came back green.
-  // The log contract keeps BOTH markers a reader greps for: SKIPPED (the historical wording this announcement
-  // has always used, pinned by tests/parallel-plan.test.ts) and INCOMPLETE (the certification verdict w6kc0
-  // added). Replacing one with the other silently changed the log contract; they say different things - what was
-  // omitted, and what that means for the run.
+  // chrome-agent-platform-0o0um/5xg1w: the serial failure no longer narrows the parallel set. The old
+  // guard-subset compromise (kz27) skipped ~711 of 759 files and the gate record could not tell a
+  // consumer which of them would have gone red — unadjudicable evidence, filed as a permanent FAIL
+  // against a content-addressed tree. Now every selected file runs, the serial failure STILL decides
+  // the verdict (combinePhaseExitCodes keeps it red), and the announcement says so. Nothing is
+  // skipped, so there is no INCOMPLETE gap on this route: a completed red IS a verdict on the tree.
   return {
-    files,
-    skipped,
-    incomplete: true,
+    files: parallel,
+    skipped: 0,
     announce:
-      `run-tests: serial file(s) failed${names}, so ${skipped} of ${parallel.length} parallel file(s) are ` +
-      `SKIPPED — except the ALWAYS-ON GUARD SET (${files.length} file(s)), which runs regardless, because a ` +
-      `guard result must never be conditional on an unrelated phase passing. ` +
-      `INCOMPLETE: the parallel phase was skipped after the serial failure (${skipped} file(s) unrun); this ` +
-      `run CANNOT certify the tree.`,
+      `run-tests: serial file(s) failed${names} — the parallel phase STILL RUNS in full ` +
+      `(${parallel.length} file(s)): a serial death is a finding about one file, not a licence to skip ` +
+      `the others. The gate stays RED on the serial failure; every parallel result below is real ` +
+      `evidence, and this run is a COMPLETED verdict, not an abort.`,
   };
 }
 

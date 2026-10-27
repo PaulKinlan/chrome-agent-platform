@@ -23,12 +23,16 @@ The full gate runs in two sequential phases:
 
 **Exit-code vocabulary (chrome-agent-platform-5xg1w).** The runner's exit code is a verdict, not just a
 success flag: **0** completed green · **1** completed, product red (every selected file ran) ·
-**75** environmental refusal · **76 INCOMPLETE** — the run selected files it did NOT execute (a
-serial-phase failure skipped the non-guard parallel files, or a phase was killed by its bound while the
-rc was not a kill code): NOT a verdict on the tree, and a gate cache must not file it as a FAIL
-(the manifest carries `outcome:"incomplete"` and `skipped:N` for consumers that parse it) ·
+**75** environmental refusal · **76 INCOMPLETE** — the run selected files it did NOT execute (a test
+seam declined a phase, or a phase was killed by its bound while the rc was not a kill code): NOT a
+verdict on the tree, and a gate cache must not file it as a FAIL (the manifest carries
+`outcome:"incomplete"` and `skipped:N`, and the run's LAST log line is the cache-visible marker
+`ABORTED: incomplete suite run — … phase not entered, skipped=N`) ·
 **124/137/143** a bound killed the run (also never a verdict; these outrank 76 so the kill stays
-named). A completed FAIL is byte-identically distinguishable from an abort: exit 1 with
+named). A serial-phase failure NO LONGER skips the parallel phase (chrome-agent-platform-0o0um): the
+full parallel phase still runs, so the completed run exits **1** — a genuine product red whose log
+carries every parallel result, adjudicable and cacheable. A completed FAIL is byte-identically
+distinguishable from an abort: exit 1 with
 `outcome:"failed"` vs exit 76 with `outcome:"incomplete"`.
 
 - **Phase 1: Serial Phase (20 hazard files)**
