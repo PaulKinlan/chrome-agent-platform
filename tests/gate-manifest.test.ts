@@ -337,15 +337,24 @@ Deno.test("5xg1w: the full-tier manifest carries a structured outcome and skippe
   assertEquals(fullTierManifestFields({ serialFiles: [], parallelFiles: ["tests/p1.test.ts"], rc: 0 }).outcome, "passed");
   assertEquals(fullTierManifestFields({ serialFiles: [], parallelFiles: ["tests/p1.test.ts"], rc: 75 }).outcome, "refused");
 
-  // A killed phase with no skipped file is still not a completion.
+  // A killed phase with no skipped file is still not a completion. `skipped` is NARROW by contract
+  // (5xg1w review, blocker 2): it counts files with no certified result from a DECLINED or LOST
+  // lane/phase — NOT files lost inside a phase killed mid-flight. Those live in the `incomplete`
+  // reason with the kill's own progress, so skipped:0 beside outcome:"incomplete" can never be read
+  // as complete coverage: the incomplete reason names what the killed phase did not finish.
   const killed = fullTierManifestFields({
     serialFiles: [],
     parallelFiles: ["tests/p1.test.ts"],
     rc: 124,
-    incomplete: "parallel phase killed at its 1800s bound",
+    incomplete: "parallel phase killed at its 1800s bound (108/742 files had completed a test)",
   });
   assertEquals(killed.outcome, "incomplete");
-  assertEquals(killed.skipped, 0);
+  assertEquals(killed.skipped, 0, "nothing was DECLINED; the mid-flight loss is named in incomplete, not counted here");
+  const killedPayload = parse(formatGateManifest(killed));
+  assert(
+    killedPayload.incomplete.includes("108/742 files had completed a test"),
+    `the killed phase's own progress must survive into the wire record: ${JSON.stringify(killedPayload.incomplete)}`,
+  );
 
   // Defensive: skipped files with no reason string must still never format as a completion.
   const silentSkip = fullTierManifestFields({
@@ -356,6 +365,24 @@ Deno.test("5xg1w: the full-tier manifest carries a structured outcome and skippe
   });
   assertEquals(silentSkip.outcome, "incomplete", "a skip is incomplete whatever the phases returned");
   assert(String(silentSkip.incomplete).includes("1 skipped"), silentSkip.incomplete);
+
+  // 5xg1w review, blocker 1: files of a serial lane child that never reported are counted in skipped
+  // and disclosed with their OWN reason — they did not fail, and they were not deliberately skipped.
+  const unreported = fullTierManifestFields({
+    serialFiles: ["tests/serial-a.test.ts"],
+    parallelFiles: ["tests/p1.test.ts"],
+    unreportedFiles: ["tests/chrome-launch-lock.test.ts"],
+    rc: 76,
+    incomplete: "serial lane child never reported a result (1 file(s) unrun): tests/chrome-launch-lock.test.ts",
+  });
+  assertEquals(unreported.skipped, 1, "the unreported file counts as a file with no certified result");
+  assertEquals(unreported.outcome, "incomplete");
+  const unreportedEntry = unreported.omitted.find((o) => o.file === "tests/chrome-launch-lock.test.ts");
+  assert(unreportedEntry, "the unreported file must be disclosed in omitted");
+  assert(
+    unreportedEntry.reason.includes("never reported a result"),
+    `it must carry the unreported reason, not the skip-after-failure wording: ${unreportedEntry.reason}`,
+  );
 });
 
 Deno.test("5xg1w: formatGateManifest validates the outcome vocabulary", () => {

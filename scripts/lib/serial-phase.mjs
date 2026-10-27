@@ -674,7 +674,7 @@ export function serialLaneCommand({ resultPath, files, cwd = undefined, env = pr
  * `failuresOut` in SERIAL declaration order so the summary reads the same.
  *
  * @param {string[]} files
- * @param {{ timeoutMs?: number, perFileTimeoutMs?: Record<string, number> | null, stdio?: import("node:child_process").StdioOptions, cwd?: string, env?: NodeJS.ProcessEnv, failuresOut?: any[], childBoundMs?: number, runLaneFiles?: (files: string[], options: any) => number, spawnLaneChild?: ((lane: any) => { pid: number, kill: () => void, exited: Promise<{ code: number | null, signal: string | null }> }) | null, spawnChild?: typeof spawn }} [options]
+ * @param {{ timeoutMs?: number, perFileTimeoutMs?: Record<string, number> | null, stdio?: import("node:child_process").StdioOptions, cwd?: string, env?: NodeJS.ProcessEnv, failuresOut?: any[], unreportedOut?: string[], childBoundMs?: number, runLaneFiles?: (files: string[], options: any) => number, spawnLaneChild?: ((lane: any) => { pid: number, kill: () => void, exited: Promise<{ code: number | null, signal: string | null }> }) | null, spawnChild?: typeof spawn }} [options]
  * @returns {Promise<number>}
  */
 export async function runSerialLanes(files, {
@@ -684,6 +684,11 @@ export async function runSerialLanes(files, {
   cwd = undefined,
   env = process.env,
   failuresOut = undefined,
+  // chrome-agent-platform-5xg1w review, blocker 1: files of a GLOBAL lane child that exited WITHOUT
+  // writing its result file are UNRUN, not failed — they never reach failuresOut, and a runner that
+  // only counts failures would report a completed verdict over work that never happened. They are
+  // handed back here so the runner's incomplete accounting (gaps → exit 76, manifest skipped:N) sees them.
+  unreportedOut = undefined,
   childBoundMs = undefined,
   // Test seams. `runLaneFiles` and `spawnLaneChild` exist so a unit test can assert the LANE ORDERING
   // and the merge without paying a real deno startup per fixture (a real `deno test` child costs seconds
@@ -785,7 +790,20 @@ export async function runSerialLanes(files, {
           `run-tests: serial lane GLOBAL did not report a result (exit ${code ?? "?"}${signal ? `, signal ${signal}` : ""}` +
             `${killed ? ", killed at its bound" : ""}) — its files are NOT certified`,
         );
-        codes.global = codes.global === 0 ? 1 : codes.global;
+        // 5xg1w review, blocker 1: carry the unreported files to the runner's incomplete accounting —
+        // without this the run reads as a COMPLETED FAIL over files that never produced a result, and a
+        // content-addressed cache files that false verdict permanently against the tree.
+        if (Array.isArray(unreportedOut)) unreportedOut.push(...lanes.global);
+        // Preserve the bound-kill / signal vocabulary where applicable: fleet-check reads 124/137 as
+        // KILLED (never a verdict), and an OOM-killed lane child (SIGKILL → 137, the shape of the
+        // 0o0um incident's second attempt) must not be flattened into a plain product red.
+        if (killed) {
+          codes.global = 124;
+        } else if (code === null && signal) {
+          codes.global = 128 + (os.constants.signals[String(signal).toUpperCase()] ?? 15);
+        } else {
+          codes.global = codes.global === 0 ? 1 : codes.global;
+        }
       }
     }
   } else if (lanes.build.length || lanes.global.length) {
