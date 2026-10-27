@@ -318,3 +318,53 @@ Deno.test("5xg1w blocker 1B: a parallel spawn error is recorded as INCOMPLETE, n
     "a phase that never spawned must never print a GREEN status line",
   );
 });
+
+// chrome-agent-platform-5xg1w review, round 2 — the manifest pin the explicit-file spawn-error test
+// above CANNOT make: an explicit-file run emits no manifest at all, so a never-spawned parallel phase
+// reporting skipped:0 (files counted only in the incomplete TEXT) went unasserted. This is a DEFAULT
+// run: the manifest must count every never-spawned file in skipped and name each in omitted with its
+// own reason. CAP_PARALLEL_SPAWN_COMMAND points the phase spawn at a nonexistent binary (a real
+// ENOENT through the production code path); CAP_RUN_TESTS_SKIP_SERIAL keeps it cheap and makes the
+// exit deterministic (no serial bound-kill code to preserve).
+Deno.test("5xg1w round 2: a never-spawned parallel phase is counted in the DEFAULT-run manifest skipped/omitted", () => {
+  const { code, stdout, stderr } = runChild({
+    CAP_RUN_TESTS_SKIP_SERIAL: "1",
+    CAP_PARALLEL_SPAWN_COMMAND: "/nonexistent/cap-5xg1w-deno",
+  });
+  const out = `${stdout}\n${stderr}`;
+
+  assertEquals(
+    code,
+    INCOMPLETE_EXIT,
+    `a never-spawned phase is unrun work: exit must be ${INCOMPLETE_EXIT}. ${stderr.slice(-1200)}`,
+  );
+  const manifest = manifestFrom(stderr);
+  assert(manifest !== null, `a DEFAULT run must emit a gate manifest. ${stderr.slice(-900)}`);
+  assertEquals(manifest!.outcome, "incomplete");
+  // The whole parallel selection never spawned: skipped must count it (declined serial + lost parallel).
+  assert(
+    Number(manifest!.skipped) >= 759,
+    `skipped must count every never-spawned parallel file, got ${manifest!.skipped}`,
+  );
+  const omitted = manifest!.omitted as Array<{ file: string; reason: string }>;
+  const probe = omitted.filter((o) => o.file === "tests/parallel-plan.test.ts");
+  assert(probe.length > 0, "a never-spawned parallel file must be disclosed in omitted");
+  assert(
+    probe.every((o) => o.reason.includes("never spawned")),
+    `each lost file must carry the never-spawned reason: ${JSON.stringify(probe)}`,
+  );
+  assert(
+    String(manifest!.incomplete).includes("parallel phase child never spawned"),
+    `manifest.incomplete must name the never-spawned phase: ${JSON.stringify(manifest!.incomplete)}`,
+  );
+  // The cache-visible marker stays the LAST line, after the (huge) manifest JSON.
+  assert(out.includes("ABORTED: incomplete suite run"), "the cache-visible abort marker is missing");
+  assert(
+    stderr.lastIndexOf("ABORTED: incomplete suite run") > stderr.lastIndexOf("fast-gate: manifest:"),
+    "the marker must follow the manifest: the JSON alone can exceed the cache's 8000-byte tail window",
+  );
+  assert(
+    !/parallel phase \(\d+ files\) GREEN/.test(out),
+    "a phase that never spawned must never print a GREEN status line",
+  );
+});

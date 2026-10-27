@@ -366,16 +366,21 @@ Deno.test("5xg1w: the full-tier manifest carries a structured outcome and skippe
   assertEquals(silentSkip.outcome, "incomplete", "a skip is incomplete whatever the phases returned");
   assert(String(silentSkip.incomplete).includes("1 skipped"), silentSkip.incomplete);
 
-  // 5xg1w review, blocker 1: files of a serial lane child that never reported are counted in skipped
-  // and disclosed with their OWN reason — they did not fail, and they were not deliberately skipped.
+  // 5xg1w review, blocker 1 + round 2: files LOST with a lane/phase that produced no result — an
+  // unreported serial-lane child, or a parallel child that never spawned — are counted in skipped
+  // and disclosed with their OWN reason. They did not fail, and they were not deliberately skipped;
+  // a never-spawned phase reporting skipped:0 is the same false-coverage shape as the kill case.
   const unreported = fullTierManifestFields({
     serialFiles: ["tests/serial-a.test.ts"],
     parallelFiles: ["tests/p1.test.ts"],
-    unreportedFiles: ["tests/chrome-launch-lock.test.ts"],
+    lostFiles: [
+      { file: "tests/chrome-launch-lock.test.ts", reason: "serial lane child never reported a result — file never ran to a certified verdict in this run" },
+      { file: "tests/p1.test.ts", reason: "parallel phase child never spawned — file never ran in this run" },
+    ],
     rc: 76,
-    incomplete: "serial lane child never reported a result (1 file(s) unrun): tests/chrome-launch-lock.test.ts",
+    incomplete: "serial lane child never reported a result (1 file(s) unrun): tests/chrome-launch-lock.test.ts; parallel phase child never spawned (1 file(s) unrun)",
   });
-  assertEquals(unreported.skipped, 1, "the unreported file counts as a file with no certified result");
+  assertEquals(unreported.skipped, 2, "every lost file counts as a file with no certified result");
   assertEquals(unreported.outcome, "incomplete");
   const unreportedEntry = unreported.omitted.find((o) => o.file === "tests/chrome-launch-lock.test.ts");
   assert(unreportedEntry, "the unreported file must be disclosed in omitted");
@@ -383,6 +388,12 @@ Deno.test("5xg1w: the full-tier manifest carries a structured outcome and skippe
     unreportedEntry.reason.includes("never reported a result"),
     `it must carry the unreported reason, not the skip-after-failure wording: ${unreportedEntry.reason}`,
   );
+  const neverSpawnedEntry = unreported.omitted.filter((o) => o.file === "tests/p1.test.ts").at(-1);
+  assert(
+    neverSpawnedEntry.reason.includes("never spawned"),
+    `a never-spawned phase's file must carry its own reason: ${neverSpawnedEntry.reason}`,
+  );
+  assert(parse(formatGateManifest(unreported)), "the lost-file fields must format into a valid manifest");
 });
 
 Deno.test("5xg1w: formatGateManifest validates the outcome vocabulary", () => {

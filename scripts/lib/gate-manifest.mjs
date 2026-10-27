@@ -314,7 +314,7 @@ export function deferredTierEntries({
  *
  * @param {{
  *   serialFiles?: string[], parallelFiles?: string[], skippedFiles?: string[], failingFiles?: string[],
- *   unreportedFiles?: string[],
+ *   lostFiles?: Array<{ file: string, reason: string }>,
  *   deferred?: Array<{ file: string, reason: string }>, rc: number, cliFiles?: string[],
  *   build?: object | null, fileMappingContext?: object | null,
  *   suiteDurations?: Map<string, number> | Record<string, number> | null,
@@ -327,7 +327,7 @@ export function fullTierManifestFields({
   parallelFiles = [],
   skippedFiles = [],
   failingFiles = [],
-  unreportedFiles = [],
+  lostFiles = [],
   deferred = [],
   rc,
   cliFiles = [],
@@ -344,27 +344,26 @@ export function fullTierManifestFields({
   const omitted = [
     ...deferred.map((entry) => ({ file: entry.file, reason: entry.reason })),
     ...skippedFiles.map((file) => ({ file, reason: skippedReason })),
-    // 5xg1w review, blocker 1: files of a serial lane child that exited WITHOUT reporting. They are
-    // unrun and uncertified, and they get their OWN reason — blaming them on "serial file(s) failed"
-    // would say they were deliberately skipped, which is not what happened.
-    ...unreportedFiles.map((file) => ({
-      file,
-      reason: "serial lane child never reported a result — file never ran to a certified verdict in this run",
-    })),
+    // 5xg1w review, blocker 1 + round 2: files LOST with a lane/phase that produced no result — an
+    // unreported serial-lane child, or a parallel child that never spawned. They are unrun and
+    // uncertified, each with its OWN reason: blaming them on "serial file(s) failed" would say they
+    // were deliberately skipped, and counting them nowhere says the run was complete. Both are false.
+    ...lostFiles.map((entry) => ({ file: entry.file, reason: entry.reason })),
   ];
   // chrome-agent-platform-5xg1w: the structured verdict. `incomplete` (selected files did not run, or a
   // phase died before reporting) outranks every rc-derived label: the serial-phase abort exits 76 and
   // must never be filed as a FAIL verdict on the tree.
   //
   // `skipped` has a DELIBERATELY NARROW meaning (5xg1w review, blocker 2): selected files with NO
-  // CERTIFIED RESULT from a declined or lost lane/phase — planner skips, seam declines, and unreported
-  // serial-lane files. It does NOT count files lost inside a phase that was killed mid-flight: that
-  // phase's own progress ("N/M files had completed a test") lives in the `incomplete` reason, because
-  // only the kill report knows how far it got. So `skipped: 0` beside `outcome: "incomplete"` means
-  // "nothing was declined, but a phase died — read `incomplete`", NEVER complete coverage.
-  // Defensive: the runner always couples skips with a reason (w6kc0 gaps), but a skipped or unreported
+  // CERTIFIED RESULT from a declined or lost lane/phase — planner skips, seam declines, unreported
+  // serial-lane files, and the files of a parallel child that never spawned. It does NOT count files
+  // lost inside a phase that was killed mid-flight: that phase's own progress ("N/M files had
+  // completed a test") lives in the `incomplete` reason, because only the kill report knows how far
+  // it got. So `skipped: 0` beside `outcome: "incomplete"` means "nothing was declined or lost
+  // whole, but a phase died — read `incomplete`", NEVER complete coverage.
+  // Defensive: the runner always couples skips with a reason (w6kc0 gaps), but a skipped or lost
   // file with no reason string must still never format as a passed/failed completion.
-  const unrunTotal = skippedFiles.length + unreportedFiles.length;
+  const unrunTotal = skippedFiles.length + lostFiles.length;
   const incompleteReason = String(incomplete ?? "").trim() ||
     (unrunTotal > 0
       ? `selected file(s) with no certified result (${unrunTotal} skipped/unreported)`

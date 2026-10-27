@@ -51,7 +51,7 @@ const PARALLEL_READY_FILE = process.env.CAP_PARALLEL_READY_FILE;
 const PARALLEL_READY_TIMEOUT_MS = Number(process.env.CAP_PARALLEL_READY_TIMEOUT_MS ?? 60_000);
 
 
-function runParallel(files, phase = "parallel phase", durationsOut = null, killedOut = null) {
+function runParallel(files, phase = "parallel phase", durationsOut = null, killedOut = null, neverRanOut = null) {
   if (!files || files.length === 0) return Promise.resolve(0);
   // Concurrent scheduling cannot identify the stalled file. Announce every
   // candidate BEFORE spawn so even a mid-phase kill leaves names on both streams.
@@ -65,7 +65,10 @@ function runParallel(files, phase = "parallel phase", durationsOut = null, kille
   const phaseTimeoutMs = computeParallelPhaseTimeout(files.length);
   return new Promise((resolve) => {
     let capturedOutput = "";
-    const child = spawn("deno", ["test", "-A", "--config", "deno.runner.jsonc", "--parallel", ...ordered], {
+    // Test seam (5xg1w review): point the phase spawn at a nonexistent binary to drive the real
+    // spawn-error path in a DEFAULT run (an empty-PATH child cannot: the browser prerequisite
+    // refuses first). Used by tests/gate-outcome-child-run.test.ts, never by the gate.
+    const child = spawn(process.env.CAP_PARALLEL_SPAWN_COMMAND || "deno", ["test", "-A", "--config", "deno.runner.jsonc", "--parallel", ...ordered], {
       stdio: ["inherit", "pipe", "pipe"],
       env: { ...process.env, CAP_TEST_RUNNER: "1" },
       detached: true,
@@ -304,11 +307,13 @@ function runParallel(files, phase = "parallel phase", durationsOut = null, kille
       console.error(`run-tests: ${phase} spawn error: ${err.message}`);
       // chrome-agent-platform-5xg1w review, blocker 1: a phase whose child never spawned ran NONE of
       // its files. Recording it in killedPhases puts it in the incomplete accounting (manifest
-      // `incomplete` + exit 76 via incompleteRunExit), so a spawn failure after a serial red can never
-      // be filed as a completed FAIL with "skipped: 0".
+      // `incomplete` + exit 76 via incompleteRunExit), and neverRanOut carries the FILES themselves
+      // so the manifest counts them in skipped/omitted — a never-spawned phase reporting skipped:0
+      // is the same "zero skipped reads as complete coverage" lie (coord review, round 2).
       if (killedOut) {
         killedOut.push(`${phase} spawn error: ${err.message} — the phase never ran (${files.length} file(s) unrun)`);
       }
+      if (neverRanOut) neverRanOut.push(...files);
       resolve(1);
     });
   });
@@ -427,8 +432,8 @@ export async function main(args = process.argv.slice(2)) {
   // never ran — the same false verdict, reached through the lane machinery instead of a seam.
   const declinedSerial = skipSerial ? serialFiles.length : 0;
   const unrunSerial = declinedSerial + serialUnreported.length;
-  const unrunParallel = stopAfterSerial ? parallel.length : plan.skipped;
-  const unrunCount = unrunSerial + unrunParallel;
+  const unrunParallelDeclined = stopAfterSerial ? parallel.length : plan.skipped;
+  const plannedUnrunCount = unrunSerial + unrunParallelDeclined;
   const gaps = [];
   if (declinedSerial > 0) gaps.push(`serial phase skipped (${declinedSerial} file(s) unrun)`);
   if (serialUnreported.length > 0) {
@@ -437,11 +442,11 @@ export async function main(args = process.argv.slice(2)) {
         serialUnreported.join(", "),
     );
   }
-  gaps.push(...certificationGaps({ skipped: unrunParallel }));
+  gaps.push(...certificationGaps({ skipped: unrunParallelDeclined }));
   // A selection whose ENTIRE content was skipped is incomplete regardless of phase: nothing ran, so nothing
   // can be certified, even if the arithmetic above somehow produced no gap.
   const selectedTotal = serialFiles.length + parallel.length;
-  if (selectedTotal > 0 && unrunCount >= selectedTotal && !gaps.length) {
+  if (selectedTotal > 0 && plannedUnrunCount >= selectedTotal && !gaps.length) {
     gaps.push(`the whole selection was skipped (${selectedTotal} file(s) unrun)`);
   }
   // Extract reviewed readers from the parallel plan; SERIAL has fully ended.
@@ -453,11 +458,19 @@ export async function main(args = process.argv.slice(2)) {
   // jtrny: every phase the bound killed, so the planner summary can refuse to read as a completion and
   // the manifest can carry the reason instead of leaving a reader to infer it from an rc.
   const killedPhases = [];
+  // 5xg1w review round 2: the selected files of a parallel child that NEVER SPAWNED. Known only after
+  // the phases ran, so they join the accounting below the phase calls — counted in the summary, the
+  // gaps, the manifest's skipped/omitted, and the marker, exactly like a lost serial lane.
+  const neverSpawnedFiles = [];
   const readOnlyRc = stopAfterSerial ? 0 : await runReadOnlyDistBatch(readOnly,
-    (files) => runParallel(files, "post-build read-only phase", suiteDurations, killedPhases));
+    (files) => runParallel(files, "post-build read-only phase", suiteDurations, killedPhases, neverSpawnedFiles));
   // Preserve kz27: a failed builder OR read-only guard must not hide the
   // independent parallel guards; both phases run and the first failure wins.
-  const parallelRc = stopAfterSerial ? 0 : await runParallel(other, "parallel phase", suiteDurations, killedPhases);
+  const parallelRc = stopAfterSerial ? 0 : await runParallel(other, "parallel phase", suiteDurations, killedPhases, neverSpawnedFiles);
+  if (neverSpawnedFiles.length > 0) {
+    gaps.push(`parallel phase child never spawned (${neverSpawnedFiles.length} file(s) unrun)`);
+  }
+  const unrunCount = plannedUnrunCount + neverSpawnedFiles.length;
   const rc = combinePhaseExitCodes(serialRc, readOnlyRc, parallelRc);
   // w6kc0: a skip is a certification gap regardless of the phase exit codes, so the outcome can never
   // be a plain rc. 5xg1w: and an incomplete run gets its OWN exit code (76), not the exit-1 shape of a
@@ -504,9 +517,19 @@ export async function main(args = process.argv.slice(2)) {
       serialFiles,
       parallelFiles: plan.files,
       skippedFiles,
-      // 5xg1w review, blocker 1: lane-child files with no reported result are counted and named here,
-      // so the manifest's skipped/omitted disclosure covers work that was LOST, not only work declined.
-      unreportedFiles: serialUnreported,
+      // 5xg1w review, blocker 1 + round 2: files LOST with a lane/phase that produced no result are
+      // counted and named here, so the manifest's skipped/omitted disclosure covers work that was
+      // LOST, not only work declined — each with the reason that is true for it.
+      lostFiles: [
+        ...serialUnreported.map((file) => ({
+          file,
+          reason: "serial lane child never reported a result — file never ran to a certified verdict in this run",
+        })),
+        ...neverSpawnedFiles.map((file) => ({
+          file,
+          reason: "parallel phase child never spawned — file never ran in this run",
+        })),
+      ],
       failingFiles,
 
       // One reason per file from the tier that owns it (review P1-B): build-behaviour files run in

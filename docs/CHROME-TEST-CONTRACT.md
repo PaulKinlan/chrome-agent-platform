@@ -33,7 +33,8 @@ named). A serial-phase failure NO LONGER skips the parallel phase (chrome-agent-
 full parallel phase still runs, so the completed run exits **1** — a genuine product red whose log
 carries every parallel result, adjudicable and cacheable. Manifest `skipped` is NARROW by contract: it
 counts selected files with no certified result from a DECLINED or LOST lane/phase (planner skips, seam
-declines, serial-lane children that exited without reporting); files lost inside a phase killed
+declines, serial-lane children that exited without reporting, and parallel children that never
+spawned); files lost inside a phase killed
 mid-flight are named in `incomplete` with that phase's own progress instead, so `skipped: 0` beside
 `outcome: "incomplete"` never means complete coverage. A completed FAIL is byte-identically
 distinguishable from an abort: exit 1 with
