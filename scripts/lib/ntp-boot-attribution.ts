@@ -735,10 +735,22 @@ export function evaluateBootStagingPolicy(
     );
   }
 
-  // 2. Check 1: Catastrophic stalls (> 500ms) fail immediately even if the host was loaded
+  // 2. Check 1: Catastrophic stalls (> 500ms). Pre-63o3v these failed on ANY host; the 63o3v
+  // review (F2) pointed out that violates the bead's own acceptance - at 48% steal a "500ms task"
+  // can be host scheduling, not page work. The envelope rule applies here too: a severe breach
+  // measured OUTSIDE the declared envelope is not evidence. A severe breach INSIDE the envelope
+  // stays a product red, and a red always supersedes a refusal (the mr1ak rule).
+  const envelopeSevereBreaches: string[] = [];
   for (const r of runs) {
     if (r.severeBreaches.length > 0) {
       const details = r.severeBreaches.map(formatTaskAttribution).join("; ");
+      if (r.hostOutsideEnvelope) {
+        envelopeSevereBreaches.push(
+          `Run ${r.run}: severe long task breach ${details} measured outside the declared envelope ` +
+          `(load/core ${r.hostWorstLoadPerCore ?? "unknown"} vs <= ${r.hostQuietBound}; steal ${r.hostStealPct == null ? "unmeasured" : r.hostStealPct.toFixed(1) + "%"}${r.hostStealCeilingPct == null ? "" : ` vs < ${r.hostStealCeilingPct}%`})`,
+        );
+        continue;
+      }
       return {
         ok: false,
         environmentalRefusal: false,
@@ -748,6 +760,20 @@ export function evaluateBootStagingPolicy(
         contendedRuns,
       };
     }
+  }
+  if (envelopeSevereBreaches.length > 0) {
+    const detail = `${envelopeSevereBreaches.join("; ")} — a severe stall outside the envelope is host ` +
+      `contention until proven otherwise (63o3v), so this is a refusal, not a page verdict`;
+    const refusal = new BootStagingEnvironmentalRefusalError(runs, detail);
+    return {
+      ok: false,
+      environmentalRefusal: true,
+      refusalError: refusal,
+      error: `ENVIRONMENT: ntp-boot-staging refusal — ${detail}`,
+      warnings,
+      validRuns,
+      contendedRuns,
+    };
   }
 
   // 3. Check 2: If ALL N runs are contended, REFUSE with a named environmental refusal — never a silent pass!

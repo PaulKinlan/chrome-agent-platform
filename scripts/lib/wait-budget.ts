@@ -278,6 +278,13 @@ export function classifyDeadlineExpiry(
   }
   const reasons = quietReasons(sample, spec);
   if (steal) {
+    // The DECLARED envelope is enforced independently of the (env-overridable) spec:
+    // CAP_QUIET_MAX_LOAD_PER_CORE=1 must not let a measured 0.5/core receive a product
+    // verdict when the budget was declared at 0.35 (63o3v review F3). The declared bound
+    // is the contract; the spec's own quiet rule still applies alongside it.
+    if (sample.loadPerCore > steal.definedAt.maxLoadPerCore) {
+      reasons.push(`load/core ${sample.loadPerCore.toFixed(2)} > declared envelope ${steal.definedAt.maxLoadPerCore}`);
+    }
     // The steal axis: the load-only quiet window cannot see a starved hypervisor.
     if (steal.stealPct == null) {
       reasons.push("steal unmeasurable");

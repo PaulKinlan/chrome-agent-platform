@@ -706,9 +706,12 @@ Deno.test("mujlt: isolated severe breach (> 500ms) fails immediately even under 
   const run3 = attributeBootRun(3, { composerReadyEndMs: 35, threadListHydratedEndMs: 70, longTasks: [] }, loadedSample);
 
   const policy = evaluateBootStagingPolicy([run1, run2, run3]);
-  assertEquals(policy.ok, false, "severe breach exceeding loaded ceiling must fail even under host load");
-  assertEquals(policy.environmentalRefusal, false);
-  assertStringIncludes(policy.error!, "severe long task breach detected");
+  // RE-ANCHORED (63o3v review F2): "severe stalls red on any host" violated the bead's own
+  // acceptance - on a starved box a 520ms task can be host scheduling. Outside the declared
+  // envelope a severe breach now REFUSES; only an in-envelope severe breach is a product red.
+  assertEquals(policy.ok, false);
+  assertEquals(policy.environmentalRefusal, true, "a severe breach outside the envelope refuses (63o3v F2)");
+  assertStringIncludes(policy.error!, "severe long task breach");
   assertStringIncludes(policy.error!, "duration=520ms");
 });
 
@@ -2310,7 +2313,10 @@ Deno.test("mr1ak: a SEVERE stall on a loaded box is still a product red (catastr
   assertEquals(runs[0].severeBreaches.length, 1, "620ms is a severe breach");
   const policy = evaluateBootStagingPolicy(runs);
   assertEquals(policy.ok, false);
-  assertEquals(policy.environmentalRefusal, false, "severe stalls are a product red on any host");
+  // RE-ANCHORED (63o3v review F2): these runs are ABOVE the load bound, hence outside the
+  // declared envelope - a severe stall there refuses; the in-envelope severe red is pinned
+  // by the 63o3v tests below.
+  assertEquals(policy.environmentalRefusal, true, "severe stalls OUTSIDE the envelope refuse; only in-envelope severe stalls red");
   assertStringIncludes(policy.error!, "severe long task breach");
 });
 
@@ -2421,4 +2427,27 @@ Deno.test("63o3v: unmeasurable steal fails CLOSED to outside-envelope; omitting 
   assertEquals(legacy.hostStealCeilingPct, null);
   assertEquals(legacy.hostAboveStealCeiling, false);
   assertEquals(legacy.hostOutsideEnvelope, false, "no steal argument = load-only envelope, pre-63o3v behaviour unchanged");
+});
+
+Deno.test("63o3v F2: a SEVERE task under hypervisor starvation REFUSES; a severe task inside the envelope stays a product red", () => {
+  const severeRun = (n: number, stealPct: number | null) =>
+    attributeBootRun(n, {
+      composerReadyEndMs: 40,
+      threadListHydratedEndMs: 80,
+      longTasks: [{ name: "self", duration: 620, startTime: 30 }],
+    }, QUIET_BOX_SAMPLE, { pct: stealPct, ceilingPct: 20 });
+
+  // The bead's acceptance shape: quiet by load (0.01/core) but 47.9% steal - a starved box
+  // must not produce result=fail, severe breach included.
+  const starved = evaluateBootStagingPolicy([severeRun(1, 47.9), severeRun(2, 48.9), severeRun(3, 36.1)]);
+  assertEquals(starved.ok, false);
+  assertEquals(starved.environmentalRefusal, true, "severe + starved = refusal, never a product red (the bead's acceptance)");
+  assertStringIncludes(starved.error!, "severe long task breach");
+  assertStringIncludes(starved.error!, "steal");
+
+  // Same 620ms breach measured INSIDE the envelope: the product's, on any in-envelope host.
+  const inEnvelope = evaluateBootStagingPolicy([severeRun(1, 3.1)]);
+  assertEquals(inEnvelope.ok, false);
+  assertEquals(inEnvelope.environmentalRefusal, false, "severe + in-envelope = product red (a refusal never supersedes a red)");
+  assertStringIncludes(inEnvelope.error!, "severe long task breach detected");
 });
