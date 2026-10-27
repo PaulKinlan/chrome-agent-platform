@@ -6,8 +6,10 @@ surfaced a new instance of the same class: an environmental refusal outranking a
 red. That is a policy engine with ordering bugs, and it will keep reappearing seam-by-seam until
 the ordering is stated once, in one place, and every verdict flows through it.
 
-The wall-clock machinery is a **policy engine over evidence**. Every observation a suite makes is
-`(value, envelopeStatus)` where `envelopeStatus ∈ {in, out, unknown}`. The engine's whole job is
+The wall-clock machinery is a **policy engine over evidence**. Under this design, every
+observation a suite makes is `(value, envelopeStatus)` where `envelopeStatus ∈ {in, out,
+unknown}` — a shape the 63o3v/38czq stack will introduce; today's suite still threads
+`BootStagingRunResult` fields through imperative early returns. The engine's whole job is
 to turn a set of observations into one of three verdicts: `product-red`, `environmental-refusal`,
 `pass`. Every historical defect in this class is the engine reaching a verdict while ignoring or
 inverting one of the five invariants below.
@@ -28,9 +30,10 @@ only contribute to the REASON of a refusal, never to a verdict.
 
 **I3 — Declared bounds come from the registry and cannot be widened by environment override for
 certification purposes.**
-`WALL_CLOCK_BUDGETS[suite#phase].definedAt` is the contract. `CAP_QUIET_*` env vars tune the
-operator experience (how long to wait for a quiet window), never what counts as inside the
-envelope. Any path that derives the certification bound from `resolveSpec()` alone is a hole,
+Under this design, `WALL_CLOCK_BUDGETS[suite#phase].definedAt` — a registry the 63o3v/38czq
+stack will introduce — is the contract. `CAP_QUIET_*` env vars must tune only the operator
+experience (how long to wait for a quiet window), never what counts as inside the envelope. Any
+path that derives the certification bound from `resolveSpec()` alone is a hole,
 because `CAP_QUIET_MAX_LOAD_PER_CORE=1` then admits a 0.5/core measurement against a declared
 0.35.
 
@@ -51,7 +54,10 @@ Given the set of observations for a budgeted behaviour:
 
 1. **Collect everything first.** No early returns. Every check — severe stalls, marginal tasks,
    latencies, content assertions — records into one evidence list tagged in/out/unknown.
-2. If ANY in-envelope observation is a product failure → **product-red** (I1, I5).
+2. If ANY product CONTENT failure is observed (a 404, a CSP violation, a runtime exception —
+   content evidence is category-different from wall-clock measurements and reds the product
+   regardless of host envelope status), OR any in-envelope wall-clock observation is a product
+   failure → **product-red** (I1, I5).
 3. Else if NO in-envelope observation exists → **environmental-refusal**, reason naming what was
    outside the envelope (I2, I5). "Unknown" envelope status counts as not-in (fail closed).
 4. Else → **pass** (in-envelope evidence exists and is clean; out-of-envelope observations are
@@ -101,9 +107,9 @@ product evidence run BEFORE any gate is consulted (I1 applied to program order).
    new-process detection (a comm-level `/proc` walk is cheap; full `stat` only for heavy-named
    newcomers) or the optimisation is reverted — I4 is not negotiable and "fast but blind to new
    builders" is not a sampling path.
-5. **`resolveSpec()` env overrides are documented and enforced as wait-tuning only.** The
-   certification bound is the registry's. Any current caller using the spec's `maxLoadPerCore` for
-   a VERDICT (rather than for how long to wait) is a bug of the F3 shape.
+5. **`resolveSpec()` env overrides must be documented and enforced as wait-tuning only.** The
+   certification bound must be the registry's. Any current caller using the spec's
+   `maxLoadPerCore` for a VERDICT (rather than for how long to wait) is a bug of the F3 shape.
 
 ## Non-goals
 
@@ -111,5 +117,6 @@ product evidence run BEFORE any gate is consulted (I1 applied to program order).
   via the aggregator) and the registry stay as built on the parked stack tips.
 - The quarantine of `ntp-boot-staging-timing` (8tgnt/ksnsa) is untouched; this design is what lets
   it rejoin honestly.
-- The allowlisted re-tuning inventory (`tests/wall-clock-budget-registry.test.ts`) stays an
-  inventory; converting those suites is follow-on work (8dqfg), not this bead.
+- The allowlisted re-tuning inventory (`tests/wall-clock-budget-registry.test.ts`, introduced by
+  the 63o3v/38czq stack) stays an inventory; converting those suites is follow-on work (8dqfg),
+  not this bead.
