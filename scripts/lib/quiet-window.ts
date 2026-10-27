@@ -422,21 +422,72 @@ export async function readLoadSample(prev?: ProcCpuMap | null, deps: LoadSampleD
   // 9z8xs review (P1, coord 2026-10-27): an UNBASELINED read counts every heavy-NAMED process as
   // active — classifyActiveBuilders(null, cpu) has no before-ticks to compare — so two PARKED
   // builder daemons read as contention at ordinary load and trigger refusals the box did not earn.
-  // A caller with no predecessor gets a self-baselined sample: the first read is the baseline, one
-  // activity window passes, and the verdict comes from the second read, where a parked daemon shows
-  // no cpu delta and stops counting. Callers that pass prev are unchanged; a box that cannot be
-  // sampled stays unmeasurable (fails closed) at either step.
-  if (prev == null && sample.measurable && sample.cpu) {
+  // A caller with no predecessor gets a self-baselined sample when there is anything to
+  // misattribute: with zero builder-named processes an unbaselined read is already correct, so the
+  // common path pays nothing. When builders ARE named, the verdict read is TARGETED — only the
+  // pids the baseline saw are re-read (/proc/<pid>/stat each, microseconds) — because the mkax
+  // contract (a quiet-enough box starts at once) cannot pay a second full /proc walk, which costs
+  // over a second under fleet load. A parked daemon shows no cpu delta and stops counting.
+  // Callers that pass prev are unchanged; a box that cannot be sampled stays unmeasurable (fails
+  // closed) at either step.
+  // ...but only on the REAL /proc path: a caller that injected the table (deps.runPs /
+  // deps.loadavg / hasProc:false) drives its own baselines explicitly, and a targeted
+  // re-read cannot replicate an injected table (30429's pin caught exactly this).
+  const injectedTable = deps.runPs !== undefined || deps.loadavg !== undefined || deps.hasProc === false;
+  if (
+    prev == null && !injectedTable && sample.measurable && sample.cpu && sample.cpu.size > 0 &&
+    (sample.compilers ?? 0) > 0 && HAS_PROC
+  ) {
     await sleep(BASELINE_ACTIVITY_MS);
-    const rebased = await readWithTruncationRetry(sample.cpu);
-    if (rebased.measurable) return { ...rebased, selfBaselined: true };
-    return rebased;
+    const rebased = await targetedRebase(sample, deps);
+    if (rebased) return rebased;
+    // The targeted read could not run (proc went unreadable mid-window): fall back to one full
+    // baselined re-scan rather than return an unbaselined verdict.
+    const full = await readWithTruncationRetry(sample.cpu);
+    if (full.measurable) return { ...full, selfBaselined: true };
+    return full;
   }
   return sample;
 }
 
 /** The activity window between an unbaselined first read and the baselined verdict read. */
 export const BASELINE_ACTIVITY_MS = 250;
+
+/**
+ * The cheap verdict read of the self-baseline (9z8xs review P1): re-read ONLY the builder pids
+ * the baseline saw, refresh the load average, and classify activity against the baseline. Null
+ * when /proc cannot be read at all (the caller then falls back to a full re-scan). Pids that
+ * exited in the window are absent from `curr`, hence not active — an exited builder is not
+ * contention.
+ */
+async function targetedRebase(baseline: LoadSample, deps: LoadSampleDeps): Promise<LoadSample | null> {
+  try {
+    const curr: ProcCpuMap = new Map();
+    for (const [pid, prevEntry] of baseline.cpu!) {
+      try {
+        const parsed = parseProcStatCpu(await Deno.readTextFile(`/proc/${pid}/stat`), prevEntry.name);
+        if (parsed) curr.set(pid, parsed);
+      } catch { /* exited in the window: absent from curr, hence not active */ }
+    }
+    const [load1, load5, load15] = (deps.loadavg ?? (() => Deno.loadavg()))();
+    const activePids = classifyActiveBuilders(baseline.cpu, curr);
+    const activeNames = [...new Set(activePids.map((pid) => curr.get(pid)?.name ?? "").filter(Boolean))];
+    return {
+      ...baseline,
+      at: Date.now(),
+      load1, load5, load15,
+      loadPerCore: load1 / baseline.cores,
+      cpu: curr,
+      activeCompilers: activePids.length,
+      activeCompilerNames: activeNames.slice(0, 8),
+      activeBuilderJobs: countBuilderJobs(activePids, curr),
+      unbaselined: false,
+      selfBaselined: true,
+    };
+  } catch {
+    return null;
+  }
+}
 
 const HAS_PROC = (() => {
   try { return Deno.statSync("/proc").isDirectory; } catch { return false; }
