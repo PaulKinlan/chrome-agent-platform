@@ -11,6 +11,7 @@ import { readLoadSample } from "../scripts/lib/quiet-window.ts";
 import {
   classifyDeadlineExpiry,
   deadlineRefusalError,
+  isHarnessTimeoutError,
   refuseUnlessMeasurablyQuiet,
   waitBudgetSpec,
 } from "../scripts/lib/wait-budget.ts";
@@ -388,16 +389,11 @@ Deno.test("20e2u condition (e): load ntp, sidepanel, options in real Chrome; all
     // quiet box the original error stands. Content assertions (AssertionError:
     // chunk 404s, CSP violations, the quiet-box readyState red) pass through
     // unchanged - this catch never launders a product failure.
-    const msg = error instanceof Error ? error.message : String(error);
-    // 9z8xs re-review (P2-c): reclassify ONLY identified harness timeouts, never a
-    // generic "timed out" - a genuine assertion timeout is a product red and must not
-    // be laundered into a refusal. Matches: waitForServiceWorker's bare "deadline" and
-    // the CDP machinery's own phrasing (chrome-launch/openCdp). An error already
-    // carrying the refusal marker is a refusal - propagate it untouched.
-    const isBareTiming =
-      !(error instanceof AssertionError) &&
-      !msg.includes(ENVIRONMENTAL_REFUSAL_MARKER) &&
-      (msg === "deadline" || /cdp timeout|deadline exceeded/i.test(msg));
+    // 9z8xs re-review (P2-c, second round): reclassify ONLY identified harness timeout
+    // TYPES, matched by class via isHarnessTimeoutError (pinned in wait-budget.test.ts) -
+    // never message text. A page-origin PageThrowError whose text happens to read
+    // "deadline exceeded" is a product failure and passes through (chrome-launch.ts:1404).
+    const isBareTiming = !(error instanceof AssertionError) && isHarnessTimeoutError(error);
     if (isBareTiming) {
       const sample = await readLoadSample().catch(() => null);
       const verdict = classifyDeadlineExpiry(sample, QUIET_SPEC);

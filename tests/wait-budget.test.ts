@@ -10,10 +10,13 @@
 // Every sample below is hand-built: the discrimination is proven without
 // manufacturing machine load (the quiet-window rule for pinnable classifiers).
 
-import { assert, assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
+import { assert, assertEquals, assertStringIncludes, AssertionError } from "jsr:@std/assert@1";
+import { PageThrowError } from "../scripts/lib/cdp-eval.ts";
+import { ServiceWorkerTargetTimeoutError } from "../scripts/lib/chrome-launch.ts";
 import {
   classifyDeadlineExpiry,
   deadlineRefusalError,
+  isHarnessTimeoutError,
   refuseUnlessMeasurablyQuiet,
   waitBudgetSpec,
 } from "../scripts/lib/wait-budget.ts";
@@ -122,4 +125,29 @@ Deno.test("9z8xs classification: a measurably QUIET box keeps the product red (n
   );
   const twoJobs = sample({ compilers: 4, compilerNames: ["esbuild", "rustc"], activeCompilers: 4, activeBuilderJobs: 2 });
   assertEquals(classifyDeadlineExpiry(twoJobs, SPEC).environmental, true, "two builder jobs exceed the spec and refuse");
+});
+
+Deno.test("9z8xs P2-c (second round): isHarnessTimeoutError matches ONLY the untyped withTimeout spelling", () => {
+  // The laundering case the review caught: a page-origin throw whose text reads
+  // "deadline exceeded" must NOT reclassify into an environmental refusal.
+  assertEquals(
+    isHarnessTimeoutError(new PageThrowError("Runtime.evaluate deadline exceeded (20000ms budget)")),
+    false,
+    "a page-origin throw is a product failure even when its text matches a harness timeout",
+  );
+  assertEquals(isHarnessTimeoutError(new PageThrowError("deadline")), false, "a page throw is never a harness error, text be damned");
+  // The typed harness timeouts SELF-CLASSIFY at their source (marker or PRODUCT RED
+  // prefix) - the catch must not re-measure them, so they never match here.
+  const swErr = new ServiceWorkerTargetTimeoutError(
+    "PRODUCT RED (not environmental): waitForServiceWorker: Target.getTargets: deadline exceeded",
+    { totalTimeoutMs: 1, callTimeoutMs: 1, attempts: 1, timedOutCalls: 1, liveChrome: 0, verdict: {}, lastError: null } as never,
+  );
+  assertEquals(isHarnessTimeoutError(swErr), false, "a self-classified typed timeout propagates, never reclassified");
+  // The one legitimate target: withTimeout's untyped bare deadline (chrome-launch.ts:1764).
+  assertEquals(isHarnessTimeoutError(new Error("deadline")), true, "the untyped withTimeout spelling is the catch's whole job");
+  // Exclusions: assertions, marker carriers, generic timeout text, non-errors.
+  assertEquals(isHarnessTimeoutError(new AssertionError("deadline")), false);
+  assertEquals(isHarnessTimeoutError(new Error(`${ENVIRONMENTAL_REFUSAL_MARKER} {...}`)), false);
+  assertEquals(isHarnessTimeoutError(new Error("operation timed out")), false, "generic timeout text never matches");
+  assertEquals(isHarnessTimeoutError("deadline"), false, "a non-Error never matches");
 });

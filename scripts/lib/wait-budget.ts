@@ -32,7 +32,32 @@ import {
   type LoadSample,
   type ResolvedSpec,
 } from "./quiet-window.ts";
+import { AssertionError } from "jsr:@std/assert@1";
 import { ENVIRONMENTAL_REFUSAL_MARKER } from "./environmental-verdict.mjs";
+import { PageThrowError } from "./cdp-eval.ts";
+
+/**
+ * The catch-side discriminator of the refusal contract, extracted so it is pinnable
+ * (9z8xs re-review P2-c, second round): TRUE only for the ONE untyped harness timeout
+ * spelling that escapes classification - withTimeout's bare Error("deadline")
+ * (chrome-launch.ts:1764). Every TYPED harness timeout self-classifies at its source:
+ * ServiceWorkerTargetTimeoutError and the Cdp*TimeoutError classes carry either the
+ * refusal marker or a "PRODUCT RED" prefix, and both must propagate untouched - a
+ * catch that re-measures them would override the machinery's own verdict. A
+ * page-origin PageThrowError whose text reads "deadline exceeded" is a product
+ * failure; generic timeout TEXT never matches. Nothing else may be laundered.
+ */
+export function isHarnessTimeoutError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  // Class BEFORE text: an in-page `throw new Error("deadline")` arrives as a PageThrowError
+  // with exactly the harness spelling (pinned by the P2-c test) - page origin, never a harness
+  // timeout. An AssertionError is a test verdict - never reclassifiable, whatever its text.
+  if (error instanceof PageThrowError) return false;
+  if (error instanceof AssertionError) return false;
+  if (error.message.includes(ENVIRONMENTAL_REFUSAL_MARKER)) return false;
+  if (error.message.startsWith("PRODUCT RED")) return false;
+  return error.message === "deadline";
+}
 
 /** The canonical quiet thresholds (CAP_QUIET_* env overridable), resolved once per caller. */
 export function waitBudgetSpec(spec: Partial<ResolvedSpec> = {}): ResolvedSpec {
