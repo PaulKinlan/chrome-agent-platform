@@ -160,11 +160,12 @@ function atLeast(version: string, floor: string): boolean {
 }
 
 Deno.test("behrd: every advisory-patched dependency is patched in BOTH lockfiles", () => {
-  // Four findings from the 2026-10-18 nightly (chrome-agent-platform-behrd), each bumped rather than waved
+  // Five findings across the 2026-10-18 and 2026-10-27 nightlies (chrome-agent-platform-behrd,
+  // chrome-agent-platform-e7lsv), each bumped rather than waved
   // through, and each pinned here so a later lockfile regeneration cannot quietly walk back under the fix.
   //
-  // Reachability, recorded rather than assumed (all four are transitive and NONE of the advisory paths is on
-  // our executed path today - that is why this is P3 and why the fix is still worth taking):
+  // Reachability, recorded rather than assumed (all five are transitive and NONE of the advisory paths is on
+  // our executed path today - that is why they are P3 and why the fixes are still worth taking):
   //   hono        GHSA-hxh3-vqpv-xpqv  hono/jsx SSR string escaping (XSS). We import server.js and
   //                                    webStandardStreamableHttp.js only, never the jsx renderer.
   //   ip-address  GHSA-j6r3-76f7-8jcv  isInSubnet/isHostInSubnet family confusion. Reached only through
@@ -174,11 +175,21 @@ Deno.test("behrd: every advisory-patched dependency is patched in BOTH lockfiles
   //                                    configured `trust proxy`; we configure none.
   //   undici      GHSA-3wwx-pv8p-q78v  WebSocket permessage-deflate zlib DoS. Reached through the AI SDK's
   //                                    provider-utils, whose requests are plain fetch; no WebSocket path.
+  //   body-parser GHSA-27r3-jxmh-p828  trailing-bytes DoS in URL-encoded/JSON parsing (e7lsv, 2026-10-27).
+  //                                    Reached only through express, which the @modelcontextprotocol/sdk
+  //                                    express subpath pulls in; our only MCP server transport is
+  //                                    WebStandardStreamableHTTPServerTransport (scripts/lib/acp-tools.ts),
+  //                                    which never goes through express body parsing, and no file under
+  //                                    scripts/, extension/, packages/ or tools/ imports express or
+  //                                    body-parser directly. Unreachable today; bumped so the advisory
+  //                                    stops re-opening nightly. The qs row rides along: body-parser 2.4.0
+  //                                    needs qs ^6.16.1, so both lockfiles move qs to 6.17.0 with it.
   const patched: Array<{ name: string; floor: string; advisory: string; denoName?: string }> = [
     { name: "hono", floor: "4.13.7", advisory: "GHSA-hxh3-vqpv-xpqv", denoName: "hono" },
     { name: "ip-address", floor: "10.7.1", advisory: "GHSA-j6r3-76f7-8jcv", denoName: "ip-address" },
     { name: "proxy-addr", floor: "2.0.8", advisory: "GHSA-jqcg-44mw-7w3h", denoName: "proxy-addr" },
     { name: "undici", floor: "7.29.1", advisory: "GHSA-3wwx-pv8p-q78v", denoName: "undici" },
+    { name: "body-parser", floor: "2.4.0", advisory: "GHSA-27r3-jxmh-p828", denoName: "body-parser" },
   ];
   for (const { name, floor, advisory, denoName } of patched) {
     const npm = npmLock.packages[`node_modules/${name}`];
@@ -204,6 +215,8 @@ Deno.test("behrd falsification: atLeast refuses the versions this bead bumped AW
   assertEquals(atLeast("10.7.0", "10.7.1"), false, "ip-address 10.7.0 is the version that was vulnerable");
   assertEquals(atLeast("2.0.7", "2.0.8"), false, "proxy-addr 2.0.7 is the version that was vulnerable");
   assertEquals(atLeast("7.29.0", "7.29.1"), false, "undici 7.29.0 is the version that was vulnerable");
+  assertEquals(atLeast("2.3.0", "2.4.0"), false, "body-parser 2.3.0 is the version GHSA-27r3-jxmh-p828 covers");
+  assertEquals(atLeast("2.4.0", "2.4.0"), true, "body-parser 2.4.0 is the fix itself");
   assertEquals(atLeast("not-a-version", "1.0.0"), false, "fail closed on nonsense");
   assertEquals(atLeast("4.13.7", "4.13.7"), true, "the fix itself satisfies the floor");
   assertEquals(atLeast("5.0.0", "4.13.7"), true, "and a later major does too");
