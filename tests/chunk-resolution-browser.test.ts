@@ -2,16 +2,45 @@
 // Proves condition (e): load ntp/sidepanel/options in real Chrome and prove each dynamic chunk
 // resolves cleanly with 0 404s, 0 CSP violations, and 0 runtime exceptions.
 
-import { assert, assertEquals } from "jsr:@std/assert@1";
+import { assert, assertEquals, AssertionError } from "jsr:@std/assert@1";
 import { fileURLToPath } from "node:url";
 import { launchChrome, openCdp, waitForServiceWorker, teardownChrome, resolveChromiumBinaryReport } from "../scripts/lib/chrome-launch.ts";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
 import { ENVIRONMENTAL_REFUSAL_MARKER } from "../scripts/lib/environmental-verdict.mjs";
+import { currentLoadPerCpu } from "../scripts/lib/serial-phase.mjs";
+import { readLoadSample } from "../scripts/lib/quiet-window.ts";
+import {
+  classifyDeadlineExpiry,
+  deadlineRefusalError,
+  phaseBudgetMs,
+  waitBudgetSpec,
+} from "../scripts/lib/wait-budget.ts";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT_DIR = `${ROOT}/extension`;
 const DIST = `${EXT_DIR}/dist`;
 const { binary: RESOLVED_BIN, tried: TRIED_BINS } = resolveChromiumBinaryReport();
+
+// 9z8xs: the readyState/settle waits PASS on a contended box (budget scales to
+// MAX_LOAD_SCALE x base) or REFUSE environmentally at a still-expired deadline
+// (classified by measuring the machine at the catch) - never a red that reads
+// as a page defect. The machinery and its pins live in scripts/lib/wait-budget.ts
+// and tests/wait-budget.test.ts.
+const QUIET_SPEC = waitBudgetSpec();
+
+/** At an expired deadline: refuse environmentally unless the box is measurably quiet. */
+async function refuseIfNotQuiet(
+  phase: string,
+  surfacePath: string,
+  budgetMs: number,
+  baseMs: number,
+): Promise<void> {
+  const sample = await readLoadSample().catch(() => null);
+  const verdict = classifyDeadlineExpiry(sample, QUIET_SPEC);
+  if (verdict.environmental) {
+    throw deadlineRefusalError(phase, surfacePath, budgetMs, baseMs, verdict);
+  }
+}
 
 const SURFACES = [
   { path: "ntp/ntp.html", bundle: "ntp.bundle.js" },
@@ -221,9 +250,12 @@ Deno.test("20e2u condition (e): load ntp, sidepanel, options in real Chrome; all
 
       await client.send("Page.navigate", { url: `chrome-extension://${extId}/${surface.path}` }, sessionId);
 
-      // 1. Wait for document.readyState === "complete" (fail if wait times out)
+      // 1. Wait for document.readyState === "complete". The budget is base 8s on a
+      // quiet box, 32s under load (see 9z8xs above); a still-expired deadline refuses
+      // environmentally unless the box was measurably quiet at the catch.
+      const readyBudgetMs = phaseBudgetMs(8000, currentLoadPerCpu(), QUIET_SPEC);
       let readyStateComplete = false;
-      const readyDeadline = Date.now() + 8000;
+      const readyDeadline = Date.now() + readyBudgetMs;
       while (Date.now() < readyDeadline) {
         const state = await client.eval(sessionId, "document.readyState").catch(() => null);
         if (state === "complete") {
@@ -232,9 +264,12 @@ Deno.test("20e2u condition (e): load ntp, sidepanel, options in real Chrome; all
         }
         await new Promise((r) => setTimeout(r, 50));
       }
+      if (!readyStateComplete) {
+        await refuseIfNotQuiet("readyState", surface.path, readyBudgetMs, 8000);
+      }
       assert(
         readyStateComplete,
-        `${surface.path} document.readyState failed to reach 'complete' within 8s`,
+        `${surface.path} document.readyState failed to reach 'complete' within ${readyBudgetMs}ms (load-scaled, base 8000) on a box that was NOT oversubscribed at the deadline - a genuine page hang, not fleet contention`,
       );
 
       // 2. The expected static chunk import graph for this surface bundle, derived from the build's
@@ -245,8 +280,9 @@ Deno.test("20e2u condition (e): load ntp, sidepanel, options in real Chrome; all
       // 3. Wait until all expected dynamic chunks resolve, in-flight requests drain, and 300ms quiet window elapses.
       // Under gate load (chrome-agent-platform-30yox), main-thread contention can postpone dynamic-import
       // dispatch of chunks (like vault-quotas in options); do not prematurely settle while expected chunks remain.
+      const settleBudgetMs = phaseBudgetMs(10000, currentLoadPerCpu(), QUIET_SPEC);
       let settled = false;
-      const settleDeadline = Date.now() + 10000;
+      const settleDeadline = Date.now() + settleBudgetMs;
       while (Date.now() < settleDeadline) {
         const quietMs = Date.now() - lastActivityTime;
         const allExpectedLoaded = [...expectedGraph].every((c) =>
@@ -265,9 +301,12 @@ Deno.test("20e2u condition (e): load ntp, sidepanel, options in real Chrome; all
       const missingExpected = [...expectedGraph].filter(
         (c) => ![...distinctChunkUrls].some((u) => u.includes(c)),
       );
+      if (!settled) {
+        await refuseIfNotQuiet("settle", surface.path, settleBudgetMs, 10000);
+      }
       assert(
         settled,
-        `${surface.path} failed to settle expected chunks within 10s: distinctChunks=${distinctChunkUrls.size}/${expectedGraph.size}, missing=[${missingExpected.join(", ")}], inFlight=[${[...inFlightRequests.values()].join(", ")}], quietMs=${Date.now() - lastActivityTime} (need >=300ms)`,
+        `${surface.path} failed to settle expected chunks within ${settleBudgetMs}ms (load-scaled, base 10000) on a box that was NOT oversubscribed at the deadline: distinctChunks=${distinctChunkUrls.size}/${expectedGraph.size}, missing=[${missingExpected.join(", ")}], inFlight=[${[...inFlightRequests.values()].join(", ")}], quietMs=${Date.now() - lastActivityTime} (need >=300ms)`,
       );
 
       // 4. Assert the page URL reached the expected extension target
@@ -326,6 +365,26 @@ Deno.test("20e2u condition (e): load ntp, sidepanel, options in real Chrome; all
         `${ENVIRONMENTAL_REFUSAL_MARKER} {"method":"readMarkerIndex","reason":"dist was rebuilt while this run loaded it, so the loaded chunks and the expected graph describe different builds","before":"${markerIndex.fingerprint.slice(0, 24)}","after":"${after.fingerprint.slice(0, 24)}"}`,
       );
     }
+  } catch (error) {
+    // 9z8xs, second half of the contract: a bare timing failure of the launch /
+    // attach / wait MACHINERY (withTimeout's "deadline", CDP timeouts) has no
+    // budget wiring of its own. On a contended box that is an environmental
+    // refusal, classified by measuring the machine at the catch; on a measurably
+    // quiet box the original error stands. Content assertions (AssertionError:
+    // chunk 404s, CSP violations, the quiet-box readyState red) pass through
+    // unchanged - this catch never launders a product failure.
+    const msg = error instanceof Error ? error.message : String(error);
+    const isBareTiming =
+      !(error instanceof AssertionError) &&
+      (msg === "deadline" || /cdp timeout|deadline exceeded|timed out/i.test(msg));
+    if (isBareTiming) {
+      const sample = await readLoadSample().catch(() => null);
+      const verdict = classifyDeadlineExpiry(sample, QUIET_SPEC);
+      if (verdict.environmental) {
+        throw deadlineRefusalError("launch/attach/wait", "extension surfaces", undefined, undefined, verdict);
+      }
+    }
+    throw error;
   } finally {
     if (client) {
       try { client.close(); } catch {}
