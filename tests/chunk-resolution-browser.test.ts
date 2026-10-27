@@ -7,12 +7,11 @@ import { fileURLToPath } from "node:url";
 import { launchChrome, openCdp, waitForServiceWorker, teardownChrome, resolveChromiumBinaryReport } from "../scripts/lib/chrome-launch.ts";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
 import { ENVIRONMENTAL_REFUSAL_MARKER } from "../scripts/lib/environmental-verdict.mjs";
-import { currentLoadPerCpu } from "../scripts/lib/serial-phase.mjs";
 import { readLoadSample } from "../scripts/lib/quiet-window.ts";
 import {
   classifyDeadlineExpiry,
   deadlineRefusalError,
-  phaseBudgetMs,
+  refuseUnlessMeasurablyQuiet,
   waitBudgetSpec,
 } from "../scripts/lib/wait-budget.ts";
 
@@ -21,12 +20,25 @@ const EXT_DIR = `${ROOT}/extension`;
 const DIST = `${EXT_DIR}/dist`;
 const { binary: RESOLVED_BIN, tried: TRIED_BINS } = resolveChromiumBinaryReport();
 
-// 9z8xs: the readyState/settle waits PASS on a contended box (budget scales to
-// MAX_LOAD_SCALE x base) or REFUSE environmentally at a still-expired deadline
-// (classified by measuring the machine at the catch) - never a red that reads
-// as a page defect. The machinery and its pins live in scripts/lib/wait-budget.ts
-// and tests/wait-budget.test.ts.
+// 9z8xs (re-review, coord 2026-10-27): the waits NEVER scale. Below the quiet
+// threshold the product behaviour is asserted with the normal budget; above it
+// the suite REFUSES IMMEDIATELY - never pass, never extend - so a high-load run
+// can never report green and a slow product cannot hide behind one. A deadline
+// that expires anyway (load arrived mid-wait) is classified by measuring the
+// machine at the catch. The machinery and its pins live in
+// scripts/lib/wait-budget.ts and tests/wait-budget.test.ts.
 const QUIET_SPEC = waitBudgetSpec();
+const READY_BUDGET_MS = 8000;
+const SETTLE_BUDGET_MS = 10000;
+
+/** The pre-wait gate: above the quiet threshold, refuse now - do not even start the wait. */
+async function refuseBeforeWait(phase: string, surfacePath: string): Promise<void> {
+  const sample = await readLoadSample().catch(() => null);
+  const verdict = refuseUnlessMeasurablyQuiet(sample, QUIET_SPEC);
+  if (verdict) {
+    throw deadlineRefusalError(`${phase} (pre-wait)`, surfacePath, undefined, undefined, verdict);
+  }
+}
 
 /** At an expired deadline: refuse environmentally unless the box is measurably quiet. */
 async function refuseIfNotQuiet(
@@ -250,10 +262,11 @@ Deno.test("20e2u condition (e): load ntp, sidepanel, options in real Chrome; all
 
       await client.send("Page.navigate", { url: `chrome-extension://${extId}/${surface.path}` }, sessionId);
 
-      // 1. Wait for document.readyState === "complete". The budget is base 8s on a
-      // quiet box, 32s under load (see 9z8xs above); a still-expired deadline refuses
-      // environmentally unless the box was measurably quiet at the catch.
-      const readyBudgetMs = phaseBudgetMs(8000, currentLoadPerCpu(), QUIET_SPEC);
+      // 1. Wait for document.readyState === "complete". The budget is 8s, ALWAYS (9z8xs
+      // re-review: budgets never scale). Above the quiet threshold the suite refuses
+      // BEFORE waiting; a deadline that expires anyway is classified at the catch.
+      await refuseBeforeWait("readyState", surface.path);
+      const readyBudgetMs = READY_BUDGET_MS;
       let readyStateComplete = false;
       const readyDeadline = Date.now() + readyBudgetMs;
       while (Date.now() < readyDeadline) {
@@ -269,7 +282,7 @@ Deno.test("20e2u condition (e): load ntp, sidepanel, options in real Chrome; all
       }
       assert(
         readyStateComplete,
-        `${surface.path} document.readyState failed to reach 'complete' within ${readyBudgetMs}ms (load-scaled, base 8000) on a box that was NOT oversubscribed at the deadline - a genuine page hang, not fleet contention`,
+        `${surface.path} document.readyState failed to reach 'complete' within ${readyBudgetMs}ms on a box that was measurably quiet both before the wait and at the deadline - a genuine page hang, not fleet contention`,
       );
 
       // 2. The expected static chunk import graph for this surface bundle, derived from the build's
@@ -280,7 +293,9 @@ Deno.test("20e2u condition (e): load ntp, sidepanel, options in real Chrome; all
       // 3. Wait until all expected dynamic chunks resolve, in-flight requests drain, and 300ms quiet window elapses.
       // Under gate load (chrome-agent-platform-30yox), main-thread contention can postpone dynamic-import
       // dispatch of chunks (like vault-quotas in options); do not prematurely settle while expected chunks remain.
-      const settleBudgetMs = phaseBudgetMs(10000, currentLoadPerCpu(), QUIET_SPEC);
+      // The budget is 10s, ALWAYS; above the quiet threshold the suite refuses before waiting (9z8xs re-review).
+      await refuseBeforeWait("settle", surface.path);
+      const settleBudgetMs = SETTLE_BUDGET_MS;
       let settled = false;
       const settleDeadline = Date.now() + settleBudgetMs;
       while (Date.now() < settleDeadline) {
@@ -306,7 +321,7 @@ Deno.test("20e2u condition (e): load ntp, sidepanel, options in real Chrome; all
       }
       assert(
         settled,
-        `${surface.path} failed to settle expected chunks within ${settleBudgetMs}ms (load-scaled, base 10000) on a box that was NOT oversubscribed at the deadline: distinctChunks=${distinctChunkUrls.size}/${expectedGraph.size}, missing=[${missingExpected.join(", ")}], inFlight=[${[...inFlightRequests.values()].join(", ")}], quietMs=${Date.now() - lastActivityTime} (need >=300ms)`,
+        `${surface.path} failed to settle expected chunks within ${settleBudgetMs}ms on a box that was measurably quiet both before the wait and at the deadline: distinctChunks=${distinctChunkUrls.size}/${expectedGraph.size}, missing=[${missingExpected.join(", ")}], inFlight=[${[...inFlightRequests.values()].join(", ")}], quietMs=${Date.now() - lastActivityTime} (need >=300ms)`,
       );
 
       // 4. Assert the page URL reached the expected extension target
@@ -374,9 +389,15 @@ Deno.test("20e2u condition (e): load ntp, sidepanel, options in real Chrome; all
     // chunk 404s, CSP violations, the quiet-box readyState red) pass through
     // unchanged - this catch never launders a product failure.
     const msg = error instanceof Error ? error.message : String(error);
+    // 9z8xs re-review (P2-c): reclassify ONLY identified harness timeouts, never a
+    // generic "timed out" - a genuine assertion timeout is a product red and must not
+    // be laundered into a refusal. Matches: waitForServiceWorker's bare "deadline" and
+    // the CDP machinery's own phrasing (chrome-launch/openCdp). An error already
+    // carrying the refusal marker is a refusal - propagate it untouched.
     const isBareTiming =
       !(error instanceof AssertionError) &&
-      (msg === "deadline" || /cdp timeout|deadline exceeded|timed out/i.test(msg));
+      !msg.includes(ENVIRONMENTAL_REFUSAL_MARKER) &&
+      (msg === "deadline" || /cdp timeout|deadline exceeded/i.test(msg));
     if (isBareTiming) {
       const sample = await readLoadSample().catch(() => null);
       const verdict = classifyDeadlineExpiry(sample, QUIET_SPEC);

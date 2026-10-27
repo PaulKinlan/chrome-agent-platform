@@ -1,9 +1,11 @@
 // tests/wait-budget.test.ts — pins for chrome-agent-platform-9z8xs.
 //
-// The discrimination 9z8xs owes: at fleet load the wait must PASS (scaled
-// budget) or REFUSE (environmental, exit 75 via the aggregator) - never a red
-// that reads as a page defect. And the other direction: a measurably QUIET box
-// keeps the base budget and a deadline expiry there stays a product red.
+// The discrimination 9z8xs owes (re-review, coord 2026-10-27): budgets NEVER
+// scale - below the quiet threshold the product behaviour is asserted with the
+// normal budget, above it the suite REFUSES (environmental, exit 75 via the
+// aggregator), immediately at the wait or at the catch if load arrived
+// mid-wait. Never a red that reads as a page defect, never a green a slow
+// product could hide behind.
 //
 // Every sample below is hand-built: the discrimination is proven without
 // manufacturing machine load (the quiet-window rule for pinnable classifiers).
@@ -12,10 +14,9 @@ import { assert, assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
 import {
   classifyDeadlineExpiry,
   deadlineRefusalError,
-  phaseBudgetMs,
+  refuseUnlessMeasurablyQuiet,
   waitBudgetSpec,
 } from "../scripts/lib/wait-budget.ts";
-import { MAX_LOAD_SCALE } from "../scripts/lib/serial-phase.mjs";
 import {
   areAllFailuresEnvironmental,
   ENVIRONMENTAL_REFUSAL_MARKER,
@@ -42,16 +43,30 @@ function sample(partial: Partial<LoadSample>): LoadSample {
   };
 }
 
-Deno.test("9z8xs budget: quiet box keeps the base; loaded or unmeasurable box gets MAX_LOAD_SCALE x base", () => {
-  assertEquals(phaseBudgetMs(8000, 0.06, SPEC), 8000, "an idle box waits exactly the base, as before the fix");
-  assertEquals(phaseBudgetMs(8000, SPEC.maxLoadPerCore, SPEC), 8000, "AT the quiet threshold the base still holds");
+Deno.test("9z8xs contract: there is NO budget scaling - a loaded or unmeasurable box REFUSES before the wait", () => {
+  // The re-review P1: an extended budget converts a genuine 7s -> 21s slowdown into a
+  // green and a real hang into a refusal. The pre-wait gate is refusal-only:
+  const quiet = sample({ loadPerCore: 0.06 });
   assertEquals(
-    phaseBudgetMs(8000, 2.5, SPEC),
-    8000 * MAX_LOAD_SCALE,
-    "load 20 on 8 cores (2.5/core, the pvdxe window) gets the scaled budget so the page can PASS",
+    refuseUnlessMeasurablyQuiet(quiet, SPEC),
+    null,
+    "a measurably quiet box proceeds with the NORMAL budget",
   );
-  assertEquals(phaseBudgetMs(8000, Number.NaN, SPEC), 8000 * MAX_LOAD_SCALE, "an unmeasurable load never shrinks the budget");
-  assertEquals(phaseBudgetMs(10000, 1.0, SPEC), 10000 * MAX_LOAD_SCALE, "the settle wait scales the same way");
+  const loaded = refuseUnlessMeasurablyQuiet(sample({ load1: 20, loadPerCore: 2.5 }), SPEC);
+  assert(loaded !== null && loaded.environmental, "a loaded box refuses BEFORE the wait - never pass, never extend");
+  const unknown = refuseUnlessMeasurablyQuiet(null, SPEC);
+  assert(unknown !== null && unknown.environmental, "an unmeasurable box refuses before the wait too");
+});
+
+Deno.test("9z8xs boundary (P2-b): AT the threshold is quiet, just ABOVE it refuses - for budgeting and classification alike", () => {
+  const at = sample({ load1: SPEC.maxLoadPerCore * 8, loadPerCore: SPEC.maxLoadPerCore });
+  assertEquals(refuseUnlessMeasurablyQuiet(at, SPEC), null, "AT maxLoadPerCore the box is quiet (the comparison is >)");
+  assertEquals(classifyDeadlineExpiry(at, SPEC).environmental, false, "AT the threshold an expired deadline stays a product red");
+  const eps = SPEC.maxLoadPerCore + 1e-9;
+  const above = sample({ load1: eps * 8, loadPerCore: eps });
+  const gate = refuseUnlessMeasurablyQuiet(above, SPEC);
+  assert(gate !== null && gate.environmental, "one epsilon ABOVE the threshold refuses before the wait");
+  assertEquals(classifyDeadlineExpiry(above, SPEC).environmental, true, "one epsilon above, an expired deadline refuses at the catch");
 });
 
 Deno.test("9z8xs classification: a deadline expiry on a LOADED box is an environmental refusal with the numbers", () => {
@@ -95,7 +110,6 @@ Deno.test("9z8xs classification: a measurably QUIET box keeps the product red (n
   const verdict = classifyDeadlineExpiry(quiet, SPEC);
   assertEquals(verdict.environmental, false, "a quiet box must NOT earn a refusal");
   assertEquals(verdict.cause, "quiet");
-  assertEquals(phaseBudgetMs(8000, quiet.loadPerCore, SPEC), 8000, "and it waits only the base 8s");
 
   // A single active builder job is within the quiet spec (maxCompilers 1) and
   // alone does not earn a refusal - the suite's own cohort must not mask a

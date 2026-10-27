@@ -173,6 +173,9 @@ export interface LoadSample {
    *  or the macOS ps path) and the caller falls back to the process count: fail closed, never
    *  quieter. */
   activeBuilderJobs?: number;
+  /** True when an unbaselined call self-baselined (9z8xs review P1): the verdict comes from a read
+   *  that HAD a predecessor, so parked builder daemons do not count as contention. */
+  selfBaselined?: boolean;
   /** True when at least one discrete builder (rustc, cargo, rust-lld) was seen,
    *  unbounded by the 8-entry compilerNames diagnostic cap. */
   hasDiscreteBuilder?: boolean;
@@ -398,21 +401,42 @@ function describe(sample: LoadSample | null, spec: ResolvedSpec): string {
  */
 export async function readLoadSample(prev?: ProcCpuMap | null, deps: LoadSampleDeps = {}): Promise<LoadSample> {
   const budget = deps.budget ?? procScanBudget();
-  const first = await readLoadSampleOnce(prev, budget, deps);
-  if (first.measurable !== false || typeof first.error !== "string" || !first.error.includes("truncated")) return first;
-  const retry = { entries: budget.entries * 4, ms: budget.ms * 4 };
-  const second = await readLoadSampleOnce(prev, retry, deps);
-  if (second.measurable === false) {
-    // The suffix says the RETRY truncated too, so it is only said when it did. A retry that failed for
-    // another reason (unreadable `ps` rows, `ps` exiting non-zero) keeps its own error, unadorned (jjsz F6).
-    if (typeof second.error !== "string" || !second.error.includes("truncated")) return second;
-    return {
-      ...second,
-      error: `${second.error} — and a retry with ${retry.entries} entries / ${retry.ms} ms truncated too, so this box could not be sampled at either budget`,
-    };
+  const sleep = deps.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)));
+  const readWithTruncationRetry = async (p: ProcCpuMap | null | undefined): Promise<LoadSample> => {
+    const first = await readLoadSampleOnce(p, budget, deps);
+    if (first.measurable !== false || typeof first.error !== "string" || !first.error.includes("truncated")) return first;
+    const retry = { entries: budget.entries * 4, ms: budget.ms * 4 };
+    const second = await readLoadSampleOnce(p, retry, deps);
+    if (second.measurable === false) {
+      // The suffix says the RETRY truncated too, so it is only said when it did. A retry that failed for
+      // another reason (unreadable `ps` rows, `ps` exiting non-zero) keeps its own error, unadorned (jjsz F6).
+      if (typeof second.error !== "string" || !second.error.includes("truncated")) return second;
+      return {
+        ...second,
+        error: `${second.error} — and a retry with ${retry.entries} entries / ${retry.ms} ms truncated too, so this box could not be sampled at either budget`,
+      };
+    }
+    return { ...second, retriedAfterTruncation: true };
+  };
+  const sample = await readWithTruncationRetry(prev);
+  // 9z8xs review (P1, coord 2026-10-27): an UNBASELINED read counts every heavy-NAMED process as
+  // active — classifyActiveBuilders(null, cpu) has no before-ticks to compare — so two PARKED
+  // builder daemons read as contention at ordinary load and trigger refusals the box did not earn.
+  // A caller with no predecessor gets a self-baselined sample: the first read is the baseline, one
+  // activity window passes, and the verdict comes from the second read, where a parked daemon shows
+  // no cpu delta and stops counting. Callers that pass prev are unchanged; a box that cannot be
+  // sampled stays unmeasurable (fails closed) at either step.
+  if (prev == null && sample.measurable && sample.cpu) {
+    await sleep(BASELINE_ACTIVITY_MS);
+    const rebased = await readWithTruncationRetry(sample.cpu);
+    if (rebased.measurable) return { ...rebased, selfBaselined: true };
+    return rebased;
   }
-  return { ...second, retriedAfterTruncation: true };
+  return sample;
 }
+
+/** The activity window between an unbaselined first read and the baselined verdict read. */
+export const BASELINE_ACTIVITY_MS = 250;
 
 const HAS_PROC = (() => {
   try { return Deno.statSync("/proc").isDirectory; } catch { return false; }
@@ -444,6 +468,8 @@ export interface LoadSampleDeps {
    *  boundary between "truncated" and "measured" can be pinned with a frozen clock instead of a
    *  timing race. Default: the real clock. The sample's `at` timestamp still uses the real clock. */
   now?: () => number;
+  /** Stands in for the self-baseline activity-window sleep (9z8xs review P1). Default: setTimeout. */
+  sleep?: (ms: number) => Promise<void>;
 }
 
 /** The environment `ps` runs under on the no-/proc branch (chrome-agent-platform-jjsz F6).

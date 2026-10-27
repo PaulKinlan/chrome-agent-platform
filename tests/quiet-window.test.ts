@@ -341,8 +341,15 @@ Deno.test("dnop: activity is decided by CPU advance, and an unknown process fail
     ["14", mk("ninja", "400", 0)],       // never seen before → active (fail closed)
   ]);
   assertEquals(classifyActiveBuilders(prev, curr).sort(), ["11", "13", "14"]);
-  // A first sample (no previous reading) treats every name match as active.
+  // A first sample (no previous reading) treats every name match as active - which is
+  // exactly why readLoadSample self-baselines an unbaselined call now (9z8xs review P1):
+  // parked daemons (pid 12, flat cpuTicks) must NOT read as contention.
   assertEquals(classifyActiveBuilders(null, curr).sort(), ["11", "12", "13", "14"]);
+  assertEquals(
+    classifyActiveBuilders(prev, curr).includes("12"),
+    false,
+    "a parked builder daemon (flat cpuTicks) is NOT active once a baseline exists",
+  );
 });
 
 Deno.test("dnop: /proc/<pid>/stat parsing survives a comm with spaces and parentheses", () => {
@@ -413,6 +420,43 @@ Deno.test("dnop: the REAL sampler counts this test's compiling process and not i
   } finally {
     for (const p of [...parked, compiler]) {
       if (!p) continue;
+      try { p.kill("SIGKILL"); } catch { /* gone */ }
+      try { await p.status; } catch { /* reaped */ }
+    }
+    await Deno.remove(dir, { recursive: true }).catch(() => {});
+  }
+}));
+
+Deno.test("9z8xs review P1: an UNBASELINED readLoadSample self-baselines, so parked builder daemons do not trigger refusal", () => withProcScanBudget("2500", async () => {
+  // The review finding: readLoadSample() with no predecessor counted every heavy-NAMED
+  // process as active (no before-ticks to compare), so two parked daemons read as
+  // contention at ordinary load. The fix self-baselines: an unbaselined call takes its
+  // first read as the baseline, waits one activity window, and judges from the second.
+  const dir = await Deno.makeTempDir({ prefix: "cap-p1a-parked-" });
+  const parked: Deno.ChildProcess[] = [];
+  try {
+    for (const n of ["rustc", "esbuild"]) {
+      await createExecutableStub(`${dir}/${n}`, "/bin/sleep");
+      parked.push(await spawnStub(`${dir}/${n}`, { args: ["30"], stdout: "null", stderr: "null" }));
+    }
+    await new Promise((r) => setTimeout(r, 500));
+    const sample = await readLoadSample(); // NO predecessor: the exact review case
+    assert(sample.measurable, `this box must be samplable for the assertion to mean anything: ${sample.error ?? ""}`);
+    assertEquals(
+      sample.selfBaselined,
+      true,
+      "an unbaselined call must self-baseline before builder presence counts as contention",
+    );
+    assertEquals(sample.unbaselined ?? false, false, "the returned verdict came from a baselined read");
+    const parkedPids = new Set(parked.map((p) => String(p.pid)));
+    // The semantic check: the parked daemons this test started are not among the active
+    // set. activeCompilerNames carries names, not pids, so re-read with the returned cpu
+    // as baseline and classify the parked pids directly.
+    const second = await readLoadSample(sample.cpu ?? null);
+    const parkedActive = classifyActiveBuilders(sample.cpu, second.cpu).filter((pid) => parkedPids.has(pid));
+    assertEquals(parkedActive, [], "the parked daemons must not count as active under a baselined read");
+  } finally {
+    for (const p of parked) {
       try { p.kill("SIGKILL"); } catch { /* gone */ }
       try { await p.status; } catch { /* reaped */ }
     }
