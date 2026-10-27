@@ -400,6 +400,59 @@ Deno.test("settings-session: SETTINGS_SESSION_ROUTES is frozen and EMPTY at Stag
   );
 });
 
+// ── Acceptance 6 & Mutant (jrl0l): empty effective allowlist FAILS CLOSED ──
+
+Deno.test("settings-session (jrl0l): with no explicit routes and an empty static allowlist, self-declared scopes NEVER authorize a route", () => {
+  // Pre-fix, the final fallback of isRouteWithinSettingsSession returned
+  // scopeList.includes(route) — the session's own scope word became the
+  // authorization source (undocumented fail-open, contradicting T20's
+  // fail-closed posture). This test is the falsification pin: a session whose
+  // scopes name an arbitrary or credential-ish route must be REFUSED.
+  const rawSession = Object.freeze({
+    documentId: "doc-hub-x",
+    scopes: Object.freeze(["providers", "credential.steal"]),
+    expiresAt: Date.now() + 60_000,
+  });
+
+  assertFalse(
+    isRouteWithinSettingsSession(rawSession, "providers"),
+    "a scope word matching the route name must NOT authorize the route when the effective allowlist is empty",
+  );
+  assertFalse(
+    isRouteWithinSettingsSession(rawSession, "credential.steal"),
+    "a credential-ish route named in the session's own scopes must be refused when the effective allowlist is empty",
+  );
+  assertFalse(
+    isRouteWithinSettingsSession(rawSession, "provider.clear-key"),
+    "credential routes stay on owner-options: an empty allowlist admits zero routes",
+  );
+
+  // The sibling guard must refuse too (requireSettingsSession delegates the
+  // scope/route check to isRouteWithinSettingsSession).
+  assertThrows(
+    () =>
+      requireSettingsSession(
+        {
+          principal: "extension",
+          documentId: "doc-hub-x",
+          settingsSession: rawSession,
+        },
+        "credential.steal",
+        { now: () => Date.now() },
+      ),
+    Error,
+    "Settings surface",
+    "requireSettingsSession must refuse a route authorized only by the session's self-declared scopes (jrl0l)",
+  );
+
+  // An explicit allowlist still authorizes as before (no regression of the
+  // documented carve-out: explicit routes are the admission mechanism).
+  assert(
+    isRouteWithinSettingsSession(rawSession, "providers", { providers: ["providers"] }),
+    "an explicit allowedRoutes map must still authorize the route",
+  );
+});
+
 // ── Acceptance 1: Pure module tests (fake clock + fake store) ───────────────
 
 Deno.test("settings-session pure: open, verify, and close lifecycle with fake clock and store", async () => {

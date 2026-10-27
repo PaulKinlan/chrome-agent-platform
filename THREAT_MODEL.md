@@ -507,6 +507,11 @@ consequences are carried by the matching register entry where one exists.
   it is.
 - **Controls:** `SETTINGS_SESSION_ROUTES` starts empty (`Object.freeze({})`), admitting zero
   routes at Stage 3b (`tests/settings-session.test.ts`, `tests/sw-dispatch-authority-census.test.ts`);
+  `isRouteWithinSettingsSession` **fails closed when no effective allowlist resolves** — with no
+  explicit `allowedRoutes`, no session-bound allowlist entry, and an empty `SETTINGS_SESSION_ROUTES`,
+  it returns `false` for every route, so a session's self-declared scope list is never an
+  authorization source on its own (`chrome-agent-platform-jrl0l`, pinned in
+  `tests/settings-session.test.ts`);
   `settings.session.open` refuses content scripts, subframes (`frameId !== 0`), non-hub documents,
   query strings, and missing `documentId`; verification in the central listener keeps
   `principal: "extension"` and never upgrades to `"owner-options"`, never widens
