@@ -11,6 +11,15 @@ import {
   ZERO_TICK_ACTIVE_BUILDERS,
   isZeroTickActiveBuilder,
 } from "./quiet-window.ts";
+import { WALL_CLOCK_BUDGETS } from "./wait-budget.ts";
+
+// 63o3v: the latency budgets are the DECLARED manifest rows, not local constants -
+// a change to either number is a change to the declared envelope and belongs in
+// scripts/lib/wait-budget.ts (WALL_CLOCK_BUDGETS), where the static guard sees it.
+const COMPOSER_READY_BUDGET_MS =
+  WALL_CLOCK_BUDGETS["tests/ntp-boot-staging-timing.test.ts#composer-ready"].baseMs;
+const THREAD_HYDRATED_BUDGET_MS =
+  WALL_CLOCK_BUDGETS["tests/ntp-boot-staging-timing.test.ts#thread-list-hydrated"].baseMs;
 
 export {
   ENVIRONMENTAL_REFUSAL_EXIT,
@@ -128,6 +137,18 @@ export interface BootStagingRunResult {
   hostWorstLoadPerCore: number | null;
   /** The bound that decision used, so a reader can see what "loaded" meant. (mr1ak) */
   hostQuietBound: number;
+  /** CPU-steal fraction measured over the run interval, or null when unmeasurable / not measured. (63o3v) */
+  hostStealPct: number | null;
+  /** The declared steal ceiling the budget is defined at, or null when steal was not measured. (63o3v) */
+  hostStealCeilingPct: number | null;
+  /** Steal at or above the declared ceiling - the load-only quiet window cannot see a starved
+   *  hypervisor: 63o3v failed at 36-48% steal while load/core read 0.14 ("quiet"). (63o3v) */
+  hostAboveStealCeiling: boolean;
+  /** Outside the DECLARED ENVELOPE the budget is defined at: above the load bound OR above the
+   *  steal ceiling. A wall-clock measurement outside its envelope is not evidence. When steal was
+   *  not measured (hostStealCeilingPct null) the envelope is the load bound alone - unchanged
+   *  pre-63o3v semantics for callers that never pass a steal reading. (63o3v) */
+  hostOutsideEnvelope: boolean;
   validMeasurement: boolean;
   invalidReason?: string;
 }
@@ -534,6 +555,7 @@ export function attributeBootRun(
   run: number,
   rawMetrics: RawBootPageMetrics,
   sample: BootStagingSampleInput = null,
+  steal?: { pct: number | null; ceilingPct?: number },
 ): BootStagingRunResult {
   const samples: LoadSample[] = [];
   if (Array.isArray(sample)) {
@@ -594,6 +616,18 @@ export function attributeBootRun(
     : null;
   const hostAboveQuietBound = worstLoadPerCore != null && worstLoadPerCore > quietBound;
 
+  // 63o3v: the steal axis of the declared envelope. Steal is measured over the WHOLE run interval
+  // by the caller (two /proc/stat reads bracketing the run). A caller that never passes `steal`
+  // gets the pre-63o3v load-only envelope verbatim; a caller that passes one gets:
+  //   pct >= ceiling  -> outside the envelope (a duration measured there is not evidence),
+  //   pct null        -> steal unmeasurable: the run is marked outside the envelope too, because
+  //                      "inside the envelope" is a claim about steal that cannot be made unmeasured.
+  const stealCeiling = steal ? (steal.ceilingPct ?? 20) : null;
+  const hostStealPct = steal ? steal.pct : null;
+  const hostAboveStealCeiling =
+    stealCeiling != null && (hostStealPct == null || hostStealPct >= stealCeiling);
+  const hostOutsideEnvelope = hostAboveQuietBound || hostAboveStealCeiling;
+
   const loafEntries = rawMetrics.loafEntries || [];
   // Unrounded 50.0 ms threshold — no weak rounding bypass
   const severeTasks = (rawMetrics.longTasks || []).filter((t) => t.duration > 50.0);
@@ -632,6 +666,10 @@ export function attributeBootRun(
     hostAboveQuietBound,
     hostWorstLoadPerCore: worstLoadPerCore,
     hostQuietBound: quietBound,
+    hostStealPct,
+    hostStealCeilingPct: stealCeiling,
+    hostAboveStealCeiling,
+    hostOutsideEnvelope,
     validMeasurement,
     invalidReason,
   };
@@ -742,29 +780,29 @@ export function evaluateBootStagingPolicy(
     // measured on a loaded box the honest verdict is a refusal — not a product red (a false defect
     // claim, which is what reds our FULL gate today) and never a pass.
     const taskRuns = validRuns.filter((r) => r.longTasks.length > 0);
-    const quietTaskRuns = taskRuns.filter((r) => !r.hostAboveQuietBound);
+    const quietTaskRuns = taskRuns.filter((r) => !r.hostOutsideEnvelope);
     if (taskRuns.length > 0 && quietTaskRuns.length === 0) {
     // Review of the mr1ak packet (P1): a refusal must NEVER supersede a red. Runs that carry no long
     // task are not evidence for this branch, so a QUIET run with a latency breach would otherwise have
     // been hidden behind the refusal below. Mirror Check 4's exact bounds and message shape here.
     for (const r of validRuns) {
-      if (r.hostAboveQuietBound) continue;
-      if (r.composerReadyMs != null && r.composerReadyMs >= 150) {
+      if (r.hostOutsideEnvelope) continue;
+      if (r.composerReadyMs != null && r.composerReadyMs >= COMPOSER_READY_BUDGET_MS) {
         return {
           ok: false,
           environmentalRefusal: false,
-          error: `Run ${r.run}: composer-ready took ${r.composerReadyMs}ms on uncontended host (must be < 150ms) [${r.hostEnvironment}]`,
+          error: `Run ${r.run}: composer-ready took ${r.composerReadyMs}ms on an in-envelope host (must be < ${COMPOSER_READY_BUDGET_MS}ms) [${r.hostEnvironment}]`,
           warnings,
           validRuns,
           contendedRuns,
           medianTaskCount,
         };
       }
-      if (r.threadListHydratedMs != null && r.threadListHydratedMs > 250) {
+      if (r.threadListHydratedMs != null && r.threadListHydratedMs > THREAD_HYDRATED_BUDGET_MS) {
         return {
           ok: false,
           environmentalRefusal: false,
-          error: `Run ${r.run}: thread-list-hydrated took ${r.threadListHydratedMs}ms on uncontended host (must be <= 250ms) [${r.hostEnvironment}]`,
+          error: `Run ${r.run}: thread-list-hydrated took ${r.threadListHydratedMs}ms on an in-envelope host (must be <= ${THREAD_HYDRATED_BUDGET_MS}ms) [${r.hostEnvironment}]`,
           warnings,
           validRuns,
           contendedRuns,
@@ -773,9 +811,12 @@ export function evaluateBootStagingPolicy(
       }
     }
       const detail = `median long tasks > 50ms is ${medianTaskCount} across ${validRuns.length} valid ` +
-        `run(s), but every run carrying a task was measured above the repo's own quiet bound ` +
-        `(CAP_QUIET_MAX_LOAD_PER_CORE=${taskRuns[0].hostQuietBound}): ` +
-        taskRuns.map((r) => `Run ${r.run} load/core ${r.hostWorstLoadPerCore ?? "unknown"}`).join(", ") +
+        `run(s), but every run carrying a task was measured outside the declared envelope ` +
+        `(load/core <= ${taskRuns[0].hostQuietBound}${taskRuns[0].hostStealCeilingPct == null ? "" : `, steal < ${taskRuns[0].hostStealCeilingPct}%`}): ` +
+        taskRuns.map((r) =>
+          `Run ${r.run} load/core ${r.hostWorstLoadPerCore ?? "unknown"}` +
+          (r.hostStealCeilingPct == null ? "" : ` steal ${r.hostStealPct == null ? "unmeasured" : r.hostStealPct.toFixed(1) + "%"}`)
+        ).join(", ") +
         ` — host contention, not a page verdict`;
       const refusal = new BootStagingEnvironmentalRefusalError(runs, detail);
       return {
@@ -819,34 +860,34 @@ export function evaluateBootStagingPolicy(
   // returns the product red below, exactly as before.
   const loadedLatencyBreaches: string[] = [];
   for (const r of validRuns) {
-    if (r.composerReadyMs != null && r.composerReadyMs >= 150) {
-      if (r.hostAboveQuietBound) {
+    if (r.composerReadyMs != null && r.composerReadyMs >= COMPOSER_READY_BUDGET_MS) {
+      if (r.hostOutsideEnvelope) {
         loadedLatencyBreaches.push(
-          `Run ${r.run}: composer-ready took ${r.composerReadyMs}ms with load/core ${r.hostWorstLoadPerCore ?? "unknown"} > ${r.hostQuietBound}`,
+          `Run ${r.run}: composer-ready took ${r.composerReadyMs}ms outside the declared envelope (load/core ${r.hostWorstLoadPerCore ?? "unknown"} vs <= ${r.hostQuietBound}; steal ${r.hostStealPct == null ? "unmeasured" : r.hostStealPct.toFixed(1) + "%"}${r.hostStealCeilingPct == null ? "" : ` vs < ${r.hostStealCeilingPct}%`})`,
         );
         continue;
       }
       return {
         ok: false,
         environmentalRefusal: false,
-        error: `Run ${r.run}: composer-ready took ${r.composerReadyMs}ms on uncontended host (must be < 150ms) [${r.hostEnvironment}]`,
+        error: `Run ${r.run}: composer-ready took ${r.composerReadyMs}ms on an in-envelope host (must be < ${COMPOSER_READY_BUDGET_MS}ms) [${r.hostEnvironment}]`,
         warnings,
         validRuns,
         contendedRuns,
         medianTaskCount,
       };
     }
-    if (r.threadListHydratedMs != null && r.threadListHydratedMs > 250) {
-      if (r.hostAboveQuietBound) {
+    if (r.threadListHydratedMs != null && r.threadListHydratedMs > THREAD_HYDRATED_BUDGET_MS) {
+      if (r.hostOutsideEnvelope) {
         loadedLatencyBreaches.push(
-          `Run ${r.run}: thread-list-hydrated took ${r.threadListHydratedMs}ms with load/core ${r.hostWorstLoadPerCore ?? "unknown"} > ${r.hostQuietBound}`,
+          `Run ${r.run}: thread-list-hydrated took ${r.threadListHydratedMs}ms outside the declared envelope (load/core ${r.hostWorstLoadPerCore ?? "unknown"} vs <= ${r.hostQuietBound}; steal ${r.hostStealPct == null ? "unmeasured" : r.hostStealPct.toFixed(1) + "%"}${r.hostStealCeilingPct == null ? "" : ` vs < ${r.hostStealCeilingPct}%`})`,
         );
         continue;
       }
       return {
         ok: false,
         environmentalRefusal: false,
-        error: `Run ${r.run}: thread-list-hydrated took ${r.threadListHydratedMs}ms on uncontended host (must be <= 250ms) [${r.hostEnvironment}]`,
+        error: `Run ${r.run}: thread-list-hydrated took ${r.threadListHydratedMs}ms on an in-envelope host (must be <= ${THREAD_HYDRATED_BUDGET_MS}ms) [${r.hostEnvironment}]`,
         warnings,
         validRuns,
         contendedRuns,
@@ -856,8 +897,8 @@ export function evaluateBootStagingPolicy(
   }
 
   if (loadedLatencyBreaches.length > 0) {
-    const detail = `${loadedLatencyBreaches.join("; ")} — measured above the repo's own quiet bound ` +
-      `(CAP_QUIET_MAX_LOAD_PER_CORE), so this is host contention, not a page verdict`;
+    const detail = `${loadedLatencyBreaches.join("; ")} — measured outside the declared envelope ` +
+      `(the repo's own quiet bound plus the declared steal ceiling, 63o3v), so this is host contention, not a page verdict`;
     const refusal = new BootStagingEnvironmentalRefusalError(runs, detail);
     return {
       ok: false,

@@ -34,6 +34,14 @@ import { readLoadSample, type LoadSample } from "../scripts/lib/quiet-window.ts"
 // the box. Bounded wait; a window that never arrives is an environmental refusal (exit 75), never a product red.
 import { acquireQuietWindowForHeavyRun } from "../scripts/lib/heavy-quiet-acquire.ts";
 
+import {
+  readProcStat,
+  stealPctBetweenStats,
+  wallClockBudget,
+} from "../scripts/lib/wait-budget.ts";
+// 63o3v: the suite's budgets are DECLARED with their envelope in the manifest.
+const BOOT_ENVELOPE = wallClockBudget("tests/ntp-boot-staging-timing.test.ts#median-long-tasks").definedAt;
+
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT_DIR = `${ROOT}/extension`;
 const { binary: RESOLVED_BIN, tried: TRIED_BINS } = resolveChromiumBinaryReport();
@@ -90,6 +98,7 @@ Deno.test("ntp-boot-staging: headless Chrome for Testing boots ntp.html with 0 l
 
       // 1. Establish baseline CPU map so pre-existing parked builders are known and not misclassified as active
       const baselineSample = await readLoadSample().catch(failedSample);
+      const statBefore = await readProcStat();
       await new Promise((r) => setTimeout(r, 60)); // short baseline delta for tick comparison
       let currentSample = await readLoadSample(baselineSample.cpu ?? null).catch(failedSample);
       const intervalSamples = [currentSample];
@@ -130,7 +139,16 @@ Deno.test("ntp-boot-staging: headless Chrome for Testing boots ntp.html with 0 l
       const postSample = await readLoadSample(currentSample.cpu ?? null).catch(failedSample);
       intervalSamples.push(postSample);
 
-      const runResult = attributeBootRun(run, rawMetrics, intervalSamples);
+      // 63o3v: the steal axis of the envelope. Bracket the run with /proc/stat reads -
+      // the load-only quiet window cannot see a starved hypervisor, and 36-48% steal at
+      // load/core 0.14 is exactly the reading that failed this suite as if it were the product.
+      const statAfter = await readProcStat();
+      const runStealPct = stealPctBetweenStats(statBefore, statAfter);
+
+      const runResult = attributeBootRun(run, rawMetrics, intervalSamples, {
+        pct: runStealPct,
+        ceilingPct: BOOT_ENVELOPE.maxStealPct,
+      });
       runResults.push(runResult);
 
       console.log(`[ntp-boot-staging] Run ${run}: longTasksCount=${runResult.longTasks.length}, composerReadyMs=${runResult.composerReadyMs}, threadListHydratedMs=${runResult.threadListHydratedMs}, validMeasurement=${runResult.validMeasurement}, longTasks=${runResult.longTasks.map(formatTaskAttribution).join("; ") || "none"}`);

@@ -2335,12 +2335,16 @@ Deno.test("mr1ak: a latency breach on a loaded box refuses instead of claiming a
   const loaded = evaluateBootStagingPolicy([slowRun(1, LOADED_NO_BUILDERS)]);
   assertEquals(loaded.ok, false);
   assertEquals(loaded.environmentalRefusal, true);
-  assertStringIncludes(loaded.error!, "composer-ready took 300ms with load/core");
+  // 63o3v re-anchored the words, not the semantics: the message now names the DECLARED
+  // ENVELOPE (load AND steal) rather than claiming "uncontended" from the load axis alone.
+  assertStringIncludes(loaded.error!, "composer-ready took 300ms");
+  assertStringIncludes(loaded.error!, "load/core");
 
-  // The pre-existing quiet-box path is unchanged, wording included.
+  // The pre-existing quiet-box path is unchanged in behaviour; the words now say
+  // "in-envelope" because the envelope is what the quiet bound always meant.
   const quiet = evaluateBootStagingPolicy([slowRun(1, QUIET_BOX_SAMPLE)]);
   assertEquals(quiet.environmentalRefusal, false);
-  assertStringIncludes(quiet.error!, "on uncontended host");
+  assertStringIncludes(quiet.error!, "in-envelope host");
 });
 
 Deno.test("mr1ak review: a QUIET run's latency breach is NOT hidden behind a loaded-run marginal refusal", () => {
@@ -2358,6 +2362,63 @@ Deno.test("mr1ak review: a QUIET run's latency breach is NOT hidden behind a loa
   const policy = evaluateBootStagingPolicy(runs);
   assertEquals(policy.ok, false);
   assertEquals(policy.environmentalRefusal, false, "a quiet run's real latency breach must stay a product red");
-  assertStringIncludes(policy.error!, "on uncontended host");
+  assertStringIncludes(policy.error!, "in-envelope host");
   assertStringIncludes(policy.error!, "composer-ready took 320ms");
+});
+
+// ── 63o3v: the steal axis of the declared envelope ────────────────────────────
+// The load-only quiet window cannot see a starved hypervisor: the bead's three
+// measurements failed at 36-48% steal while load/core read 0.14. These pins fix
+// the acceptance: a starved box cannot produce result=fail from this suite, and a
+// genuinely in-envelope box keeps its product red.
+
+Deno.test("63o3v: a starved-hypervisor run (high steal, quiet load) is OUTSIDE the envelope and REFUSES, never fails", () => {
+  const starvedRun = (n: number) =>
+    attributeBootRun(n, {
+      composerReadyEndMs: 40,
+      threadListHydratedEndMs: 80,
+      longTasks: [{ name: "self", duration: 77, startTime: 30 }],
+    }, QUIET_BOX_SAMPLE, { pct: 47.9, ceilingPct: 20 });
+  const probe = starvedRun(1);
+  assertEquals(probe.hostAboveQuietBound, false, "load reads quiet - why the load-only window missed it");
+  assertEquals(probe.hostAboveStealCeiling, true, "47.9% steal is above the 20% evidence ceiling (ADR rxayt/tu8w9)");
+  assertEquals(probe.hostOutsideEnvelope, true);
+
+  const policy = evaluateBootStagingPolicy([starvedRun(1), starvedRun(2), starvedRun(3)]);
+  assertEquals(policy.ok, false);
+  assertEquals(policy.environmentalRefusal, true, "a starved box must REFUSE, never fail (the 63o3v acceptance)");
+  assertStringIncludes(policy.error!, "steal", "the refusal names the axis that put the run outside the envelope");
+});
+
+Deno.test("63o3v: a genuine breach INSIDE the envelope (quiet load AND low steal) stays a product red", () => {
+  const inEnvelopeRun = (n: number) =>
+    attributeBootRun(n, {
+      composerReadyDurationMs: 300,
+      threadListHydratedDurationMs: 80,
+      longTasks: [],
+    }, QUIET_BOX_SAMPLE, { pct: 3.1, ceilingPct: 20 });
+  const policy = evaluateBootStagingPolicy([inEnvelopeRun(1)]);
+  assertEquals(policy.ok, false);
+  assertEquals(policy.environmentalRefusal, false, "inside the envelope a breach is the product's, not the box's");
+  assertStringIncludes(policy.error!, "in-envelope host");
+});
+
+Deno.test("63o3v: unmeasurable steal fails CLOSED to outside-envelope; omitting the steal argument keeps pre-63o3v load-only semantics", () => {
+  const unmeasured = attributeBootRun(1, {
+    composerReadyDurationMs: 300,
+    threadListHydratedDurationMs: 80,
+    longTasks: [],
+  }, QUIET_BOX_SAMPLE, { pct: null, ceilingPct: 20 });
+  assertEquals(unmeasured.hostAboveStealCeiling, true, "unmeasurable steal can never claim inside-envelope");
+  assertEquals(unmeasured.hostOutsideEnvelope, true);
+  assertEquals(evaluateBootStagingPolicy([unmeasured]).environmentalRefusal, true);
+
+  const legacy = attributeBootRun(1, {
+    composerReadyDurationMs: 300,
+    threadListHydratedDurationMs: 80,
+    longTasks: [],
+  }, QUIET_BOX_SAMPLE);
+  assertEquals(legacy.hostStealCeilingPct, null);
+  assertEquals(legacy.hostAboveStealCeiling, false);
+  assertEquals(legacy.hostOutsideEnvelope, false, "no steal argument = load-only envelope, pre-63o3v behaviour unchanged");
 });

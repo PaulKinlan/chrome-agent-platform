@@ -105,6 +105,40 @@ All harnesses under `scripts/` require a real browser:
 
 ---
 
+## 2a. The wall-clock budget/steal rule (chrome-agent-platform-63o3v)
+
+Every wall-clock budget in the tree is a DECLARED row in `WALL_CLOCK_BUDGETS`
+(`scripts/lib/wait-budget.ts`): `baseMs`, the **envelope it is defined at**
+(`definedAt: { maxLoadPerCore, maxStealPct }`) and the owning bead. There is
+exactly one mechanism — refuse outside the envelope, never extend the budget
+(the 9z8xs re-review killed scale-then-refuse: an extended budget converts a
+genuine slowdown into a green and a real hang into a refusal).
+
+- **A budget must declare the host envelope it is defined at.** A measurement
+  taken ABOVE the envelope is not evidence: the suite REFUSES environmentally
+  (`CAP_ENVIRONMENTAL_REFUSAL`, exit 75), never fails with a red that reads as
+  a product regression. Only an in-envelope measurement may produce a product
+  verdict.
+- **The envelope has TWO axes.** Load per core alone cannot see a starved
+  hypervisor: the 63o3v suite failed at 36-48% CPU steal while load/core read
+  0.14 ("quiet" by load). The steal ceiling is the repo's standing evidence
+  bound, `STEAL_THRESHOLD_PCT = 20` (ADR rxayt/tu8w9, `cpu-steal-sampler.mjs`):
+  at or above it a duration is not evidence. An unmeasurable axis fails CLOSED
+  to outside-envelope.
+- **Enforced in code, not prose.** `tests/wall-clock-budget-registry.test.ts`
+  scans every `tests/*.test.ts` for raw deadline arithmetic; a file with one
+  must be registered (and route through `wait-budget.ts`) or named in the
+  allowlist with its reason. A new undeclared budget reds the guard.
+  Registered tonight: `chunk-resolution-browser` (the 9z8xs waits, the worked
+  refuse-before-the-wait example) and `ntp-boot-staging-timing` (composer-ready
+  150ms, thread-list-hydrated 250ms, median-long-tasks 0 — the policy now
+  refuses on ANY task/latency breach measured outside the envelope, per-run
+  steal included). Named for re-tuning in the allowlist: the
+  `composer-command-disclosure`/`:600` UI polling ceilings and
+  `agent-header-rename-reload`'s sweep bound, plus the harness-plumbing
+  ceilings enumerated there. The 4vmn7 custody readiness window already scales
+  with absolute load (`security-suite-custody`).
+
 ## 3. The Three Launch Scopes (`acquireLaunchScope`)
 
 All browser launches go through `launchChrome()` in `scripts/lib/chrome-launch.ts`. The launcher enforces exactly one launch scope via `acquireLaunchScope()`. It starts the browser as its own session and process-group leader through `setsidSpawnSpec()` (`scripts/lib/process-tree.ts`): `/usr/bin/setsid` where it exists (Linux), otherwise `/usr/bin/perl -MPOSIX` calling `POSIX::setsid()` before `exec` (macOS ships no `setsid` binary). It records the dedicated process group from `/proc/<pid>/stat`, or from `/bin/ps -o pgid=` where there is no `/proc` (macOS); `teardownChrome(launched)` kills and verifies that entire group as well as matching the unique profile. `attachProcessLifeline()` adds a crash-safe watchdog (jjsz): it runs in its own session and blocks reading a pipe whose write end only the launching process holds, so if that process dies for any reason — including `SIGKILL` or a test runner killing its process group — the kernel closes the pipe and the watchdog kills the browser's group and every process whose argv carries the profile (a literal, end-anchored match: `lifelineMatchPattern` escapes every regex metacharacter, so a profile ending `/p1` never reaches `/p10`). A killed or timed-out test therefore cannot orphan Chrome. The lifeline is a small state machine (`armed` → `fired` | `disarmed`, once; `lifelineState()` reports it). When the browser's leader exits while the launcher is alive and no teardown is running (the shape of most acceptance scripts: `proc.kill("SIGKILL"); await proc.status`), that exit triggers a one-shot sweep through the watchdog's own kill logic, so a wedged helper is reaped without waiting for the launcher to die (measured on real Chrome for Testing with the helpers `SIGSTOP`ped: 7 survivors before, 0 after, about 60 ms). A normal `teardownChrome` disarms the watchdog only AFTER it has verified the group empty; a teardown that throws leaves it armed, and a teardown that starts while a sweep is running waits for the sweep, because the sweep's `pkill -f` also matches the teardown's own `pkill`/`pgrep` command lines (a normal teardown costs about 40 ms more than before, from the bounded `ps` wrapper). A watchdog that cannot be started (no perl, `EAGAIN`) says so once on stderr and the launch continues unprotected; whether to refuse the launch is a policy call for the caller. `attachProcessLifeline` refuses an unsafe `group` (anything but the leader's own pid, greater than 1) before it spawns anything. Where there is no `/proc` (macOS) the `/bin/ps` fallbacks fail closed: only `ps -p <absent pid>` exiting 1 with empty stdout and stderr proves a process gone, and every other outcome throws, so an unreadable process table is never read as an empty group. Encoding `--user-data-dir` in a descendant's `argv[0]` does **not** defeat `pkill -f`: it matches the joined cmdline (17/17 baseline descendants and 11/11 live group members matched). Group killing is defense in depth for a descendant that leaves the profile match or is born after it. The cause of the original confirmation miss remains open; the full gate plus the user-data-dir monitor is the deciding evidence. `chromeProfileDir()` supplies a fresh pid/time/random-suffixed profile per launch.

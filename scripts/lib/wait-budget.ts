@@ -25,6 +25,7 @@
 // The pure parts are pinned by tests/wait-budget.test.ts with hand-built
 // samples; no manufactured load is needed to prove the discrimination.
 
+import { STEAL_THRESHOLD_PCT } from "./cpu-steal-sampler.mjs";
 import {
   environmentLine,
   quietReasons,
@@ -64,6 +65,138 @@ export function waitBudgetSpec(spec: Partial<ResolvedSpec> = {}): ResolvedSpec {
   return resolveSpec(spec);
 }
 
+// ── 63o3v: the budget/steal RULE, as a manifest ──────────────────────────────
+//
+// THE RULE (stated, then enforced): a wall-clock budget must declare the host
+// envelope it is DEFINED at - { maxLoadPerCore, maxStealPct }. A measurement
+// taken ABOVE the declared envelope is not evidence: the suite REFUSES
+// environmentally, never fails with a red that reads as a product regression.
+// Only a measurement inside the envelope may produce a product verdict. The
+// steal axis is the one the load-only quiet window cannot see: the 63o3v suite
+// failed at 36-48% steal while load/core read 0.14 - quiet by load, meaningless
+// by wall clock. 20% is the repo's standing evidence ceiling (ADR rxayt/tu8w9,
+// cpu-steal-sampler.mjs STEAL_THRESHOLD_PCT): at or above it a duration is not
+// evidence.
+
+export interface DeclaredEnvelope {
+  /** The load1/core the budget is defined at (the repo quiet bound, 0.35). */
+  maxLoadPerCore: number;
+  /** The CPU-steal percentage at/above which a duration is not evidence (20). */
+  maxStealPct: number;
+}
+
+export interface WallClockBudget {
+  /** The budget inside the declared envelope, milliseconds. */
+  baseMs: number;
+  definedAt: DeclaredEnvelope;
+  /** The bead that owns the declaration. */
+  bead: string;
+}
+
+/**
+ * THE REGISTRY IS THE MANIFEST (63o3v ask 3): every wall-clock budget in the
+ * tree is declared here with the envelope it is defined at, and
+ * tests/wall-clock-budget-registry.test.ts rejects a suite that declares a raw
+ * deadline without a row here. Keyed `<suite file>#<phase>`.
+ */
+export const WALL_CLOCK_BUDGETS: Readonly<Record<string, WallClockBudget>> = Object.freeze({
+  "tests/chunk-resolution-browser.test.ts#readyState": Object.freeze({
+    baseMs: 8000,
+    definedAt: Object.freeze({ maxLoadPerCore: 0.35, maxStealPct: STEAL_THRESHOLD_PCT }),
+    bead: "chrome-agent-platform-9z8xs",
+  }),
+  "tests/chunk-resolution-browser.test.ts#settle": Object.freeze({
+    baseMs: 10000,
+    definedAt: Object.freeze({ maxLoadPerCore: 0.35, maxStealPct: STEAL_THRESHOLD_PCT }),
+    bead: "chrome-agent-platform-9z8xs",
+  }),
+  "tests/ntp-boot-staging-timing.test.ts#composer-ready": Object.freeze({
+    baseMs: 150,
+    definedAt: Object.freeze({ maxLoadPerCore: 0.35, maxStealPct: STEAL_THRESHOLD_PCT }),
+    bead: "chrome-agent-platform-63o3v",
+  }),
+  "tests/ntp-boot-staging-timing.test.ts#thread-list-hydrated": Object.freeze({
+    baseMs: 250,
+    definedAt: Object.freeze({ maxLoadPerCore: 0.35, maxStealPct: STEAL_THRESHOLD_PCT }),
+    bead: "chrome-agent-platform-63o3v",
+  }),
+  "tests/ntp-boot-staging-timing.test.ts#median-long-tasks": Object.freeze({
+    baseMs: 0,
+    definedAt: Object.freeze({ maxLoadPerCore: 0.35, maxStealPct: STEAL_THRESHOLD_PCT }),
+    bead: "chrome-agent-platform-63o3v",
+  }),
+});
+
+/** Look up a declared budget; throws (fails closed) when the key was never declared. */
+export function wallClockBudget(key: string): WallClockBudget {
+  const entry = WALL_CLOCK_BUDGETS[key];
+  if (!entry) {
+    throw new Error(`wallClockBudget: ${key} is not declared in WALL_CLOCK_BUDGETS - declare it with the envelope it is defined at (63o3v)`);
+  }
+  return entry;
+}
+
+/**
+ * The steal percentage between two /proc/stat texts (e.g. read at a run's
+ * start and end). Null when unmeasurable - parse failure, stalled or
+ * backwards counters - never a guess. Pure; the 63o3v pins feed it fixtures.
+ */
+export function stealPctBetweenStats(statA: string | null, statB: string | null): number | null {
+  const parse = (text: string | null) => {
+    if (text == null) return null;
+    const line = String(text).split("\n", 1)[0] ?? "";
+    if (!line.startsWith("cpu ")) return null;
+    const fields = line.trim().split(/\s+/).slice(1).map(Number);
+    if (fields.length < 8 || fields.some((n) => !Number.isFinite(n))) return null;
+    return { steal: fields[7], total: fields.slice(0, 8).reduce((a, b) => a + b, 0) };
+  };
+  const a = parse(statA);
+  const b = parse(statB);
+  if (!a || !b) return null;
+  const dTotal = b.total - a.total;
+  const dSteal = b.steal - a.steal;
+  if (!Number.isFinite(dTotal) || !Number.isFinite(dSteal) || dTotal <= 0 || dSteal < 0) return null;
+  return Math.min(100 * (dSteal / dTotal), 100);
+}
+
+/** Read /proc/stat, or null on any failure (non-Linux, unreadable). */
+export async function readProcStat(): Promise<string | null> {
+  try {
+    return await Deno.readTextFile("/proc/stat");
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The current CPU-steal percentage, measured over `sampleMs` of host time.
+ * Null when unmeasurable (non-Linux, unreadable /proc/stat, stalled counters):
+ * unmeasurable fails CLOSED - a wall-clock budget is exactly what steal
+ * invalidates, so an unknown steal never reads as inside the envelope.
+ */
+export async function measureStealPctNow(sampleMs = 400): Promise<number | null> {
+  try {
+    const read = async () => {
+      const text = await Deno.readTextFile("/proc/stat");
+      const line = text.split("\n", 1)[0] ?? "";
+      if (!line.startsWith("cpu ")) return null;
+      const fields = line.trim().split(/\s+/).slice(1).map(Number);
+      if (fields.length < 8 || fields.some((n) => !Number.isFinite(n))) return null;
+      return { steal: fields[7], total: fields.slice(0, 8).reduce((a, b) => a + b, 0) };
+    };
+    const a = await read();
+    await new Promise((r) => setTimeout(r, sampleMs));
+    const b = await read();
+    if (!a || !b) return null;
+    const dTotal = b.total - a.total;
+    const dSteal = b.steal - a.steal;
+    if (!Number.isFinite(dTotal) || !Number.isFinite(dSteal) || dTotal <= 0 || dSteal < 0) return null;
+    return Math.min(100 * (dSteal / dTotal), 100);
+  } catch {
+    return null;
+  }
+}
+
 /**
  * The pre-wait gate of the refusal-only contract: measure NOW, and when the box is
  * not measurably quiet return the classification the caller must refuse with. Returns
@@ -74,8 +207,9 @@ export function waitBudgetSpec(spec: Partial<ResolvedSpec> = {}): ResolvedSpec {
 export function refuseUnlessMeasurablyQuiet(
   sample: LoadSample | null,
   spec: ResolvedSpec = resolveSpec(),
+  steal?: StealReading & { definedAt: DeclaredEnvelope },
 ): DeadlineClassification | null {
-  const verdict = classifyDeadlineExpiry(sample, spec);
+  const verdict = classifyDeadlineExpiry(sample, spec, steal);
   return verdict.environmental ? verdict : null;
 }
 
@@ -89,15 +223,49 @@ export interface DeadlineClassification {
   reasons: string[];
 }
 
+/** A steal reading for the envelope check: null = unmeasurable (fails closed). */
+export interface StealReading {
+  stealPct: number | null;
+}
+
 /**
- * Classify an expired deadline from a load sample taken AT the catch.
+ * THE RULE AS A PURE FUNCTION (63o3v): is a measurement taken at
+ * { loadPerCore, stealPct } INSIDE the envelope the budget is defined at?
+ * Above either axis the measurement is not evidence. stealPct null (could not
+ * be measured) is OUTSIDE the envelope: a wall-clock budget is exactly what
+ * steal invalidates, so unknown steal never reads as quiet.
+ */
+export function withinDeclaredEnvelope(
+  measured: { loadPerCore: number | null; stealPct: number | null },
+  definedAt: DeclaredEnvelope,
+): { within: boolean; reasons: string[] } {
+  const reasons: string[] = [];
+  if (measured.loadPerCore == null) {
+    reasons.push("load unmeasurable");
+  } else if (measured.loadPerCore > definedAt.maxLoadPerCore) {
+    reasons.push(`load/core ${measured.loadPerCore.toFixed(2)} > declared envelope ${definedAt.maxLoadPerCore}`);
+  }
+  if (measured.stealPct == null) {
+    reasons.push("steal unmeasurable");
+  } else if (measured.stealPct >= definedAt.maxStealPct) {
+    reasons.push(`steal ${measured.stealPct.toFixed(1)}% >= declared envelope ${definedAt.maxStealPct}%`);
+  }
+  return { within: reasons.length === 0, reasons };
+}
+
+/**
+ * Classify an expired deadline from a load sample taken AT the catch, plus an
+ * optional steal reading against the budget's declared envelope (63o3v). Omit
+ * `steal` and the classification is the 9z8xs load-only one, unchanged.
  * Unmeasurable fails CLOSED to environmental (never a load claim, never a
- * product red). Not quiet per the canonical quiet-window rule is environmental.
- * Only a measurably quiet box is "quiet" - the caller's assert then reds.
+ * product red). Outside the envelope per the canonical quiet-window rule OR
+ * the declared steal ceiling is environmental. Only a measurably quiet box
+ * inside the envelope is "quiet" - the caller's assert then reds.
  */
 export function classifyDeadlineExpiry(
   sample: LoadSample | null,
   spec: ResolvedSpec = resolveSpec(),
+  steal?: StealReading & { definedAt: DeclaredEnvelope },
 ): DeadlineClassification {
   const environment = environmentLine(sample, spec);
   if (!sample || sample.measurable === false) {
@@ -109,6 +277,14 @@ export function classifyDeadlineExpiry(
     };
   }
   const reasons = quietReasons(sample, spec);
+  if (steal) {
+    // The steal axis: the load-only quiet window cannot see a starved hypervisor.
+    if (steal.stealPct == null) {
+      reasons.push("steal unmeasurable");
+    } else if (steal.stealPct >= steal.definedAt.maxStealPct) {
+      reasons.push(`steal ${steal.stealPct.toFixed(1)}% >= declared envelope ${steal.definedAt.maxStealPct}%`);
+    }
+  }
   if (reasons.length > 0) {
     return { environmental: true, cause: "loaded", environment, reasons };
   }

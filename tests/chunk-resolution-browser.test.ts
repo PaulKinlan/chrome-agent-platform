@@ -12,8 +12,10 @@ import {
   classifyDeadlineExpiry,
   deadlineRefusalError,
   isHarnessTimeoutError,
+  measureStealPctNow,
   refuseUnlessMeasurablyQuiet,
   waitBudgetSpec,
+  wallClockBudget,
 } from "../scripts/lib/wait-budget.ts";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -29,27 +31,36 @@ const { binary: RESOLVED_BIN, tried: TRIED_BINS } = resolveChromiumBinaryReport(
 // machine at the catch. The machinery and its pins live in
 // scripts/lib/wait-budget.ts and tests/wait-budget.test.ts.
 const QUIET_SPEC = waitBudgetSpec();
-const READY_BUDGET_MS = 8000;
-const SETTLE_BUDGET_MS = 10000;
 
-/** The pre-wait gate: above the quiet threshold, refuse now - do not even start the wait. */
+// 63o3v: both waits are DECLARED in the WALL_CLOCK_BUDGETS manifest with the
+// envelope they are defined at (load/core <= 0.35, steal < 20%); a measurement
+// outside the envelope refuses, it never reads as a page defect. The budgets are
+// the registry rows - always the base, never scaled (9z8xs re-review).
+const READY_ENTRY = wallClockBudget("tests/chunk-resolution-browser.test.ts#readyState");
+const SETTLE_ENTRY = wallClockBudget("tests/chunk-resolution-browser.test.ts#settle");
+
+/** The pre-wait gate: outside the declared envelope, refuse now - do not even start the wait. */
 async function refuseBeforeWait(phase: string, surfacePath: string): Promise<void> {
+  const envelope = phase === "settle" ? SETTLE_ENTRY.definedAt : READY_ENTRY.definedAt;
   const sample = await readLoadSample().catch(() => null);
-  const verdict = refuseUnlessMeasurablyQuiet(sample, QUIET_SPEC);
+  const stealPct = await measureStealPctNow().catch(() => null);
+  const verdict = refuseUnlessMeasurablyQuiet(sample, QUIET_SPEC, { stealPct, definedAt: envelope });
   if (verdict) {
     throw deadlineRefusalError(`${phase} (pre-wait)`, surfacePath, undefined, undefined, verdict);
   }
 }
 
-/** At an expired deadline: refuse environmentally unless the box is measurably quiet. */
+/** At an expired deadline: refuse environmentally unless the box is measurably inside the declared envelope. */
 async function refuseIfNotQuiet(
   phase: string,
   surfacePath: string,
   budgetMs: number,
   baseMs: number,
 ): Promise<void> {
+  const envelope = phase === "settle" ? SETTLE_ENTRY.definedAt : READY_ENTRY.definedAt;
   const sample = await readLoadSample().catch(() => null);
-  const verdict = classifyDeadlineExpiry(sample, QUIET_SPEC);
+  const stealPct = await measureStealPctNow().catch(() => null);
+  const verdict = classifyDeadlineExpiry(sample, QUIET_SPEC, { stealPct, definedAt: envelope });
   if (verdict.environmental) {
     throw deadlineRefusalError(phase, surfacePath, budgetMs, baseMs, verdict);
   }
@@ -263,11 +274,11 @@ Deno.test("20e2u condition (e): load ntp, sidepanel, options in real Chrome; all
 
       await client.send("Page.navigate", { url: `chrome-extension://${extId}/${surface.path}` }, sessionId);
 
-      // 1. Wait for document.readyState === "complete". The budget is 8s, ALWAYS (9z8xs
-      // re-review: budgets never scale). Above the quiet threshold the suite refuses
-      // BEFORE waiting; a deadline that expires anyway is classified at the catch.
+      // 1. Wait for document.readyState === "complete". The budget is the DECLARED 8s,
+      // ALWAYS (9z8xs re-review: budgets never scale). Outside the declared envelope the
+      // suite refuses BEFORE waiting; a deadline that expires anyway is classified at the catch.
       await refuseBeforeWait("readyState", surface.path);
-      const readyBudgetMs = READY_BUDGET_MS;
+      const readyBudgetMs = READY_ENTRY.baseMs;
       let readyStateComplete = false;
       const readyDeadline = Date.now() + readyBudgetMs;
       while (Date.now() < readyDeadline) {
@@ -279,7 +290,7 @@ Deno.test("20e2u condition (e): load ntp, sidepanel, options in real Chrome; all
         await new Promise((r) => setTimeout(r, 50));
       }
       if (!readyStateComplete) {
-        await refuseIfNotQuiet("readyState", surface.path, readyBudgetMs, 8000);
+        await refuseIfNotQuiet("readyState", surface.path, readyBudgetMs, READY_ENTRY.baseMs);
       }
       assert(
         readyStateComplete,
@@ -294,9 +305,9 @@ Deno.test("20e2u condition (e): load ntp, sidepanel, options in real Chrome; all
       // 3. Wait until all expected dynamic chunks resolve, in-flight requests drain, and 300ms quiet window elapses.
       // Under gate load (chrome-agent-platform-30yox), main-thread contention can postpone dynamic-import
       // dispatch of chunks (like vault-quotas in options); do not prematurely settle while expected chunks remain.
-      // The budget is 10s, ALWAYS; above the quiet threshold the suite refuses before waiting (9z8xs re-review).
+      // The budget is the DECLARED 10s, ALWAYS; outside the envelope the suite refuses before waiting.
       await refuseBeforeWait("settle", surface.path);
-      const settleBudgetMs = SETTLE_BUDGET_MS;
+      const settleBudgetMs = SETTLE_ENTRY.baseMs;
       let settled = false;
       const settleDeadline = Date.now() + settleBudgetMs;
       while (Date.now() < settleDeadline) {
@@ -318,7 +329,7 @@ Deno.test("20e2u condition (e): load ntp, sidepanel, options in real Chrome; all
         (c) => ![...distinctChunkUrls].some((u) => u.includes(c)),
       );
       if (!settled) {
-        await refuseIfNotQuiet("settle", surface.path, settleBudgetMs, 10000);
+        await refuseIfNotQuiet("settle", surface.path, settleBudgetMs, SETTLE_ENTRY.baseMs);
       }
       assert(
         settled,
@@ -389,14 +400,15 @@ Deno.test("20e2u condition (e): load ntp, sidepanel, options in real Chrome; all
     // quiet box the original error stands. Content assertions (AssertionError:
     // chunk 404s, CSP violations, the quiet-box readyState red) pass through
     // unchanged - this catch never launders a product failure.
-    // 9z8xs re-review (P2-c, second round): reclassify ONLY identified harness timeout
-    // TYPES, matched by class via isHarnessTimeoutError (pinned in wait-budget.test.ts) -
-    // never message text. A page-origin PageThrowError whose text happens to read
-    // "deadline exceeded" is a product failure and passes through (chrome-launch.ts:1404).
-    const isBareTiming = !(error instanceof AssertionError) && isHarnessTimeoutError(error);
+    // 9z8xs re-review (P2-c, second round): reclassify ONLY the untyped withTimeout
+    // spelling, via isHarnessTimeoutError (pinned in wait-budget.test.ts) - typed harness
+    // timeouts self-classify at their source and propagate, and a page-origin
+    // PageThrowError reading "deadline exceeded" is a product failure, never laundered.
+    const isBareTiming = isHarnessTimeoutError(error);
     if (isBareTiming) {
       const sample = await readLoadSample().catch(() => null);
-      const verdict = classifyDeadlineExpiry(sample, QUIET_SPEC);
+      const stealPct = await measureStealPctNow().catch(() => null);
+      const verdict = classifyDeadlineExpiry(sample, QUIET_SPEC, { stealPct, definedAt: READY_ENTRY.definedAt });
       if (verdict.environmental) {
         throw deadlineRefusalError("launch/attach/wait", "extension surfaces", undefined, undefined, verdict);
       }
