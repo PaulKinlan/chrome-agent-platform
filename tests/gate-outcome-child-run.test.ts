@@ -16,6 +16,7 @@
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { certificationGaps, parallelPlan } from "../scripts/lib/parallel-plan.mjs";
 import { fullTierManifestFields } from "../scripts/lib/gate-manifest.mjs";
+import { INCOMPLETE_EXIT, BOUND_KILL_EXIT_CODES } from "../scripts/lib/phase-outcome.mjs";
 import { fileURLToPath } from "node:url";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
@@ -47,18 +48,33 @@ function manifestFrom(stderr: string): Record<string, unknown> | null {
 }
 
 Deno.test("w6kc0: a forced serial failure makes the CHILD runner refuse certification, in one execution", () => {
-  const { code, stderr } = runChild({
+  const { code, stdout, stderr } = runChild({
     CAP_SERIAL_TEST_TIMEOUT_MS: "1",
     CAP_RUN_TESTS_STOP_AFTER_SERIAL: "1",
   });
+  const out = `${stdout}\n${stderr}`;
 
   // (1) the exit cannot be 0 when files did not run, even though every phase that ran returned 0.
   assert(code !== 0, `a skipped run must exit non-zero, got ${code}. stderr tail: ${stderr.slice(-1500)}`);
+  // 5xg1w: and it must not be the exit-1 shape of a completed FAIL either — the code itself is part of
+  // the outcome vocabulary, so a content-addressed cache can never file this abort as a FAIL verdict.
+  // This child's serial files die by the 1ms TIMEOUT seam, so the combined rc is a bound-kill code,
+  // which outranks 76 by contract (124 already tells consumers "unknown, do not cache"); the exact
+  // 1 → 76 mapping of the real incident is pinned by the unit table in tests/phase-outcome.test.ts and
+  // by the all-phases-green synthetic child below.
+  assert(
+    code === INCOMPLETE_EXIT || BOUND_KILL_EXIT_CODES.has(code),
+    `a run that skipped files must exit ${INCOMPLETE_EXIT} or keep a bound-kill code, got ${code}. stderr tail: ${stderr.slice(-1500)}`,
+  );
+  assert(code !== 1, `an incomplete run must never carry the exit-1 shape of a completed FAIL, got ${code}`);
 
   // (2) the same execution's manifest cannot certify coverage.
   const manifest = manifestFrom(stderr);
   assert(manifest !== null, `the run must emit a gate manifest. stderr tail: ${stderr.slice(-1500)}`);
   assertEquals(manifest.certifiable, false, "the manifest must be certifiable:false");
+  // 5xg1w: the structured verdict and skip count, readable without inferring from empty executed_suites.
+  assertEquals(manifest.outcome, "incomplete", "the manifest must state the outcome as a field");
+  assert(Number(manifest.skipped) > 0, `the manifest must count the skipped files, got ${JSON.stringify(manifest.skipped)}`);
   const incomplete = String(manifest.incomplete ?? "");
   assert(incomplete.includes("unrun"), `the manifest must name the unrun files, got ${JSON.stringify(incomplete)}`);
   assert(
@@ -83,15 +99,20 @@ Deno.test("w6kc0: a forced serial failure makes the CHILD runner refuse certific
     `a real serial failure must not be reported as a declined serial phase: ${JSON.stringify(incomplete)}`,
   );
 
-  // Separately, the human-readable announcement still names the cause and the plan-level skip: that is the
-  // operator's line, and asserting it here does not weaken the manifest assertion above.
+  // Separately, the human-readable announcement still names the cause and the 0o0um contract: the
+  // parallel phase is no longer skipped on a serial failure (this child declines it only through the
+  // STOP_AFTER_SERIAL seam, which is exactly why the manifest must report the files as unrun).
   assert(
     stderr.includes("serial file(s) failed"),
     `the announcement must name the serial failure as the cause: ${stderr.slice(-1200)}`,
   );
   assert(
-    /\d+ of \d+ parallel file\(s\) are SKIPPED/.test(stderr),
-    `the announcement must state the plan-level skip and its size: ${stderr.slice(-1200)}`,
+    stderr.includes("STILL RUNS in full"),
+    `the announcement must state the 0o0um contract (parallel runs despite the serial red): ${stderr.slice(-1200)}`,
+  );
+  assert(
+    /\d+ files total, \d+ skipped/.test(out),
+    `the summary must count the unrun files: ${stderr.slice(-1200)}`,
   );
 });
 
@@ -105,14 +126,26 @@ Deno.test("w6kc0: SYNTHETIC phase-0 skip — all phases green, files unrun, stil
     CAP_RUN_TESTS_STOP_AFTER_SERIAL: "1",
   });
   assert(code !== 0, `rc would be 0 here, so the exit must be forced non-zero; got ${code}. ${stderr.slice(-1200)}`);
+  assertEquals(code, INCOMPLETE_EXIT, `all phases green but files unrun is INCOMPLETE, not FAIL: got ${code}. ${stderr.slice(-1200)}`);
   const manifest = manifestFrom(stderr);
   assert(manifest !== null, `the synthetic run must emit a manifest. ${stderr.slice(-1200)}`);
   assertEquals(manifest!.certifiable, false, "rc 0 with unrun files must still be certifiable:false");
+  assertEquals(manifest!.outcome, "incomplete", "the manifest must state the outcome as a field");
   assert(
     String(manifest!.incomplete ?? "").includes("unrun"),
     `the manifest must name the unrun files: ${JSON.stringify(manifest!.incomplete)}`,
   );
   assert(stderr.includes("NOT CERTIFIABLE"), "the run must print NOT CERTIFIABLE even with all phases green");
+  // 5xg1w: the fleet-check wire contract. The per-tree cache greps the LAST 8000 bytes of the log for
+  // "ABORTED: incomplete suite run" / "phase not entered, skipped=" to classify st=INCOMPLETE (re-gateable)
+  // instead of filing a permanent FAIL — so the marker must exist AND follow the manifest JSON, which
+  // with hundreds of omitted entries can dwarf the tail window.
+  assert(stderr.includes("ABORTED: incomplete suite run"), `the cache-visible abort marker is missing: ${stderr.slice(-900)}`);
+  assert(/phase not entered, skipped=\d+/.test(stderr), `the marker must carry the skipped count: ${stderr.slice(-900)}`);
+  assert(
+    stderr.lastIndexOf("ABORTED: incomplete suite run") > stderr.lastIndexOf("fast-gate: manifest:"),
+    "the marker must be the LAST line: the manifest JSON can exceed the cache's 8000-byte tail window",
+  );
 });
 
 Deno.test("w6kc0: the positive control — a run with nothing skipped certifies, and has no gap", () => {
@@ -129,6 +162,8 @@ Deno.test("w6kc0: the positive control — a run with nothing skipped certifies,
   assert(complete !== null, "the default npm test form must produce a manifest");
   assertEquals(complete!.certifiable, true, "a run that skipped nothing must certify");
   assertEquals(complete!.incomplete, null, "a complete run carries no incomplete reason");
+  assertEquals(complete!.outcome, "passed", "5xg1w: a complete green states its outcome");
+  assertEquals(complete!.skipped, 0, "5xg1w: a complete run skipped nothing, and says so with a count");
   assertEquals(certificationGaps({ skipped: 0 }), [], "no skip means no gap");
 
   // And the refusal is not unconditional: a clean plan certifies, while a declined parallel phase is named
@@ -149,6 +184,8 @@ Deno.test("w6kc0: a serial-only selection cannot be skipped into a green (review
   );
   const out = `${stdout}\n${stderr}`;
   assert(code !== 0, `a serial-only selection that ran nothing must exit non-zero, got ${code}. ${stderr.slice(-900)}`);
+  assertEquals(code, INCOMPLETE_EXIT, `skipped files exit ${INCOMPLETE_EXIT} even for an explicit-file selection: got ${code}`);
+  assert(out.includes("ABORTED: incomplete suite run"), "the cache-visible abort marker must be present even without a manifest");
   assert(out.includes("INCOMPLETE"), "the run must say INCOMPLETE (summary line, stdout)");
   assert(
     /serial phase skipped \(\d+ file\(s\) unrun\)/.test(out),
@@ -156,4 +193,178 @@ Deno.test("w6kc0: a serial-only selection cannot be skipped into a green (review
   );
   // And the seam must not print a green for a test it never ran.
   assert(!/GREEN|^ok\b/m.test(stdout), `nothing ran, so nothing may read as green: ${stdout.slice(-400)}`);
+});
+
+// chrome-agent-platform-0o0um/5xg1w, coord's falsifier: THE defect route itself — a serial file dies
+// (here by the 1ms timeout seam; in the incident it was an 8s readyState budget and, on the next
+// attempt, a driver OOM-killed with SIGKILL) and the parallel phase used to be skipped down to the
+// 48-file guard set, destroying 94% of the evidence while the record read as a plain completed FAIL.
+// This test REDS on the old behaviour (no "STILL RUNS", the file never executes, "are SKIPPED" is
+// printed) and passes only when the parallel phase actually runs after the serial death.
+Deno.test("0o0um: a serial failure STILL RUNS the parallel phase — a completed red, never an abort", () => {
+  const { code, stdout, stderr } = runChild(
+    { CAP_SERIAL_TEST_TIMEOUT_MS: "1" },
+    ["tests/build-smoke.test.ts", "tests/phase-outcome.test.ts"],
+  );
+  const out = `${stdout}\n${stderr}`;
+
+  // The parallel phase was ENTERED: its own status line names the phase and its file count.
+  assert(
+    /parallel phase \(1 files\)/.test(out),
+    `the parallel phase must run despite the serial failure: ${out.slice(-1500)}`,
+  );
+  // And the selected parallel file really EXECUTED — its reporter lines are the evidence the old
+  // guard-subset skip destroyed. ANSI-stripped first: Deno colours the verdict (`... \x1b[32mok`).
+  const clean = out.replace(/\x1b\[[0-9;]*[mGKH]/g, "");
+  assert(
+    clean.includes("tests/phase-outcome.test.ts =>") && /\.\.\. (?:ok|FAILED)/.test(clean),
+    `the selected parallel file must actually execute: ${clean.slice(-1500)}`,
+  );
+  // The announce states the new contract, and the old skip wording must never return on this route.
+  assert(out.includes("serial file(s) failed"), `the serial failure must still be named: ${out.slice(-1200)}`);
+  assert(out.includes("STILL RUNS in full"), `the announce must state the parallel phase runs: ${out.slice(-1200)}`);
+  assert(!out.includes("are SKIPPED"), `a serial failure must not skip parallel files any more: ${out.slice(-1200)}`);
+
+  // A genuine serial red STILL fails the gate — the failure semantics are not weakened. The timeout
+  // seam kills the serial driver, so the completed rc is a bound-kill code; a real assertion red is 1.
+  assert(code !== 0, `the serial red must still fail the run, got ${code}`);
+  assert(
+    code !== INCOMPLETE_EXIT,
+    `nothing was skipped, so this is a COMPLETED verdict and must not carry the incomplete code: got ${code}`,
+  );
+  // Completed shape: no abort marker, no certification gap — a cache may file this red against the
+  // tree, because every selected file ran and the log carries every result.
+  assert(!out.includes("ABORTED: incomplete suite run"), `a completed run must not carry the abort marker: ${out.slice(-900)}`);
+  assert(!out.includes("NOT CERTIFIABLE"), `nothing was skipped, so the run is complete evidence: ${out.slice(-900)}`);
+});
+
+// chrome-agent-platform-5xg1w review, blocker 1, path A — CHILD-LEVEL: a GLOBAL serial lane whose child
+// exits WITHOUT writing its result file (the OOM/crash shape of the 0o0um incident's second attempt)
+// leaves files with no certified result. Before the fix, those files reached NO accounting: the run
+// exited 1 as a COMPLETED FAIL over work that never happened, and the per-tree cache filed it forever.
+// CAP_SERIAL_LANE_SKIP_RESULT=1 (seam in scripts/lib/serial-lane-child.mjs, tests only) reproduces it
+// with a real lane child; CAP_RUN_TESTS_STOP_AFTER_SERIAL keeps the parallel phase cheap.
+Deno.test("5xg1w blocker 1A: an unreported serial lane makes the run INCOMPLETE, never a completed FAIL", () => {
+  const { code, stdout, stderr } = runChild({
+    CAP_SERIAL_TEST_TIMEOUT_MS: "1",
+    CAP_SERIAL_LANE_SKIP_RESULT: "1",
+    CAP_RUN_TESTS_STOP_AFTER_SERIAL: "1",
+  });
+  const out = `${stdout}\n${stderr}`;
+
+  // The 1ms serial timeout seam makes the reported lanes die by their bound, so the combined rc is a
+  // bound-kill code, which outranks 76 by contract (fleet-check already reads 124/137/143 as KILLED —
+  // never a verdict). What must never happen is the old shape: a plain completed-FAIL 1 over unrun files.
+  assert(
+    code === INCOMPLETE_EXIT || BOUND_KILL_EXIT_CODES.has(code),
+    `unreported lane files are unrun work: exit must be ${INCOMPLETE_EXIT} or a preserved bound-kill code, got ${code}. ${stderr.slice(-1200)}`,
+  );
+  assert(code !== 1, `a run over unreported files must never carry the exit-1 shape of a completed FAIL, got ${code}`);
+  assert(out.includes("did not report a result"), "the unreported lane must be announced");
+
+  const manifest = manifestFrom(stderr);
+  assert(manifest !== null, `the full selection must emit a manifest. ${stderr.slice(-900)}`);
+  assertEquals(manifest!.outcome, "incomplete");
+  // The three GLOBAL-lane files are counted in skipped and named with their OWN reason — never folded
+  // into "serial file(s) failed" (they did not fail; they never reported).
+  const omitted = (manifest!.omitted as Array<{ file: string; reason: string }>);
+  for (const globalFile of [
+    "tests/chrome-launch-lock.test.ts",
+    "tests/chrome-launch-lock-scope.test.ts",
+    "tests/chrome-slot-semaphore.test.ts",
+  ]) {
+    const entry = omitted.find((o) => o.file === globalFile);
+    assert(entry, `the unreported file must be disclosed in omitted: ${globalFile}`);
+    assert(
+      entry!.reason.includes("never reported a result"),
+      `the unreported file needs its own reason, got: ${entry!.reason}`,
+    );
+  }
+  assert(Number(manifest!.skipped) >= 762, `skipped must count the seam-declined parallel files AND the 3 unreported lane files, got ${manifest!.skipped}`);
+  assert(
+    /serial lane child never reported a result \(\d+ file\(s\) unrun\)/.test(String(manifest!.incomplete)),
+    `manifest.incomplete must name the unreported lane and its count: ${JSON.stringify(manifest!.incomplete)}`,
+  );
+  // The cache-visible marker: required on the 76 route (fleet-check greps it); on a preserved
+  // bound-kill code the rc itself already tells the cache "not a verdict", so the marker is optional.
+  if (code === INCOMPLETE_EXIT) {
+    assert(out.includes("ABORTED: incomplete suite run"), "the cache-visible abort marker is missing");
+    assert(/phase not entered, skipped=\d+/.test(stderr), `the marker must keep the grep-able declined-phase wording: ${stderr.slice(-900)}`);
+    assert(stderr.includes("never reported"), "the marker must name the unreported loss too");
+  }
+});
+
+// chrome-agent-platform-5xg1w review, blocker 1, path B — CHILD-LEVEL: a parallel child that cannot
+// even SPAWN (ENOENT — here by emptying PATH, so the bare `deno` spawn fails for real) ran NONE of its
+// files. Before the fix, run-tests resolved that phase with rc 1 and recorded nothing: a run whose
+// parallel phase never existed was filed as a completed FAIL with skipped:0.
+Deno.test("5xg1w blocker 1B: a parallel spawn error is recorded as INCOMPLETE, never a completed FAIL", () => {
+  const { code, stdout, stderr } = runChild({ PATH: "" }, ["tests/phase-outcome.test.ts"]);
+  const out = `${stdout}\n${stderr}`;
+
+  assert(out.includes("spawn error"), `the spawn failure must be named: ${out.slice(-1200)}`);
+  assertEquals(
+    code,
+    INCOMPLETE_EXIT,
+    `a phase that never spawned is unrun work: exit must be ${INCOMPLETE_EXIT}. ${stderr.slice(-1200)}`,
+  );
+  assert(
+    /the phase never ran \(1 file\(s\) unrun\)/.test(out),
+    `the killed-phase record must count the files the spawn error cost: ${out.slice(-1200)}`,
+  );
+  assert(out.includes("ABORTED: incomplete suite run"), "the cache-visible abort marker is missing");
+  assert(
+    !out.includes("parallel phase (1 files) GREEN"),
+    "a phase that never spawned must never print a GREEN status line",
+  );
+});
+
+// chrome-agent-platform-5xg1w review, round 2 — the manifest pin the explicit-file spawn-error test
+// above CANNOT make: an explicit-file run emits no manifest at all, so a never-spawned parallel phase
+// reporting skipped:0 (files counted only in the incomplete TEXT) went unasserted. This is a DEFAULT
+// run: the manifest must count every never-spawned file in skipped and name each in omitted with its
+// own reason. CAP_PARALLEL_SPAWN_COMMAND points the phase spawn at a nonexistent binary (a real
+// ENOENT through the production code path); CAP_RUN_TESTS_SKIP_SERIAL keeps it cheap and makes the
+// exit deterministic (no serial bound-kill code to preserve).
+Deno.test("5xg1w round 2: a never-spawned parallel phase is counted in the DEFAULT-run manifest skipped/omitted", () => {
+  const { code, stdout, stderr } = runChild({
+    CAP_RUN_TESTS_SKIP_SERIAL: "1",
+    CAP_PARALLEL_SPAWN_COMMAND: "/nonexistent/cap-5xg1w-deno",
+  });
+  const out = `${stdout}\n${stderr}`;
+
+  assertEquals(
+    code,
+    INCOMPLETE_EXIT,
+    `a never-spawned phase is unrun work: exit must be ${INCOMPLETE_EXIT}. ${stderr.slice(-1200)}`,
+  );
+  const manifest = manifestFrom(stderr);
+  assert(manifest !== null, `a DEFAULT run must emit a gate manifest. ${stderr.slice(-900)}`);
+  assertEquals(manifest!.outcome, "incomplete");
+  // The whole parallel selection never spawned: skipped must count it (declined serial + lost parallel).
+  assert(
+    Number(manifest!.skipped) >= 759,
+    `skipped must count every never-spawned parallel file, got ${manifest!.skipped}`,
+  );
+  const omitted = manifest!.omitted as Array<{ file: string; reason: string }>;
+  const probe = omitted.filter((o) => o.file === "tests/parallel-plan.test.ts");
+  assert(probe.length > 0, "a never-spawned parallel file must be disclosed in omitted");
+  assert(
+    probe.every((o) => o.reason.includes("never spawned")),
+    `each lost file must carry the never-spawned reason: ${JSON.stringify(probe)}`,
+  );
+  assert(
+    String(manifest!.incomplete).includes("parallel phase child never spawned"),
+    `manifest.incomplete must name the never-spawned phase: ${JSON.stringify(manifest!.incomplete)}`,
+  );
+  // The cache-visible marker stays the LAST line, after the (huge) manifest JSON.
+  assert(out.includes("ABORTED: incomplete suite run"), "the cache-visible abort marker is missing");
+  assert(
+    stderr.lastIndexOf("ABORTED: incomplete suite run") > stderr.lastIndexOf("fast-gate: manifest:"),
+    "the marker must follow the manifest: the JSON alone can exceed the cache's 8000-byte tail window",
+  );
+  assert(
+    !/parallel phase \(\d+ files\) GREEN/.test(out),
+    "a phase that never spawned must never print a GREEN status line",
+  );
 });

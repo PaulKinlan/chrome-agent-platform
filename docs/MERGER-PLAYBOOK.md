@@ -187,6 +187,12 @@ node scripts/check-landing-clearance.mjs <previous-main>..<candidate-sha>
 # 8. Run full two-phase suite gate and dedicated build gate (Option D: chrome-agent-platform-h65e)
 npm test > /tmp/npm-test-<bead>.log 2>&1
 # Verify exit 0, zero failures, record wall time and phase counts
+# Exit 76 = INCOMPLETE (chrome-agent-platform-5xg1w): the run selected files it did NOT execute (a
+#   seam declined a phase, or a bound killed one). It is NOT a verdict on the tree — never file it as
+#   a completed FAIL; the manifest says outcome:"incomplete", skipped:N, and the last log line is
+#   "ABORTED: incomplete suite run". A serial-phase failure no longer skips the parallel phase
+#   (0o0um): that is a COMPLETED red, exit 1, with every parallel result in the log. See
+#   docs/CHROME-TEST-CONTRACT.md §2.1 exit-code vocabulary.
 # Run dedicated heavy build-behaviour and WASM/fixture gates:
 npm run test:build > /tmp/npm-test-build-<bead>.log 2>&1
 npm run test:heavy > /tmp/npm-test-heavy-<bead>.log 2>&1

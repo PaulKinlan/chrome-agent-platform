@@ -287,9 +287,84 @@ Deno.test("lanes: the child lane runs on the SAME runtime as its parent (node fo
 Deno.test("lanes: the full runner uses the lanes and the per-change runner still runs SERIAL as one list", async () => {
   const { readFileSync } = await import("node:fs");
   const full = readFileSync(join(ROOT, "scripts/run-tests.mjs"), "utf8");
-  assert(/await runSerialLanes\(serialFiles, \{ failuresOut: serialFailures \}\)/.test(full), "run-tests.mjs must run SERIAL through runSerialLanes");
+  assert(/await runSerialLanes\(serialFiles, \{ failuresOut: serialFailures, unreportedOut: serialUnreported \}\)/.test(full), "run-tests.mjs must run SERIAL through runSerialLanes, collecting unreported lane files (5xg1w blocker 1)");
   assert(!/runSerialFiles\(serialFiles, \{ failuresOut: serialFailures \}\)/.test(full), "run-tests.mjs must not keep the old sequential call");
   const perChange = readFileSync(join(ROOT, "scripts/select-tests.mjs"), "utf8");
   assert(/runSerialFiles\(/.test(perChange), "select-tests.mjs keeps the sequential serial phase (a changed-file subset has no lane split to pay for)");
   assert(!/runSerialLanes\(/.test(perChange), "select-tests.mjs must not adopt lanes in this change");
+});
+
+// chrome-agent-platform-5xg1w review, blocker 1: a GLOBAL child that exits WITHOUT writing its result
+// file leaves its files with no certified result. They are UNRUN — not failed — and must reach the
+// runner's incomplete accounting (unreportedOut), or the run reports a completed FAIL over work that
+// never happened and a content-addressed cache files that false verdict permanently.
+async function unreportedRun(exited: { code: number | null; signal: string | null }, buildLaneGreen = false) {
+  const files = ["tests/build-smoke.test.ts", "tests/chrome-launch-lock.test.ts"];
+  const announced: string[] = [];
+  const realLog = console.log;
+  const realError = console.error;
+  const capture = (...args: any[]) => { announced.push(args.map(String).join(" ")); };
+  console.log = capture;
+  console.error = capture;
+  const failuresOut: any[] = [];
+  const unreportedOut: string[] = [];
+  let rc = -1;
+  try {
+    rc = await runSerialLanes(files, {
+      runLaneFiles: (laneFiles: string[], opts: any) => {
+        for (const file of laneFiles) {
+          opts.failuresOut.push({ file, code: buildLaneGreen ? 0 : 1, timedOut: false, isRefusal: false, secs: "0", log: null });
+        }
+        return buildLaneGreen ? 0 : 1;
+      },
+      // The child starts, runs, and dies WITHOUT writing lane.resultPath — the exact defect shape.
+      spawnLaneChild: () => ({ pid: 0, kill: () => {}, exited: Promise.resolve(exited) }),
+      failuresOut,
+      unreportedOut,
+    });
+  } finally {
+    console.log = realLog;
+    console.error = realError;
+  }
+  return { rc, failuresOut, unreportedOut, announced };
+}
+
+Deno.test("5xg1w blocker 1: an unreported GLOBAL lane hands its files to unreportedOut, never to failuresOut", async () => {
+  const { rc, failuresOut, unreportedOut, announced } = await unreportedRun({ code: 1, signal: null });
+  assertEquals(unreportedOut, ["tests/chrome-launch-lock.test.ts"], "the unreported lane's files are UNRUN and must be handed back");
+  assertEquals(
+    failuresOut.map((f) => f.file),
+    ["tests/build-smoke.test.ts"],
+    "an unreported file must NOT be invented as a failure — only the build lane actually reported",
+  );
+  assertEquals(rc, 1, "the phase is red on the reported build-lane failure");
+  assert(
+    announced.join("\n").includes("did not report a result"),
+    "the unreported lane must still be announced",
+  );
+});
+
+Deno.test("5xg1w blocker 1: an unreported lane PRESERVES the bound-kill/signal vocabulary (OOM SIGKILL → 137)", async () => {
+  // The 0o0um incident's second attempt: the lane driver was OOM-killed — SIGKILL, not an assertion.
+  // Flattening that into rc 1 would file an environmental death as a product FAIL. (Build lane green,
+  // so the unreported lane's own code decides the phase — a genuine product red elsewhere still wins
+  // the combine, and the runner turns either shape into INCOMPLETE via the unreported gap.)
+  const sigkill = await unreportedRun({ code: null, signal: "SIGKILL" }, true);
+  assertEquals(sigkill.rc, 137, "a signal death keeps its 128+signal code (fleet-check reads 137 as KILLED, never a verdict)");
+  assertEquals(sigkill.unreportedOut, ["tests/chrome-launch-lock.test.ts"]);
+
+  const sigterm = await unreportedRun({ code: null, signal: "SIGTERM" }, true);
+  assertEquals(sigterm.rc, 143, "SIGTERM → 143, same vocabulary");
+
+  // A plain non-zero exit passes through; a zero exit with no result is forced red (uncertified).
+  const exited3 = await unreportedRun({ code: 3, signal: null }, true);
+  assertEquals(exited3.rc, 3, "the child's own non-zero code is preserved");
+  const exited0 = await unreportedRun({ code: 0, signal: null }, true);
+  assertEquals(exited0.rc, 1, "exit 0 with NO result file is uncertified, never green");
+
+  // A genuine product red in a REPORTED lane still wins the phase combine — the kill vocabulary does
+  // not launder real failures.
+  const mixed = await unreportedRun({ code: null, signal: "SIGKILL" }, false);
+  assertEquals(mixed.rc, 1, "a reported product failure outranks the unreported lane's signal code");
+  assertEquals(mixed.unreportedOut, ["tests/chrome-launch-lock.test.ts"], "and the unreported files are STILL handed back");
 });

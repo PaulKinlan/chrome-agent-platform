@@ -19,6 +19,14 @@
 // (scripts/select-tests.mjs and scripts/run-tests.mjs) use one formatter without a dependency cycle.
 import { isPassiveContentFile } from "./content-exemptions.mjs";
 import { suiteDurationsObject } from "./parallel-durations.mjs";
+import { ENVIRONMENTAL_REFUSAL_EXIT } from "./environmental-verdict.mjs";
+
+/**
+ * The structured run verdict a consumer reads instead of inferring it from prose or an empty
+ * executed_suites (chrome-agent-platform-5xg1w). "incomplete" means selected files did NOT run —
+ * the run is not a verdict on the tree, whatever the phases that did run said.
+ */
+export const GATE_OUTCOMES = ["passed", "failed", "refused", "incomplete"];
 
 export const GATE_MANIFEST_PREFIX = "fast-gate: manifest: ";
 export const GATE_UNMAPPED_PREFIX = "fast-gate: unmapped: ";
@@ -103,6 +111,8 @@ export function explainChangedFileMapping({ changed = [], candidates = {}, execu
  *   build?: { disposition: string, reason: string, secs: number, markerCommit?: string | null } | null,
  *   suiteDurations?: Map<string, number> | Record<string, number>,
  *   incomplete?: string | null,
+ *   outcome?: "passed" | "failed" | "refused" | "incomplete" | null,
+ *   skipped?: number | null,
  * }} fields
  * @returns {string}
  */
@@ -120,6 +130,8 @@ export function formatGateManifest({
   build = null,
   suiteDurations = null,
   incomplete = null,
+  outcome = null,
+  skipped = null,
 } = {}) {
   if (tier !== "fast" && tier !== "full") {
     throw new Error(`gate manifest: tier must be "fast" or "full", got ${JSON.stringify(tier)}`);
@@ -201,6 +213,33 @@ export function formatGateManifest({
   // run is not a completion, and rc 124 reads identically to an externally bound-killed gate.
   const incompleteReason = String(incomplete ?? "").trim();
   if (incompleteReason) payload.incomplete = incompleteReason;
+  // chrome-agent-platform-5xg1w: the verdict as a FIELD, not a sentence a consumer must parse. A run
+  // that skipped files says outcome:"incomplete" with its skipped count, so a completed FAIL
+  // (outcome:"failed", exit 1) and a serial-phase abort (outcome:"incomplete", exit 76) can never be
+  // filed under one cache key again. Absent on a producer that does not compute it (fast tier today).
+  //
+  // `skipped` is NARROW by contract (5xg1w review, blocker 2): selected files with no certified result
+  // from a DECLINED or LOST lane/phase (planner skips, seam declines, unreported serial-lane children).
+  // Files lost inside a phase killed mid-flight are not counted here — the `incomplete` reason carries
+  // that phase's own progress instead. `skipped: 0` with `outcome: "incomplete"` therefore never means
+  // complete coverage; it means a phase died, and `incomplete` says which and how far it got.
+  if (outcome !== null && outcome !== undefined) {
+    if (!GATE_OUTCOMES.includes(outcome)) {
+      throw new Error(`gate manifest: outcome must be one of ${GATE_OUTCOMES.join("|")}, got ${JSON.stringify(outcome)}`);
+    }
+    if (outcome === "incomplete" && !incompleteReason) {
+      throw new Error(
+        "gate manifest: outcome \"incomplete\" without an incomplete reason would leave the consumer to infer what did not run",
+      );
+    }
+    payload.outcome = outcome;
+  }
+  if (skipped !== null && skipped !== undefined) {
+    if (!Number.isInteger(skipped) || skipped < 0) {
+      throw new Error(`gate manifest: skipped must be a non-negative integer, got ${JSON.stringify(skipped)}`);
+    }
+    payload.skipped = skipped;
+  }
   return GATE_MANIFEST_PREFIX + JSON.stringify(payload);
 }
 
@@ -275,6 +314,7 @@ export function deferredTierEntries({
  *
  * @param {{
  *   serialFiles?: string[], parallelFiles?: string[], skippedFiles?: string[], failingFiles?: string[],
+ *   lostFiles?: Array<{ file: string, reason: string }>,
  *   deferred?: Array<{ file: string, reason: string }>, rc: number, cliFiles?: string[],
  *   build?: object | null, fileMappingContext?: object | null,
  *   suiteDurations?: Map<string, number> | Record<string, number> | null,
@@ -287,6 +327,7 @@ export function fullTierManifestFields({
   parallelFiles = [],
   skippedFiles = [],
   failingFiles = [],
+  lostFiles = [],
   deferred = [],
   rc,
   cliFiles = [],
@@ -303,10 +344,39 @@ export function fullTierManifestFields({
   const omitted = [
     ...deferred.map((entry) => ({ file: entry.file, reason: entry.reason })),
     ...skippedFiles.map((file) => ({ file, reason: skippedReason })),
+    // 5xg1w review, blocker 1 + round 2: files LOST with a lane/phase that produced no result — an
+    // unreported serial-lane child, or a parallel child that never spawned. They are unrun and
+    // uncertified, each with its OWN reason: blaming them on "serial file(s) failed" would say they
+    // were deliberately skipped, and counting them nowhere says the run was complete. Both are false.
+    ...lostFiles.map((entry) => ({ file: entry.file, reason: entry.reason })),
   ];
+  // chrome-agent-platform-5xg1w: the structured verdict. `incomplete` (selected files did not run, or a
+  // phase died before reporting) outranks every rc-derived label: the serial-phase abort exits 76 and
+  // must never be filed as a FAIL verdict on the tree.
+  //
+  // `skipped` has a DELIBERATELY NARROW meaning (5xg1w review, blocker 2): selected files with NO
+  // CERTIFIED RESULT from a declined or lost lane/phase — planner skips, seam declines, unreported
+  // serial-lane files, and the files of a parallel child that never spawned. It does NOT count files
+  // lost inside a phase that was killed mid-flight: that phase's own progress ("N/M files had
+  // completed a test") lives in the `incomplete` reason, because only the kill report knows how far
+  // it got. So `skipped: 0` beside `outcome: "incomplete"` means "nothing was declined or lost
+  // whole, but a phase died — read `incomplete`", NEVER complete coverage.
+  // Defensive: the runner always couples skips with a reason (w6kc0 gaps), but a skipped or lost
+  // file with no reason string must still never format as a passed/failed completion.
+  const unrunTotal = skippedFiles.length + lostFiles.length;
+  const incompleteReason = String(incomplete ?? "").trim() ||
+    (unrunTotal > 0
+      ? `selected file(s) with no certified result (${unrunTotal} skipped/unreported)`
+      : "");
+  const outcome = incompleteReason
+    ? "incomplete"
+    : rc === ENVIRONMENTAL_REFUSAL_EXIT ? "refused"
+    : rc === 0 ? "passed" : "failed";
 
   return {
     tier: "full",
+    outcome,
+    skipped: unrunTotal,
     executed: rc === 0 ? executedSuites.length : 0,
     executedSuites: rc === 0 ? executedSuites : [],
     selected: executedSuites,
@@ -316,7 +386,7 @@ export function fullTierManifestFields({
     // are still the honest input for re-weighting, so they ride along
     // regardless of rc (unlike executed_suites, which rc gates).
     suiteDurations,
-    incomplete,
+    incomplete: incompleteReason || null,
     omitted,
     omittedTotal: omitted.length,
     ...(fileMappingContext ? { fileMapping: explainChangedFileMapping({

@@ -8,10 +8,13 @@
 // "every candidate is the culprit" or into a summary that reads as completion.
 import { assert, assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
 import {
+  BOUND_KILL_EXIT_CODES,
   CANDIDATE_LIST_LIMIT,
+  INCOMPLETE_EXIT,
   candidateBlockLines,
   completedTestFiles,
   incompleteNote,
+  incompleteRunExit,
   killProgress,
   killProgressLine,
 } from "../scripts/lib/phase-outcome.mjs";
@@ -95,4 +98,32 @@ Deno.test("jtrny: the gate ledger carries the reason a run is not a completion",
     formatGateManifest({ tier: "full", executed: 1, executedSuites: ["tests/a.test.ts"], selected: ["tests/a.test.ts"] }).indexOf("{"),
   ));
   assert(!("incomplete" in complete), "a complete run must not carry an incomplete field");
+});
+
+// chrome-agent-platform-5xg1w: the exit code itself is part of the outcome vocabulary. A serial-phase
+// abort that skipped 711 of 759 files used to exit 1 — the same code a completed run with a genuine
+// failure exits — so a content-addressed gate cache filed the abort as a permanent FAIL for the tree.
+Deno.test("5xg1w: an incomplete run exits INCOMPLETE_EXIT, and a completed run's rc is untouched", () => {
+  assertEquals(INCOMPLETE_EXIT, 76, "the code the fleet-side consumer (0o0um) learns");
+  // A distinct code: not a pass, not a product red, not the environmental refusal, not a bound kill.
+  assert(![0, 1, 75, ...BOUND_KILL_EXIT_CODES].includes(INCOMPLETE_EXIT), "76 must collide with nothing in the existing vocabulary");
+
+  const gaps = ["parallel phase skipped after serial failure (711 file(s) unrun)"];
+  // The defect case: serial failed (rc 1) and files were skipped — INCOMPLETE, not FAIL.
+  assertEquals(incompleteRunExit(1, { gaps }), INCOMPLETE_EXIT);
+  // w6kc0's forced-red case: every phase that ran exited 0, yet files did not run.
+  assertEquals(incompleteRunExit(0, { gaps }), INCOMPLETE_EXIT);
+  // A killed phase without a skip is still not a completion.
+  assertEquals(incompleteRunExit(1, { killedPhases: ["parallel phase killed at its 1800s bound"] }), INCOMPLETE_EXIT);
+
+  // A completed run keeps its rc byte-for-byte: the FAIL of a finished suite must stay distinguishable.
+  assertEquals(incompleteRunExit(1, { gaps: [] }), 1, "a completed FAIL stays exit 1");
+  assertEquals(incompleteRunExit(0), 0, "a completed green stays exit 0");
+  assertEquals(incompleteRunExit(75), 75, "an environmental refusal keeps its own code");
+
+  // Precedence: codes that already tell consumers "unknown / do not cache" are never masked by 76.
+  for (const kill of BOUND_KILL_EXIT_CODES) {
+    assertEquals(incompleteRunExit(kill, { gaps, killedPhases: ["k"] }), kill, `a bound-kill rc ${kill} outranks 76`);
+  }
+  assertEquals(incompleteRunExit(75, { gaps }), 75, "a refusal outranks 76 (its own non-product verdict)");
 });

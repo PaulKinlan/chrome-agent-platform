@@ -38,6 +38,13 @@ try {
   rc = 1;
 }
 
+// Test seam (chrome-agent-platform-5xg1w review, blocker 1): exit WITHOUT writing the result file, so
+// the parent's "lane never reported" path is driven by a real child instead of only being described.
+// Used by tests (tests/gate-outcome-child-run.test.ts), never by the gate.
+if (process.env.CAP_SERIAL_LANE_SKIP_RESULT === "1") {
+  process.exit(rc);
+}
+
 try {
   writeFileSync(resultPath, JSON.stringify({ rc, failures }));
 } catch (error) {

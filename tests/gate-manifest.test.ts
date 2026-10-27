@@ -300,3 +300,123 @@ Deno.test("0eq00 ledger: a parent tier's build disposition crosses the process b
   assertEquals(parsed.secs, 95);
   assertEquals(parsed.markerCommit, "deadbeef");
 });
+
+// chrome-agent-platform-5xg1w: the manifest states the run's OUTCOME as a field, so a consumer never
+// infers "phase not entered" from executed_suites being empty, and a completed FAIL can never be
+// confused with a serial-phase abort.
+Deno.test("5xg1w: the full-tier manifest carries a structured outcome and skipped count", () => {
+  // The defect case, as the merger observed it: serial failed, 711 of 759 parallel files never ran.
+  const aborted = fullTierManifestFields({
+    serialFiles: ["tests/serial-a.test.ts"],
+    parallelFiles: ["tests/guard.test.ts"],
+    skippedFiles: ["tests/p1.test.ts", "tests/p2.test.ts"],
+    failingFiles: ["tests/serial-a.test.ts"],
+    rc: 76,
+    incomplete: "parallel phase skipped after serial failure (2 file(s) unrun)",
+  });
+  assertEquals(aborted.outcome, "incomplete");
+  assertEquals(aborted.skipped, 2);
+  assertEquals(aborted.certifiable, false);
+  const abortedPayload = parse(formatGateManifest(aborted));
+  assertEquals(abortedPayload.outcome, "incomplete", "the wire record a fleet consumer parses");
+  assertEquals(abortedPayload.skipped, 2);
+
+  // A completed FAIL: every selected file ran, one went red. Distinguishable at a glance — and its
+  // shape is unchanged apart from the two new fields.
+  const failed = fullTierManifestFields({
+    serialFiles: ["tests/serial-a.test.ts"],
+    parallelFiles: ["tests/p1.test.ts"],
+    skippedFiles: [],
+    rc: 1,
+  });
+  assertEquals(failed.outcome, "failed");
+  assertEquals(failed.skipped, 0);
+  assertEquals(failed.certifiable, false);
+
+  // A completed green, and an environmental refusal: their own labels, never "incomplete".
+  assertEquals(fullTierManifestFields({ serialFiles: [], parallelFiles: ["tests/p1.test.ts"], rc: 0 }).outcome, "passed");
+  assertEquals(fullTierManifestFields({ serialFiles: [], parallelFiles: ["tests/p1.test.ts"], rc: 75 }).outcome, "refused");
+
+  // A killed phase with no skipped file is still not a completion. `skipped` is NARROW by contract
+  // (5xg1w review, blocker 2): it counts files with no certified result from a DECLINED or LOST
+  // lane/phase — NOT files lost inside a phase killed mid-flight. Those live in the `incomplete`
+  // reason with the kill's own progress, so skipped:0 beside outcome:"incomplete" can never be read
+  // as complete coverage: the incomplete reason names what the killed phase did not finish.
+  const killed = fullTierManifestFields({
+    serialFiles: [],
+    parallelFiles: ["tests/p1.test.ts"],
+    rc: 124,
+    incomplete: "parallel phase killed at its 1800s bound (108/742 files had completed a test)",
+  });
+  assertEquals(killed.outcome, "incomplete");
+  assertEquals(killed.skipped, 0, "nothing was DECLINED; the mid-flight loss is named in incomplete, not counted here");
+  const killedPayload = parse(formatGateManifest(killed));
+  assert(
+    killedPayload.incomplete.includes("108/742 files had completed a test"),
+    `the killed phase's own progress must survive into the wire record: ${JSON.stringify(killedPayload.incomplete)}`,
+  );
+
+  // Defensive: skipped files with no reason string must still never format as a completion.
+  const silentSkip = fullTierManifestFields({
+    serialFiles: [],
+    parallelFiles: ["tests/guard.test.ts"],
+    skippedFiles: ["tests/p1.test.ts"],
+    rc: 0,
+  });
+  assertEquals(silentSkip.outcome, "incomplete", "a skip is incomplete whatever the phases returned");
+  assert(String(silentSkip.incomplete).includes("1 skipped"), silentSkip.incomplete);
+
+  // 5xg1w review, blocker 1 + round 2: files LOST with a lane/phase that produced no result — an
+  // unreported serial-lane child, or a parallel child that never spawned — are counted in skipped
+  // and disclosed with their OWN reason. They did not fail, and they were not deliberately skipped;
+  // a never-spawned phase reporting skipped:0 is the same false-coverage shape as the kill case.
+  const unreported = fullTierManifestFields({
+    serialFiles: ["tests/serial-a.test.ts"],
+    parallelFiles: ["tests/p1.test.ts"],
+    lostFiles: [
+      { file: "tests/chrome-launch-lock.test.ts", reason: "serial lane child never reported a result — file never ran to a certified verdict in this run" },
+      { file: "tests/p1.test.ts", reason: "parallel phase child never spawned — file never ran in this run" },
+    ],
+    rc: 76,
+    incomplete: "serial lane child never reported a result (1 file(s) unrun): tests/chrome-launch-lock.test.ts; parallel phase child never spawned (1 file(s) unrun)",
+  });
+  assertEquals(unreported.skipped, 2, "every lost file counts as a file with no certified result");
+  assertEquals(unreported.outcome, "incomplete");
+  const unreportedEntry = unreported.omitted.find((o) => o.file === "tests/chrome-launch-lock.test.ts");
+  assert(unreportedEntry, "the unreported file must be disclosed in omitted");
+  assert(
+    unreportedEntry.reason.includes("never reported a result"),
+    `it must carry the unreported reason, not the skip-after-failure wording: ${unreportedEntry.reason}`,
+  );
+  const neverSpawnedEntry = unreported.omitted.filter((o) => o.file === "tests/p1.test.ts").at(-1);
+  assert(
+    neverSpawnedEntry.reason.includes("never spawned"),
+    `a never-spawned phase's file must carry its own reason: ${neverSpawnedEntry.reason}`,
+  );
+  assert(parse(formatGateManifest(unreported)), "the lost-file fields must format into a valid manifest");
+});
+
+Deno.test("5xg1w: formatGateManifest validates the outcome vocabulary", () => {
+  const base = { tier: "full", executed: 0, selected: ["tests/a.test.ts"], certifiable: false };
+  assertThrows(
+    () => formatGateManifest({ ...base, outcome: "mostly-fine" }),
+    Error,
+    "outcome must be one of",
+    "an invented verdict is exactly the ambiguity the field exists to remove",
+  );
+  assertThrows(
+    () => formatGateManifest({ ...base, outcome: "incomplete" }),
+    Error,
+    "without an incomplete reason",
+    "outcome:incomplete must carry the reason so the consumer never infers what did not run",
+  );
+  assertThrows(
+    () => formatGateManifest({ ...base, outcome: "passed", skipped: -1 }),
+    Error,
+    "non-negative integer",
+  );
+  // Absent, not defaulted: a producer that does not compute the verdict emits no field at all.
+  const legacy = parse(formatGateManifest({ ...base, incomplete: "x unrun" }));
+  assert(!("outcome" in legacy), "outcome is opt-in for producers that do not compute it");
+  assert(!("skipped" in legacy), "skipped is opt-in for producers that do not compute it");
+});

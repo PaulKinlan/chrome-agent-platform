@@ -5,9 +5,10 @@
 // and the always-on guards live in the parallel set. Measured: two guard violations reached main from
 // one landing while its full-suite gate reported the guards green, because they never ran.
 //
-// THE RULE THIS PINS: a guard result must never be conditional on an unrelated phase passing. A
-// serial failure still runs the always-on subset, and the run says how much it skipped — because a
-// gate that cannot tell you what it ran is the other half of this bead's family.
+// THE RULE THIS PINS: a guard result must never be conditional on an unrelated phase passing.
+// 0o0um/5xg1w UPGRADE: a failed serial phase now STILL RUNS the parallel phase IN FULL — the old
+// guard-subset compromise skipped ~711 of 759 files and turned one serial death into an
+// unadjudicable record filed as a permanent FAIL against a content-addressed tree.
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import {
   certificationGaps,
@@ -28,40 +29,37 @@ Deno.test("kz27: a GREEN serial phase runs the whole parallel phase and announce
   assertEquals(plan.announce, null, "nothing was skipped, so there is nothing to announce");
 });
 
-Deno.test("kz27: a FAILED serial phase still runs the always-on guard set, and says what it skipped", () => {
+Deno.test("kz27→0o0um: a FAILED serial phase STILL RUNS the full parallel set, and says so", () => {
   const plan = parallelPlan({ serialRc: 1, parallel: PARALLEL, alwaysOn: ALWAYS_ON });
-  // The guards RUN even though an unrelated phase failed.
-  assertEquals(plan.files, ["tests/durable-root.test.ts"]);
-  assertEquals(plan.skipped, 3);
-  assert(plan.announce !== null, "skipping files must be announced, never silent");
-  assert(plan.announce.includes("INCOMPLETE"), plan.announce);
-  assert(plan.announce.includes("ALWAYS-ON GUARD SET"), plan.announce);
-  // The announcement keeps BOTH halves of the log contract: the SKIPPED count (how much was omitted) and the
-  // INCOMPLETE gap (what that means for certification). Replacing one with the other was review P2-3.
-  assert(/\d+ of \d+ parallel file\(s\) are SKIPPED/.test(plan.announce), `the skip count must be exact: ${plan.announce}`);
-  assert(
-    /INCOMPLETE: the parallel phase was skipped after the serial failure \(\d+ file\(s\) unrun\)/.test(plan.announce),
-    `the INCOMPLETE gap must name the cause and the count: ${plan.announce}`,
-  );
-  assert(
-    plan.announce.includes("3 of 4"),
-    `the announcement must say how much was skipped: ${plan.announce}`,
-  );
+  // A serial death is a finding about ONE file, not a licence to skip the others.
+  assertEquals(plan.files, PARALLEL, "a failed serial phase must not narrow the parallel set");
+  assertEquals(plan.skipped, 0, "nothing is skipped, so the run stays a COMPLETED verdict");
+  assert(plan.incomplete === undefined, "a completed red is a verdict on the tree, not an INCOMPLETE abort");
+  assert(plan.announce !== null, "the serial failure and the full parallel run must be announced");
+  assert(plan.announce.includes("serial file(s) failed"), plan.announce);
+  assert(plan.announce.includes("STILL RUNS in full"), plan.announce);
+  assert(plan.announce.includes("COMPLETED verdict"), plan.announce);
+  // The old skip wording must never come back on this route: nothing was skipped, and a log that says
+  // SKIPPED while the cache files a plain FAIL is the exact defect this bead exists to kill.
+  assert(!plan.announce.includes("SKIPPED"), `nothing was skipped: ${plan.announce}`);
+  assert(!plan.announce.includes("GUARD SET"), `the guard-subset compromise is retired: ${plan.announce}`);
 });
 
-Deno.test("kz27: the plan is not a blanket 'run everything' — the failure state narrows the set", () => {
-  // FALSIFICATION: if the old behaviour returned (run all files after a serial failure) this fails;
-  // if a lazy 'run nothing' fix were used, the guard subset assertion above fails. Both directions
-  // are pinned, so the test cannot be satisfied by either shortcut.
+Deno.test("0o0um: the failure plan never narrows to the guard subset (that WAS the defect)", () => {
+  // FALSIFICATION, both directions: a regression to the kz27 guard subset narrows `files`; a
+  // regression to "run nothing" empties it. Only "run everything" passes.
   const failed = parallelPlan({ serialRc: 1, parallel: PARALLEL, alwaysOn: ALWAYS_ON });
-  assert(
-    failed.files.length < PARALLEL.length,
-    "a failed serial phase must NOT run the full parallel set (the old behaviour was the defect)",
-  );
+  assertEquals(failed.files.length, PARALLEL.length);
+  // The intersection primitive stays available (select-tests and the refusal wording use it) — the
+  // plan simply no longer narrows to it on a serial failure.
   assertEquals(guardSubset(PARALLEL, ALWAYS_ON), ["tests/durable-root.test.ts"]);
   // An always-on file that is not in this run's parallel set is simply not run here (it belongs to
   // another phase) — the subset is an intersection, not an assumption.
   assertEquals(guardSubset(PARALLEL, ["tests/not-in-this-run.test.ts"]), []);
+  assert(
+    failed.files.length > guardSubset(PARALLEL, ALWAYS_ON).length,
+    "the guard-subset narrowing is what made the gate record unadjudicable; it must never return",
+  );
 });
 
 Deno.test("xj6sb: an ENVIRONMENTAL REFUSAL (exit 75) in serial phase runs the full parallel phase (0 skipped) with refusal stated", () => {
@@ -82,11 +80,10 @@ Deno.test("xj6sb: a FAILED serial phase names failing files in announcement", ()
     alwaysOn: ALWAYS_ON,
     failingFiles: ["tests/ntp-boot-staging.test.ts"],
   });
-  assertEquals(plan.files, ["tests/durable-root.test.ts"]);
-  assertEquals(plan.skipped, 3);
+  assertEquals(plan.files, PARALLEL, "0o0um: the named failure does not narrow the parallel set");
+  assertEquals(plan.skipped, 0);
   assert(plan.announce !== null);
   assert(plan.announce.includes("serial file(s) failed [tests/ntp-boot-staging.test.ts]"), plan.announce);
-  assert(plan.announce.includes("3 of 4"), plan.announce);
 });
 
 
@@ -128,22 +125,26 @@ Deno.test("877x1: computeParallelPhaseTimeout adapts dynamically to CPU concurre
   assertEquals(disabledNegative, 0, "negative envTimeout must return 0 to disable kill timer");
 });
 
-// chrome-agent-platform-w6kc0: a run that skipped files must never certify the tree, and the marker must
-// name the count. Both directions are pinned here, because the failure mode being fixed was a run that
-// looked complete while 698 files never ran.
-Deno.test("w6kc0: a skipped parallel phase is INCOMPLETE and yields a named certification gap", () => {
+// chrome-agent-platform-w6kc0, updated by 0o0um/5xg1w: the plan itself no longer skips on a serial
+// failure (it runs everything, so it is a COMPLETED red with no gap). The gap machinery survives for
+// the routes that genuinely cannot continue — a seam that declined a phase reports its unrun files as
+// unrun, and certificationGaps still names cause and count for them.
+Deno.test("w6kc0→0o0um: a failed serial phase yields NO plan gap (it runs everything); a declined phase still does", () => {
   const plan = parallelPlan({ serialRc: 1, parallel: PARALLEL, alwaysOn: ["tests/a.test.ts"], failingFiles: ["tests/serial-x.test.ts"] });
-  assertEquals(plan.incomplete, true, "a skipped run is incomplete");
+  assertEquals(plan.skipped, 0, "the failure plan runs the full parallel set — nothing is skipped");
+  assertEquals(plan.incomplete, undefined, "a completed red is a verdict, not an INCOMPLETE abort");
   const announce = String(plan.announce ?? "");
-  assert(announce.length > 0, "a skipped run must announce itself");
-  assert(announce.includes("SKIPPED"), announce);
-  assert(announce.includes("INCOMPLETE"), announce);
-  assert(announce.includes("unrun"), announce);
-  assert(announce.includes("CANNOT certify"), announce);
-  const gaps = certificationGaps(plan);
-  assertEquals(gaps.length, 1, "exactly one gap, named");
-  assert(gaps[0].includes("3 file(s) unrun"), `the gap must carry the count: ${gaps[0]}`);
-  assert(gaps[0].includes("serial"), `the gap must carry the cause: ${gaps[0]}`);
+  assert(announce.length > 0, "the serial failure and the full parallel run must be announced");
+  assert(announce.includes("serial file(s) failed [tests/serial-x.test.ts]"), announce);
+  assert(announce.includes("STILL RUNS in full"), announce);
+  assertEquals(certificationGaps(plan), [], "a plan that skips nothing has no certification gap");
+
+  // The seam route (CAP_RUN_TESTS_STOP_AFTER_SERIAL) reports every parallel file as unrun; the gap
+  // must still carry the cause and the exact count — this is what makes the run INCOMPLETE (exit 76).
+  const declined = certificationGaps({ skipped: 3 });
+  assertEquals(declined.length, 1, "exactly one gap, named");
+  assert(declined[0].includes("3 file(s) unrun"), `the gap must carry the count: ${declined[0]}`);
+  assert(declined[0].includes("serial"), `the gap must carry the cause: ${declined[0]}`);
 });
 
 Deno.test("w6kc0: a complete run certifies — the guard cannot false-alarm", () => {
