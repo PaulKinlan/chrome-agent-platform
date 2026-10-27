@@ -21,6 +21,16 @@ A reader or scheduler must not infer the absence of Chrome from names like "pure
 ### 2.1 The Full Test Gate (`npm test` / `scripts/run-tests.mjs`)
 The full gate runs in two sequential phases:
 
+**Exit-code vocabulary (chrome-agent-platform-5xg1w).** The runner's exit code is a verdict, not just a
+success flag: **0** completed green · **1** completed, product red (every selected file ran) ·
+**75** environmental refusal · **76 INCOMPLETE** — the run selected files it did NOT execute (a
+serial-phase failure skipped the non-guard parallel files, or a phase was killed by its bound while the
+rc was not a kill code): NOT a verdict on the tree, and a gate cache must not file it as a FAIL
+(the manifest carries `outcome:"incomplete"` and `skipped:N` for consumers that parse it) ·
+**124/137/143** a bound killed the run (also never a verdict; these outrank 76 so the kill stays
+named). A completed FAIL is byte-identically distinguishable from an abort: exit 1 with
+`outcome:"failed"` vs exit 76 with `outcome:"incomplete"`.
+
 - **Phase 1: Serial Phase (20 hazard files)**
   - Runs build-artifact hazard tests serially with per-file process isolation and bounded timeouts (`scripts/lib/serial-phase.mjs`): 180s per file at idle, scaled by load per CPU OR measured hypervisor CPU steal (the larger of the two) up to 720s — sampled per file at the wait, never once per run, after steal-blindness killed a 64.7%-steal gate at the flat bound with zero scaling lines (chrome-agent-platform-8qy5d). An explicit `CAP_SERIAL_TEST_TIMEOUT_MS` overrides this without scaling. EVERY measured window prints its decision line — scaled (`run-tests: serial timeout scaled to …`) or not (`run-tests: serial window … not scaled: …`) — each carrying the measured load and steal at the wait, so a dead run's log always names what the box was doing.
   - For callers using a ready marker, `serial-runner.mjs` starts the execution timeout **after** the marker appears. At the ready deadline it measures load per CPU: an idle or unmeasurable host refuses the absent marker with exit 124 and a named reason; a measured loaded host gets one announced grace window bounded at ×4 the original ready budget, then still refuses with exit 124 if no marker appears. A child exiting without a marker refuses immediately. `READY_MARKER_LOADED_GRACE` and `READY_MARKER_TIMEOUT_*` in stderr distinguish delayed boot from an actual missing marker; a loaded classification is not a passing verdict.

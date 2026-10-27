@@ -37,7 +37,7 @@ import {
 import { loadWeights, scheduleOrder } from "./lib/parallel-schedule.mjs";
 import { emitGateLedger, deferredTierEntries, fullTierManifestFields, parseGateBuild } from "./lib/gate-manifest.mjs";
 import { parseSuiteDurations, slowestSuites } from "./lib/parallel-durations.mjs";
-import { candidateBlockLines, incompleteNote, killProgress, killProgressLine } from "./lib/phase-outcome.mjs";
+import { candidateBlockLines, incompleteNote, INCOMPLETE_EXIT, incompleteRunExit, killProgress, killProgressLine } from "./lib/phase-outcome.mjs";
 import { checkBrowserPrerequisite } from "./lib/browser-prerequisite.mjs";
 import {
   ENVIRONMENTAL_REFUSAL_EXIT,
@@ -439,9 +439,13 @@ export async function main(args = process.argv.slice(2)) {
   // independent parallel guards; both phases run and the first failure wins.
   const parallelRc = stopAfterSerial ? 0 : await runParallel(other, "parallel phase", suiteDurations, killedPhases);
   const rc = combinePhaseExitCodes(serialRc, readOnlyRc, parallelRc);
-  // w6kc0: a skip is a certification gap regardless of the phase exit codes, so force the outcome red and
-  // say so on the summary line. rc 0 with unrun files is the exact false assurance this bead is about.
-  const effectiveRc = gaps.length && rc === 0 ? 1 : rc;
+  // w6kc0: a skip is a certification gap regardless of the phase exit codes, so the outcome can never
+  // be a plain rc. 5xg1w: and an incomplete run gets its OWN exit code (76), not the exit-1 shape of a
+  // completed FAIL — a serial-phase abort that skipped 711 of 759 files used to be indistinguishable
+  // from a genuine completed failure, and a content-addressed gate cache filed it as a permanent FAIL
+  // for the tree. Bound-kill (124/137/143) and environmental-refusal (75) codes keep their meaning;
+  // see scripts/lib/phase-outcome.mjs. A completed run's rc passes through byte-identically.
+  const effectiveRc = incompleteRunExit(rc, { gaps, killedPhases });
   const gapsNote = gaps.length ? ` — INCOMPLETE: ${gaps.join("; ")}` : "";
   const buildDeferredCount = cliFiles.length === 0 ? all.filter((f) => BUILD_GATE.has(f)).length : 0;
   const heavyDeferredCount = cliFiles.length === 0 ? all.filter((f) => HEAVY_GATE.has(f)).length : 0;
@@ -459,7 +463,8 @@ export async function main(args = process.argv.slice(2)) {
   if (gaps.length) {
     console.error(
       `run-tests: NOT CERTIFIABLE — ${gaps.join("; ")}. A green guard subset does not make ` +
-        `this a verdict on the tree: re-run once the serial phase passes.`,
+        `this a verdict on the tree: re-run once the serial phase passes. ` +
+        `INCOMPLETE verdict, exit ${effectiveRc} (${INCOMPLETE_EXIT} = files were skipped; a completed FAIL exits 1).`,
     );
   }
   // The coverage ledger for the FULL tier (chrome-agent-platform-0eq00). Only the default `npm test`

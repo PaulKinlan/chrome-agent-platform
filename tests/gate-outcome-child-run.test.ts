@@ -16,6 +16,7 @@
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { certificationGaps, parallelPlan } from "../scripts/lib/parallel-plan.mjs";
 import { fullTierManifestFields } from "../scripts/lib/gate-manifest.mjs";
+import { INCOMPLETE_EXIT, BOUND_KILL_EXIT_CODES } from "../scripts/lib/phase-outcome.mjs";
 import { fileURLToPath } from "node:url";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
@@ -54,11 +55,25 @@ Deno.test("w6kc0: a forced serial failure makes the CHILD runner refuse certific
 
   // (1) the exit cannot be 0 when files did not run, even though every phase that ran returned 0.
   assert(code !== 0, `a skipped run must exit non-zero, got ${code}. stderr tail: ${stderr.slice(-1500)}`);
+  // 5xg1w: and it must not be the exit-1 shape of a completed FAIL either — the code itself is part of
+  // the outcome vocabulary, so a content-addressed cache can never file this abort as a FAIL verdict.
+  // This child's serial files die by the 1ms TIMEOUT seam, so the combined rc is a bound-kill code,
+  // which outranks 76 by contract (124 already tells consumers "unknown, do not cache"); the exact
+  // 1 → 76 mapping of the real incident is pinned by the unit table in tests/phase-outcome.test.ts and
+  // by the all-phases-green synthetic child below.
+  assert(
+    code === INCOMPLETE_EXIT || BOUND_KILL_EXIT_CODES.has(code),
+    `a run that skipped files must exit ${INCOMPLETE_EXIT} or keep a bound-kill code, got ${code}. stderr tail: ${stderr.slice(-1500)}`,
+  );
+  assert(code !== 1, `an incomplete run must never carry the exit-1 shape of a completed FAIL, got ${code}`);
 
   // (2) the same execution's manifest cannot certify coverage.
   const manifest = manifestFrom(stderr);
   assert(manifest !== null, `the run must emit a gate manifest. stderr tail: ${stderr.slice(-1500)}`);
   assertEquals(manifest.certifiable, false, "the manifest must be certifiable:false");
+  // 5xg1w: the structured verdict and skip count, readable without inferring from empty executed_suites.
+  assertEquals(manifest.outcome, "incomplete", "the manifest must state the outcome as a field");
+  assert(Number(manifest.skipped) > 0, `the manifest must count the skipped files, got ${JSON.stringify(manifest.skipped)}`);
   const incomplete = String(manifest.incomplete ?? "");
   assert(incomplete.includes("unrun"), `the manifest must name the unrun files, got ${JSON.stringify(incomplete)}`);
   assert(
@@ -105,9 +120,11 @@ Deno.test("w6kc0: SYNTHETIC phase-0 skip — all phases green, files unrun, stil
     CAP_RUN_TESTS_STOP_AFTER_SERIAL: "1",
   });
   assert(code !== 0, `rc would be 0 here, so the exit must be forced non-zero; got ${code}. ${stderr.slice(-1200)}`);
+  assertEquals(code, INCOMPLETE_EXIT, `all phases green but files unrun is INCOMPLETE, not FAIL: got ${code}. ${stderr.slice(-1200)}`);
   const manifest = manifestFrom(stderr);
   assert(manifest !== null, `the synthetic run must emit a manifest. ${stderr.slice(-1200)}`);
   assertEquals(manifest!.certifiable, false, "rc 0 with unrun files must still be certifiable:false");
+  assertEquals(manifest!.outcome, "incomplete", "the manifest must state the outcome as a field");
   assert(
     String(manifest!.incomplete ?? "").includes("unrun"),
     `the manifest must name the unrun files: ${JSON.stringify(manifest!.incomplete)}`,
@@ -129,6 +146,8 @@ Deno.test("w6kc0: the positive control — a run with nothing skipped certifies,
   assert(complete !== null, "the default npm test form must produce a manifest");
   assertEquals(complete!.certifiable, true, "a run that skipped nothing must certify");
   assertEquals(complete!.incomplete, null, "a complete run carries no incomplete reason");
+  assertEquals(complete!.outcome, "passed", "5xg1w: a complete green states its outcome");
+  assertEquals(complete!.skipped, 0, "5xg1w: a complete run skipped nothing, and says so with a count");
   assertEquals(certificationGaps({ skipped: 0 }), [], "no skip means no gap");
 
   // And the refusal is not unconditional: a clean plan certifies, while a declined parallel phase is named
@@ -149,6 +168,7 @@ Deno.test("w6kc0: a serial-only selection cannot be skipped into a green (review
   );
   const out = `${stdout}\n${stderr}`;
   assert(code !== 0, `a serial-only selection that ran nothing must exit non-zero, got ${code}. ${stderr.slice(-900)}`);
+  assertEquals(code, INCOMPLETE_EXIT, `skipped files exit ${INCOMPLETE_EXIT} even for an explicit-file selection: got ${code}`);
   assert(out.includes("INCOMPLETE"), "the run must say INCOMPLETE (summary line, stdout)");
   assert(
     /serial phase skipped \(\d+ file\(s\) unrun\)/.test(out),

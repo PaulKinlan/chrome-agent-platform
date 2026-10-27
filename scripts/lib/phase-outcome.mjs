@@ -23,6 +23,8 @@
 // Pure on purpose: the honest shape of a kill report is unit-tested, so a later edit cannot quietly
 // turn it back into "culprit unconfirmed" for all N files.
 
+import { ENVIRONMENTAL_REFUSAL_EXIT } from "./environmental-verdict.mjs";
+
 const ANSI_RE = /\x1b\[[0-9;]*[mGKH]/g;
 // Mirrors the measured format facts in scripts/lib/parallel-durations.mjs: a STEP line carries two
 // ` ... ` separators, so the verdict+duration must END the line. Anything else is in-progress output.
@@ -114,4 +116,39 @@ export function candidateBlockLines({ phase, candidates = [], total = 0, limit =
 export function incompleteNote(killedPhases = []) {
   const named = (killedPhases ?? []).map((entry) => String(entry ?? "").trim()).filter(Boolean);
   return named.length ? ` — INCOMPLETE: ${named.join("; ")}` : "";
+}
+
+/**
+ * The exit code for a run that did NOT complete the selection it made (chrome-agent-platform-5xg1w).
+ * A serial-phase abort used to exit 1 — indistinguishable from a completed run that genuinely failed —
+ * so a content-addressed gate cache filed the abort as a permanent FAIL for the tree. The repo already
+ * has a vocabulary of distinct verdict codes (0 green, 1 product red, 75 environmental refusal, 124
+ * bound kill); 76 is the fourth: "INCOMPLETE — files were selected but not run; this is not a verdict
+ * on the tree". A consumer that has not learned 76 still sees non-zero, so it can never read as a pass.
+ */
+export const INCOMPLETE_EXIT = 76;
+
+/** Exit codes that already tell a consumer "unknown / do not cache a verdict"; 76 must not mask them. */
+export const BOUND_KILL_EXIT_CODES = new Set([124, 137, 143]);
+
+/**
+ * The exit code a run must exit with, given what it failed to run (chrome-agent-platform-5xg1w).
+ * Pure, so the precedence is unit-tested rather than inferred from a seven-minute gate:
+ *   - a run that skipped nothing and had no killed phase keeps its rc byte-for-byte (a completed
+ *     FAIL stays 1; a completed green stays 0);
+ *   - a bound-kill rc (124/137/143) or an environmental refusal (75) keeps its code: those already
+ *     carry "not a product verdict" to every existing consumer, and 76 would erase that signal;
+ *   - any other rc on an incomplete run (gaps = selected files not run, or a killed phase) becomes
+ *     INCOMPLETE_EXIT, including the w6kc0 forced-red case where every phase that ran exited 0.
+ *
+ * @param {number} rc the combined phase exit code (pre-mapping)
+ * @param {{ gaps?: string[], killedPhases?: string[] }} evidence
+ * @returns {number} the exit code the runner must use
+ */
+export function incompleteRunExit(rc, { gaps = [], killedPhases = [] } = {}) {
+  const incomplete = (Array.isArray(gaps) && gaps.length > 0) ||
+    (Array.isArray(killedPhases) && killedPhases.length > 0);
+  if (!incomplete) return rc;
+  if (BOUND_KILL_EXIT_CODES.has(rc) || rc === ENVIRONMENTAL_REFUSAL_EXIT) return rc;
+  return INCOMPLETE_EXIT;
 }
