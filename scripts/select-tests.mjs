@@ -1140,7 +1140,7 @@ async function prepareBuild(decision, enabled) {
  * The selector's decision, pure of printing and of running (chrome-agent-platform-0eq00 plan mode).
  * `kind: "full"` means the subset cannot validate this change: callers must run the full suite.
  *
- * @param {{ base?: string }} [opts]
+ * @param {{ base?: string, changedFiles?: (base: string) => string[], reverseGraph?: () => any, lockfileOptions?: any }} [opts]
  * @returns {{
  *   kind: "subset" | "full",
  *   files: string[] | null,
@@ -1154,11 +1154,20 @@ async function prepareBuild(decision, enabled) {
  *   reason: string,
  * }}
  */
-export function planSelection({ base = "origin/main" } = {}) {
-  const changed = changedFiles(base);
+export function planSelection({
+  base = "origin/main",
+  // Injectable seams (tests): the assembly below decides between a subset and a FULL refusal, and the
+  // refusal path is only reachable with a changed set + a lockfile delta. Testing it against real git
+  // state would make the pin depend on which files another agent has open, so the two git-bound
+  // steps are arguments and the lockfile readers pass through.
+  changedFiles: changedFilesFn = changedFiles,
+  reverseGraph: reverseGraphFn = buildReverseGraph,
+  lockfileOptions = {},
+} = {}) {
+  const changed = changedFilesFn(base);
   const notices = [];
   if (!changed.length) notices.push(`select-tests: no files changed vs ${base} — running always-on core.`);
-  const reverse = changed.length ? buildReverseGraph() : null;
+  const reverse = changed.length ? reverseGraphFn() : null;
   const uncovered = changed.length ? changedWithoutCoverage(changed, reverse) : [];
 
   const selfChanged = changed.filter((f) => isSelectorInfrastructure(f));
@@ -1190,6 +1199,7 @@ export function planSelection({ base = "origin/main" } = {}) {
     mergeBase: mergeBaseOf(base),
     reverse,
     coreSuites: alwaysOnGuards(),
+    ...lockfileOptions,
   });
   const lockfileFiles = new Set(lockfile?.files ?? []);
   const importUncovered = uncovered.filter((file) => !lockfileFiles.has(file));
@@ -1207,6 +1217,7 @@ export function planSelection({ base = "origin/main" } = {}) {
     }, referrersFor)
     : { mapped: [], unmappable: [] };
   const { mapped, unmappable } = planRows({ importRows, lockfile });
+  const lockfileUnmappable = lockfile?.unmappable ?? [];
 
   if (unmappable.length) {
     return {

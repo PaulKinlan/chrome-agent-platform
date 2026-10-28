@@ -36,6 +36,7 @@ import {
   packageImporters,
   planLockfileDelta,
   planRows,
+  planSelection,
 } from "../scripts/select-tests.mjs";
 
 // ── fixtures ──────────────────────────────────────────────────────────────────────────────────
@@ -453,6 +454,40 @@ Deno.test("lezl0 REGRESSION: a lockfile refusal survives the row merge even with
   });
   assertEquals(both.mapped.length, 2, "import-graph rows and the lockfile row both survive");
   assertEquals(both.unmappable, []);
+});
+
+Deno.test("lezl0: planSelection EXECUTES the lockfile refusal path (subset vs FULL, end to end)", () => {
+  // This pin exists because a branch of this very change shipped a ReferenceError inside the refusal
+  // branch: every unit pin above passed, and `node --check` cannot see an undefined variable, so the
+  // assembly that decides subset-vs-refusal had never RUN in a test. The git-bound steps are injectable
+  // precisely so this path is executed without depending on the tree another agent has open.
+  const blocked = planSelection({
+    base: "HEAD",
+    changedFiles: () => ["deno.lock"],
+    reverseGraph: () => new Map(),
+    lockfileOptions: { mergeBase: "cafebabe", readBase: () => "{", readTip: () => "{}" },
+  });
+  assertEquals(blocked.kind, "full", "an unparseable lockfile REFUSES the subset");
+  assertEquals(blocked.files, null);
+  assertEquals(blocked.unmappable.map((u: { file: string }) => u.file), ["deno.lock"]);
+  assertStringIncludes(blocked.reason, "lockfile delta not certifiable");
+  assertStringIncludes(blocked.failClosedHeader!, "dependency-lock delta");
+  assert(blocked.lockfileDelta.length > 0, "the refusal carries its ledger trail");
+
+  // The certifiable direction through the SAME assembly: a passive stamp is a subset, mapped.
+  const stamped = `{"name":"chrome-agent-platform","version":"9.9.9","lockfileVersion":3,"packages":{"":{"name":"chrome-agent-platform","version":"9.9.9"}}}`;
+  const base = `{"name":"chrome-agent-platform","version":"0.0.1","lockfileVersion":3,"packages":{"":{"name":"chrome-agent-platform","version":"0.0.1"}}}`;
+  const certified = planSelection({
+    base: "HEAD",
+    changedFiles: () => ["package-lock.json"],
+    reverseGraph: () => new Map(),
+    lockfileOptions: { mergeBase: "cafebabe", readBase: () => base, readTip: () => stamped },
+  });
+  assertEquals(certified.kind, "subset", "a version stamp certifies to a subset");
+  assertEquals(certified.unmappable, []);
+  assertEquals(certified.mapped.map((m: { file: string }) => m.file), ["package-lock.json"]);
+  assert(certified.files!.includes(DEPENDENCY_LOCK_GUARD) === false, "a stamp owes no dependency reader");
+  assert(certified.files!.length > 0, "the always-on set still runs");
 });
 
 Deno.test("lezl0: a real package bump resolves real repo importers through the bare-specifier index", () => {
