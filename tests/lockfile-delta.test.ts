@@ -35,6 +35,7 @@ import {
   clearBareSpecifierCache,
   packageImporters,
   planLockfileDelta,
+  planRows,
 } from "../scripts/select-tests.mjs";
 
 // ── fixtures ──────────────────────────────────────────────────────────────────────────────────
@@ -418,6 +419,40 @@ Deno.test("lezl0: planLockfileDelta turns bytes into the same mapped/unmappable 
   assertStringIncludes(refused!.unmappable[0].mechanism, "unparseable");
 
   assertEquals(planLockfileDelta(["extension/lib/agent.js"], { mergeBase: "cafebabe" }), null, "no lockfile, no cost");
+});
+
+Deno.test("lezl0 REGRESSION: a lockfile refusal survives the row merge even with no import-graph rows", () => {
+  // The exact fail-open this pin exists for: the class files are removed from `uncovered`, so a
+  // lockfile REFUSAL arrives with an empty import-graph row list. A conditional merge dropped it and
+  // the plan reported `kind: "subset"` with no rows at all — a fail-open on the one case the class
+  // exists to refuse (found in end-to-end verification, 2026-10-28).
+  const refused = planLockfileDelta(["deno.lock"], {
+    mergeBase: "cafebabe",
+    readBase: () => "{",
+    readTip: () => "{}",
+    reverse: null,
+    coreSuites: CORE,
+  });
+  const merged = planRows({ importRows: { mapped: [], unmappable: [] }, lockfile: refused });
+  assertEquals(merged.mapped, []);
+  assertEquals(merged.unmappable.length, 1, "the refusal must survive an empty import-graph list");
+  assertEquals(merged.unmappable[0].file, "deno.lock");
+
+  // And the happy path still merges both sides.
+  const subset = planLockfileDelta(["package-lock.json"], {
+    mergeBase: "cafebabe",
+    readBase: () => npmLock(),
+    readTip: () => npmLock({ zodVersion: "3.25.0" }),
+    reverse: null,
+    coreSuites: CORE,
+    closureFor: closureStub({ zod: ["extension/lib/agent.js"] }),
+  });
+  const both = planRows({
+    importRows: { mapped: [{ file: "scripts/x.mjs", mechanism: "m", tests: ["tests/x.test.ts"] }], unmappable: [] },
+    lockfile: subset,
+  });
+  assertEquals(both.mapped.length, 2, "import-graph rows and the lockfile row both survive");
+  assertEquals(both.unmappable, []);
 });
 
 Deno.test("lezl0: a real package bump resolves real repo importers through the bare-specifier index", () => {

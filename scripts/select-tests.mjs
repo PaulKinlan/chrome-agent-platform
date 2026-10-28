@@ -698,6 +698,19 @@ function lockfileClosureFor(reverse) {
   };
 }
 
+/**
+ * Merge the two row lists a plan produces: the import-graph mapping and the lockfile closure.
+ * Exported and pure because the merge itself was a fail-open once (see the call site): a lockfile
+ * REFUSAL produces no import-graph rows, so any conditional merge drops the refusal.
+ * @param {{ importRows?: { mapped?: any[], unmappable?: any[] }, lockfile?: any }} args
+ */
+export function planRows({ importRows = {}, lockfile = null } = {}) {
+  return {
+    mapped: [...(importRows.mapped ?? []), ...(lockfile?.mapped ?? [])],
+    unmappable: [...(importRows.unmappable ?? []), ...(lockfile?.unmappable ?? [])],
+  };
+}
+
 /** The merge-base blob for a path, or null when it did not exist there. */
 function gitShowOrNull(ref, rel) {
   try {
@@ -1181,23 +1194,19 @@ export function planSelection({ base = "origin/main" } = {}) {
   const lockfileFiles = new Set(lockfile?.files ?? []);
   const importUncovered = uncovered.filter((file) => !lockfileFiles.has(file));
 
-  const mappedRows = lockfile?.mapped ?? [];
-  const lockfileUnmappable = lockfile?.unmappable ?? [];
-  const { mapped, unmappable } = importUncovered.length || mappedRows.length
-    ? (() => {
-      const rows = importUncovered.length
-        ? mapUncovered(importUncovered, (test) => {
-          try { return statSync(join(ROOT, test)).isFile(); } catch { return false; }
-        }, (source) => {
-          try { return statSync(join(ROOT, source)).isFile(); } catch { return false; }
-        }, referrersFor)
-        : { mapped: [], unmappable: [] };
-      return {
-        mapped: [...rows.mapped, ...mappedRows],
-        unmappable: [...rows.unmappable, ...lockfileUnmappable],
-      };
-    })()
+  // The two rows lists are merged UNCONDITIONALLY. An earlier revision merged them only when the
+  // import-graph list was non-empty, so a lockfile refusal (which empties that list by definition —
+  // the class files are removed from `uncovered`) was silently dropped and the plan reported
+  // `kind: "subset"` with no rows at all: a fail-OPEN on exactly the case this class exists to
+  // refuse. planRows() below is the pinned shape.
+  const importRows = importUncovered.length
+    ? mapUncovered(importUncovered, (test) => {
+      try { return statSync(join(ROOT, test)).isFile(); } catch { return false; }
+    }, (source) => {
+      try { return statSync(join(ROOT, source)).isFile(); } catch { return false; }
+    }, referrersFor)
     : { mapped: [], unmappable: [] };
+  const { mapped, unmappable } = planRows({ importRows, lockfile });
 
   if (unmappable.length) {
     return {

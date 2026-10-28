@@ -659,9 +659,6 @@ export function lockfileDeltaLedgerLines({ verdict, files = [], suites = verdict
     lines.push(`${name} ${scope}: version-counter-only (landing stamp) -> suites: the always-on set (${suites.length})`);
     return lines;
   }
-  if (verdict.integrityOnly) {
-    lines.push(`${name} ${scope}: integrity-only (resolved set unchanged) -> suites: ${suites.length}`);
-  }
   for (const note of verdict.notes ?? []) lines.push(`${name} ${scope}: ${note}`);
   lines.push(`${name} ${scope}: ${verdict.packages.length} package(s) -> ${suites.length} suite(s) selected (guard + closure + always-on)`);
   return lines;
