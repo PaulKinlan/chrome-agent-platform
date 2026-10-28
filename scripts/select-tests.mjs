@@ -48,6 +48,13 @@ import { tokenizer } from "acorn";
 import { partition } from "./test-partition.mjs";
 import { announce, runSerialFiles } from "./lib/serial-phase.mjs";
 import { HTML_EXPORT_ENTRY_GUARDS, isSelectorInfrastructure, mapUncovered } from "./lib/changed-file-mapping.mjs";
+import {
+  LOCKFILE_CLASS_FILES,
+  classifyLockfileDelta,
+  isLockfileClassFile,
+  lockfileDeltaLedgerLines,
+  specifierNamesPackage,
+} from "./lib/lockfile-delta.mjs";
 import { isPassiveContentFile } from "./lib/content-exemptions.mjs";
 import { emitGateLedger, explainChangedFileMapping } from "./lib/gate-manifest.mjs";
 import { decideBuild, ensureStoreBuild, findDistConsumers } from "./build-if-needed.mjs";
@@ -421,9 +428,18 @@ function importsOf(absPath, onLexerFailure) {
   if (!existsSync(absPath)) return [];
   const text = readFileSync(absPath, "utf8");
   const out = [];
+  // chrome-agent-platform-lezl0: the same read that produces the relative edges also produces the
+  // BARE specifiers, i.e. the package -> importer half a lockfile closure needs. Sharing the walk
+  // means a dependency delta costs no extra tree read (measured: a separate walk was 5.1s on this VM,
+  // against a 26s reverse graph — the lockfile class cannot afford a second pass it can avoid).
+  const bare = walkBareSpecifiers && isSourceWalkPath(absPath) ? new Set() : null;
   for (const m of text.matchAll(IMPORT_RE)) {
     const spec = (m[1] ?? m[2] ?? m[3] ?? m[4] ?? m[5] ?? "").trim();
-    if (!spec || !spec.startsWith(".")) continue; // only relative repo imports
+    if (!spec) continue;
+    if (!spec.startsWith(".")) {
+      if (bare) bare.add(spec); // a package / URL reference, not a repo edge
+      continue;
+    }
     const clean = spec.split("?")[0].split("#")[0];
     const resolved = resolve(dirname(absPath), clean);
     const found = resolvePath(resolved);
@@ -452,6 +468,7 @@ function importsOf(absPath, onLexerFailure) {
       if (found) out.push(found);
     }
   }
+  if (bare && bare.size) walkBareSpecifiers.set(normalize(relative(ROOT, absPath)), bare);
   return out;
 }
 
@@ -470,6 +487,8 @@ function resolvePath(p) {
 export function buildReverseGraph(onLexerFailure) {
   const reverse = new Map(); // abs path -> Set(abs paths of importers)
   const files = new Set();
+  // Collect the bare specifiers this same walk reads (see importsOf), so a lockfile closure is free.
+  walkBareSpecifiers = new Map();
   const walk = (dir) => {
     for (const ent of readdirSync(dir, { withFileTypes: true })) {
       if (ent.name.startsWith(".") || ent.name === "node_modules") continue;
@@ -504,6 +523,8 @@ export function buildReverseGraph(onLexerFailure) {
       }
     }
   }
+  walkedBareSpecifiers = walkBareSpecifiers;
+  walkBareSpecifiers = null;
   return reverse;
 }
 
@@ -564,6 +585,197 @@ export function testCandidatesForChanged(changed, reverse, mapped = []) {
     }
   }
   return [...selected].sort();
+}
+
+// ── Class-1 lockfile certification (chrome-agent-platform-lezl0, ADR gx0wg) ─────────────────
+// A dependency delta used to be all-or-nothing: package.json / package-lock.json /
+// extension/manifest.json are BOOKKEEPING_FILES (fail closed by policy) and deno.lock has no importer,
+// so `test:changed` escalated to the FULL suite — measured twice as a gate that could not finish
+// (ke79rp: 1800s killed after enumerating 760 files; fuixm: three ~600s INTERRUPTED fast gates).
+// scripts/lib/lockfile-delta.mjs answers the question by BYTES instead of by file name, and this
+// block is the only place that touches the disk/git for it:
+//   * read both sides of the delta (merge-base blob + the worktree tip),
+//   * hand the bytes to the pure classifier,
+//   * resolve the changed package names to repo importers (bare specifiers, any scheme or subpath)
+//     and their reverse-import test closure,
+//   * and turn the verdict into the same `mapped`/`unmappable` rows every other class uses, so a
+//     lockfile delta can never bypass the ledger.
+// COST: the importer index is built LAZILY and only when a lockfile delta is present — a normal change
+// never pays for it.
+const SOURCE_WALK_ROOTS = Object.freeze(["extension", "scripts", "lib", "packages", "tests"]);
+
+let cachedBareSpecifiers = null;
+/** Populated while buildReverseGraph walks (it reads every source file anyway); null otherwise. */
+let walkBareSpecifiers = null;
+/** The collection from the most recent reverse-graph walk. */
+let walkedBareSpecifiers = null;
+
+/** Drop the memoised bare-specifier index (tests, and any caller that mutates the tree). */
+export function clearBareSpecifierCache() {
+  cachedBareSpecifiers = null;
+  walkedBareSpecifiers = null;
+}
+
+/** True for a path inside the trees buildReverseGraph walks. */
+function isSourceWalkPath(absPath) {
+  const rel = normalize(relative(ROOT, absPath));
+  return SOURCE_WALK_ROOTS.some((root) => rel === root || rel.startsWith(`${root}/`));
+}
+
+/**
+ * repo-relative file -> the non-relative (package / URL) specifiers it imports. The reverse graph
+ * only records RELATIVE edges, so this is the other half: a dependency name is only attributable to a
+ * file through a bare specifier (`zod`, `zod/v4`, `npm:zod@^3`, `jsr:@std/assert@1`, a remote URL).
+ */
+export function bareSpecifierIndex() {
+  if (cachedBareSpecifiers) return cachedBareSpecifiers;
+  if (walkedBareSpecifiers?.size) {
+    cachedBareSpecifiers = walkedBareSpecifiers;
+    return cachedBareSpecifiers;
+  }
+  const index = new Map();
+  const walk = (dir) => {
+    for (const ent of readdirSync(dir, { withFileTypes: true })) {
+      if (ent.name.startsWith(".") || ent.name === "node_modules") continue;
+      const abs = join(dir, ent.name);
+      if (ent.isDirectory()) {
+        walk(abs);
+        continue;
+      }
+      if (!/\.(js|ts|mjs)$/.test(ent.name)) continue;
+      let text;
+      try {
+        text = readFileSync(abs, "utf8");
+      } catch {
+        continue; // unreadable file: contributes no importer edge (never a silent ATTRIBUTION)
+      }
+      const specs = new Set();
+      for (const m of text.matchAll(IMPORT_RE)) {
+        const spec = (m[1] ?? m[2] ?? m[3] ?? m[4] ?? m[5] ?? "").trim();
+        if (!spec || spec.startsWith(".")) continue;
+        specs.add(spec);
+      }
+      if (specs.size) index.set(normalize(relative(ROOT, abs)), specs);
+    }
+  };
+  for (const dir of SOURCE_WALK_ROOTS) {
+    if (existsSync(join(ROOT, dir))) walk(join(ROOT, dir));
+  }
+  cachedBareSpecifiers = index;
+  return index;
+}
+
+/**
+ * Package name -> the repo files that import it (`pkg` or `pkg/subpath`, any scheme).
+ * @param {string[]} names
+ * @returns {Record<string, string[]>}
+ */
+export function packageImporters(names = []) {
+  const index = bareSpecifierIndex();
+  const out = Object.fromEntries(names.map((name) => [name, []]));
+  for (const [rel, specs] of index) {
+    for (const name of names) {
+      for (const spec of specs) {
+        if (specifierNamesPackage(spec, name)) {
+          out[name].push(rel);
+          break;
+        }
+      }
+    }
+  }
+  for (const name of names) out[name].sort();
+  return out;
+}
+
+/** The closure a lockfile verdict needs: importers per package, then their reverse-import tests. */
+function lockfileClosureFor(reverse) {
+  return (names) => {
+    const importers = packageImporters(names);
+    const unattributed = names.filter((name) => !importers[name].length);
+    const files = [...new Set(names.flatMap((name) => importers[name]))];
+    const suites = files.length && reverse ? testCandidatesForChanged(files, reverse, []) : [];
+    return { importers, suites, unattributed };
+  };
+}
+
+/** The merge-base blob for a path, or null when it did not exist there. */
+function gitShowOrNull(ref, rel) {
+  try {
+    return execFileSync("git", ["show", `${ref}:${rel}`], {
+      cwd: ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
+    });
+  } catch {
+    return null;
+  }
+}
+
+/** The sentence every lockfile refusal starts with, so the reason is never read as a test failure. */
+export const LOCKFILE_DELTA_REFUSAL =
+  "lockfile-delta: this delta cannot be certified against a named suite set —";
+
+/**
+ * Decide what a lockfile delta requires, from the bytes of both sides.
+ *
+ * @param {string[]} changed repo-relative changed files
+ * @param {{
+ *   mergeBase?: string|null,
+ *   reverse?: Map<string, Set<string>>|null,
+ *   coreSuites?: string[],
+ *   readBase?: (rel: string) => string|null,
+ *   readTip?: (rel: string) => string|null,
+ *   closureFor?: Function|null,
+ * }} [options]
+ * @returns {null | { verdict: any, files: string[], mapped: Array<{file: string, mechanism: string, tests: string[]}>, unmappable: Array<{file: string, mechanism: string}>, ledger: string[] }}
+ */
+export function planLockfileDelta(changed = [], options = {}) {
+  const files = changed.filter((file) => isLockfileClassFile(file));
+  if (!files.length) return null;
+  const {
+    mergeBase = null,
+    reverse = null,
+    coreSuites = alwaysOnGuards(),
+    readBase = (rel) => (mergeBase ? gitShowOrNull(mergeBase, rel) : null),
+    readTip = (rel) => {
+      try {
+        return readFileSync(join(ROOT, rel), "utf8");
+      } catch {
+        return null;
+      }
+    },
+    closureFor = null,
+  } = options;
+
+  const delta = {};
+  const deltaKey = {
+    "package.json": "packageJson",
+    "package-lock.json": "packageLock",
+    "deno.lock": "denoLock",
+    "extension/manifest.json": "manifest",
+  };
+  for (const rel of files) delta[deltaKey[rel]] = { base: readBase(rel), tip: readTip(rel) };
+
+  const verdict = classifyLockfileDelta(delta, {
+    coreSuites,
+    closureFor: closureFor ?? lockfileClosureFor(reverse),
+  });
+  const ledger = lockfileDeltaLedgerLines({ verdict, files, suites: verdict.suites ?? [] });
+  if (verdict.kind === "full") {
+    return {
+      verdict,
+      files,
+      mapped: [],
+      unmappable: files.map((file) => ({ file, mechanism: `${LOCKFILE_DELTA_REFUSAL} ${verdict.reason}` })),
+      ledger,
+    };
+  }
+  const mechanism = `dependency-lock delta certified by scripts/lib/lockfile-delta.mjs (${verdict.passive ? "version-counter-only landing stamp" : verdict.integrityOnly ? "integrity-only pin change" : `${verdict.packages.length} changed package(s) resolved to their repo importers`})`;
+  return {
+    verdict,
+    files,
+    mapped: files.map((file) => ({ file, mechanism, tests: [...verdict.suites] })),
+    unmappable: [],
+    ledger,
+  };
 }
 
 // ── quiet-box suites never enter a per-change subset (chrome-agent-platform-zwpp9) ──────────
@@ -874,6 +1086,7 @@ async function runDeno(files, { build = null, omittedReason = null, fileMappingC
       build,
     },
     fileMapping,
+    lockfileDelta: fileMappingContext?.lockfileDelta ?? [],
   });
   return rc;
 }
@@ -923,6 +1136,7 @@ async function prepareBuild(decision, enabled) {
  *   mapped: Array<{ file: string, mechanism: string, tests: string[] }>,
  *   unmappable: Array<{ file: string, mechanism: string }>,
  *   notices: string[],
+ *   lockfileDelta: string[],
  *   failClosedHeader?: string,
  *   reason: string,
  * }}
@@ -954,12 +1168,35 @@ export function planSelection({ base = "origin/main" } = {}) {
     };
   }
 
-  const { mapped, unmappable } = uncovered.length
-    ? mapUncovered(uncovered, (test) => {
-      try { return statSync(join(ROOT, test)).isFile(); } catch { return false; }
-    }, (source) => {
-      try { return statSync(join(ROOT, source)).isFile(); } catch { return false; }
-    }, referrersFor)
+  // Class-1 lockfile certification (chrome-agent-platform-lezl0, ADR gx0wg): a dependency delta is
+  // decided from its BYTES before the fail-closed coverage policy is applied. A version-counter-only
+  // stamp, an integrity-only pin change and a dependency change whose packages resolve to repo
+  // importers are all certifiable; anything the classifier cannot name stays FAIL CLOSED with the
+  // reason the classifier gave (never a bare "bookkeeping JSON belongs to the merger").
+  const lockfile = planLockfileDelta(changed, {
+    mergeBase: mergeBaseOf(base),
+    reverse,
+    coreSuites: alwaysOnGuards(),
+  });
+  const lockfileFiles = new Set(lockfile?.files ?? []);
+  const importUncovered = uncovered.filter((file) => !lockfileFiles.has(file));
+
+  const mappedRows = lockfile?.mapped ?? [];
+  const lockfileUnmappable = lockfile?.unmappable ?? [];
+  const { mapped, unmappable } = importUncovered.length || mappedRows.length
+    ? (() => {
+      const rows = importUncovered.length
+        ? mapUncovered(importUncovered, (test) => {
+          try { return statSync(join(ROOT, test)).isFile(); } catch { return false; }
+        }, (source) => {
+          try { return statSync(join(ROOT, source)).isFile(); } catch { return false; }
+        }, referrersFor)
+        : { mapped: [], unmappable: [] };
+      return {
+        mapped: [...rows.mapped, ...mappedRows],
+        unmappable: [...rows.unmappable, ...lockfileUnmappable],
+      };
+    })()
     : { mapped: [], unmappable: [] };
 
   if (unmappable.length) {
@@ -972,7 +1209,15 @@ export function planSelection({ base = "origin/main" } = {}) {
       mapped,
       unmappable,
       notices,
-      reason: "changed file(s) with no reachable test cannot be proved covered by a subset",
+      lockfileDelta: lockfile?.ledger ?? [],
+      // A lockfile refusal gets its OWN header: the generic "no reachable test" wording sent the
+      // last three readers looking for an import edge that was never the requirement (ke9rp, fuixm).
+      failClosedHeader: lockfileUnmappable.length
+        ? "select-tests: FAIL CLOSED — a dependency-lock delta could not be certified against a named suite set:"
+        : undefined,
+      reason: lockfileUnmappable.length
+        ? `lockfile delta not certifiable: ${lockfile.verdict.reason}`
+        : "changed file(s) with no reachable test cannot be proved covered by a subset",
     };
   }
   for (const m of mapped) {
@@ -987,6 +1232,7 @@ export function planSelection({ base = "origin/main" } = {}) {
     mapped,
     unmappable: [],
     notices,
+    lockfileDelta: lockfile?.ledger ?? [],
     omittedReason: OMITTED_UNSELECTED_REASON,
     reason: "",
   };
@@ -1034,7 +1280,12 @@ function fileMappingContextForPlan(plan) {
     file,
     testCandidatesForChanged([file], plan.reverse, plan.mapped.filter((entry) => entry.file === file)),
   ]));
-  return { changed: plan.changed, candidates, unmappable: plan.unmappable };
+  return {
+    changed: plan.changed,
+    candidates,
+    unmappable: plan.unmappable,
+    lockfileDelta: plan.lockfileDelta ?? [],
+  };
 }
 
 async function main() {
@@ -1097,12 +1348,16 @@ async function main() {
         unmapped: [],
         unmappable: plan.unmappable.map((u) => ({ file: u.file, mechanism: u.mechanism })),
         mapped: plan.mapped.map((m) => ({ file: m.file, tests: m.tests })),
+        lockfileDelta: plan.lockfileDelta ?? [],
         reason: plan.reason,
       }),
     );
     return;
   }
   for (const notice of plan.notices) console.error(notice);
+  // The lockfile closure, named: package -> importers -> suites, so a reviewer reads the decision
+  // instead of reconstructing it from the diff (ADR gx0wg's evidence requirement).
+  for (const line of plan.lockfileDelta ?? []) console.error(line);
 
   if (plan.kind === "full") {
     // The caller keeps this EXACT shape: tests/changed-file-mapping.test.ts (nco2/R1b) pins that

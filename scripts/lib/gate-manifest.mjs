@@ -29,6 +29,8 @@ import { ENVIRONMENTAL_REFUSAL_EXIT } from "./environmental-verdict.mjs";
 export const GATE_OUTCOMES = ["passed", "failed", "refused", "incomplete"];
 
 export const GATE_MANIFEST_PREFIX = "fast-gate: manifest: ";
+/** The Class-1 lockfile certification trail (chrome-agent-platform-lezl0). */
+export const LOCKFILE_DELTA_PREFIX = "lockfile-delta: ";
 export const GATE_UNMAPPED_PREFIX = "fast-gate: unmapped: ";
 export const GATE_UNKNOWN_PREFIX = "fast-gate: unknown: ";
 
@@ -418,10 +420,20 @@ export function formatGateUnknown(reason) {
 /**
  * Write the ledger to a log. Everything goes to stderr so `--list` stdout stays a parseable file
  * list. Returns the lines written (for tests).
- * @param {{ manifest?: object | null, unmapped?: string[], fileMapping?: Array<{file: string, status: string, reason: string}>, unknown?: string | null, log?: (...a: any[]) => void }} args
+ *
+ * `lockfileDelta` carries the Class-1 certification closure (chrome-agent-platform-lezl0): the
+ * `lockfile-delta:` lines naming package -> importers -> suites. They are emitted BEFORE the manifest
+ * line because the fleet consumer takes the LAST manifest line in a log — a certification trail must
+ * never be able to displace it.
+ *
+ * @param {{ manifest?: object | null, unmapped?: string[], fileMapping?: Array<{file: string, status: string, reason: string}>, lockfileDelta?: string[], unknown?: string | null, log?: (...a: any[]) => void }} args
  */
-export function emitGateLedger({ manifest = null, unmapped = [], fileMapping = [], unknown = null, log = console.error } = {}) {
+export function emitGateLedger({ manifest = null, unmapped = [], fileMapping = [], lockfileDelta = [], unknown = null, log = console.error } = {}) {
   const lines = [];
+  for (const line of lockfileDelta ?? []) {
+    const text = String(line ?? "").trim();
+    if (text) lines.push(text.startsWith(LOCKFILE_DELTA_PREFIX) ? text : LOCKFILE_DELTA_PREFIX + text);
+  }
   if (manifest) lines.push(formatGateManifest(manifest));
   const missing = fileMapping.filter((row) => row.status === "unmapped");
   const unmappedLine = formatGateUnmapped([...unmapped, ...missing.map((row) => row.file)]);
