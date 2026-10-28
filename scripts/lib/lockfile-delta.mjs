@@ -25,33 +25,42 @@
 //      "lezl0: a REAL landing stamp is passive" in tests/lockfile-delta.test.ts). This is not a dependency change and it is not even a source change
 //      to any module the tree executes: it is bookkeeping, and chrome-agent-platform-nco2 conflated
 //      it with a dependency bump when it made the whole class fail closed. Verdict: PASSIVE
-//      BOOKKEEPING, certified by the always-on set alone (which includes the manifest and changelog
-//      guards, and `build:production`'s "one live version" assertion on every gate).
+//      BOOKKEEPING, certified by the always-on set PLUS tests/first-run-onboarding-composition.test.ts,
+//      which asserts the identity across all three surfaces (package.json version == package-lock
+//      version == packages[""].version == manifest.version == manifest.version_name) and is the
+//      stamp's real reader (review round 1, finding 1: it reads all three files by path and no import
+//      graph reaches it). `version_name` is part of the counter: scripts/bump-version.mjs writes both
+//      fields on every landing.
 //
-//   2. THE RESOLVED SET IS UNCHANGED AND ONLY HASHES MOVED (deno.lock "integrity-only"). No import
-//      graph edge changed, so no importer's behaviour can change; what moved is the pin on bytes the
-//      build verifies. Verdict: the DECLARED READER — tests/security-dependency-locks.test.ts — plus
-//      the always-on set. That guard parses BOTH locks and asserts (a) every package in its advisory
-//      table is still pinned in deno.lock and (b) every pinned version clears the advisory fix floor,
-//      so it is exactly the suite that reads these bytes as data. (The build tier's content key also
-//      invalidates on ANY lockfile byte, so "the build ran over the refetched bytes" is proven there,
-//      not asserted here.)
+//   2. ONLY HASHES MOVED (deno.lock "integrity-only": resolved versions and dependency edges are
+//      unchanged). This is NOT a free pass, and review round 1 (finding 3) was right to say so: a
+//      same-version/different-hash entry still needs something that reads the new bytes. So the entry
+//      is NAMED like any other change and must satisfy the same three-way inspection rule as class 3
+//      below (importer, transitive dependent, or a declared reader whose table asserts that entry).
+//      (The build tier's content key also invalidates on ANY lockfile byte, so "the build ran over the
+//      refetched bytes" is proven there — but a subset gate may not lean on that.)
 //
-//   3. A PACKAGE SET CHANGED. The delta names package(s); the caller resolves repo importers
-//      (`pkg`, `pkg/subpath`, `npm:pkg@range`, `jsr:@scope/pkg@range`); their reverse-import closure is
-//      the suite set, plus the declared-reader guard, plus the always-on set.
+//   3. A PACKAGE SET CHANGED — and every changed entry must be INSPECTED by a suite in the selection.
+//      This is the module's whole safety rule, and it is where review round 1 (gpt-6-sol) failed the
+//      first version, correctly: that version certified a changed entry with no repo importer on the
+//      strength of "the declared reader re-reads the new bytes", and the reader does no such thing for
+//      an arbitrary entry — it asserts only the packages in its own advisory/patch tables. An unearned
+//      claim about coverage is the same defect as a missing suite.
 //
-//      STATED FAIL-OPEN, PINNED SO REVIEW CAN ATTACK IT: a changed npm/specifier/workspace entry with
-//      NO repo importer is STILL a subset, WITH the guard. It is not a hole that slipped in: most
-//      declared dependencies legitimately have no importer (a types-only package, a CLI, a
-//      peer-transitive pin), and the guard is the declared reader of those exact declarations — it
-//      asserts pins and advisory floors over the new bytes. This is the one fail-open-with-guard case
-//      in the module, it is named in every ledger line it produces, and
-//      tests/lockfile-delta.test.ts pins both directions (a real change still selects its closure; an
-//      unattributable declared name still selects the guard).
+//      So an entry is certifiable only when one of three things is true, and each is resolved here:
+//        (a) a repo file imports the package -> its reverse-import test closure;
+//        (b) a repo file imports a package that TRANSITIVELY DEPENDS on it -> that dependent's
+//            closure (this is how a types-only or peer-transitive pin is attributed to the code that
+//            actually executes it: the lock's own dependency edges are the evidence);
+//        (c) a declared reader inspects that EXACT entry — DECLARED_PIN_READERS lists the entries
+//            tests/security-dependency-locks.test.ts (fast-uri advisory ledger; hono, ip-address,
+//            proxy-addr, undici patch table) and tests/bundle-budget.test.ts (fast-uri and
+//            @modelcontextprotocol/sdk lock->shipped drift) actually assert.
+//      Anything else is `kind: "full"`, naming every entry nothing in the subset would look at.
 //
-//      A REMOTE URL, JSR ENTRY OR REDIRECT with no importer is DIFFERENT and stays FULL: no guard in
-//      this repo reads those sections as data, so nothing in a subset would look at the new bytes.
+//      REMOTE URLS AND REDIRECTS have no (b) and no (c) — no guard in this repo reads those sections —
+//      so they must resolve to a real importer or the delta is FULL. JSR ENTRIES have no (c) for the
+//      same reason, but they DO have (a) and (b): the std libraries are imported across the suite graph.
 //
 //   4. ANYTHING ELSE — a manifest delta beyond the version counter (permissions, CSP,
 //      web_accessible_resources: the always-on manifest guard does not prove those), a package.json
@@ -72,12 +81,50 @@ export const LOCKFILE_CLASS_FILES = Object.freeze([
 ]);
 
 /**
- * The DECLARED READER for a dependency delta (coord's measured precondition): it parses BOTH
- * package-lock.json and deno.lock, asserts every advisory-table package is still pinned in deno.lock
- * and that every pinned version clears the advisory fix floor. Any change to the resolved set or to a
- * pin is read by this suite, which is why it accompanies every non-passive verdict below.
+ * The DECLARED READERS for a dependency delta — the suites that parse the lockfiles as DATA.
+ *
+ * Review finding (round 1, gpt-6-sol) proved the single-guard version of this wrong by reading the
+ * code: tests/security-dependency-locks.test.ts asserts only the packages in its own advisory/patch
+ * TABLES plus advisory floors, and tests/bundle-budget.test.ts separately parses BOTH locks to prove
+ * the lock -> shipped-bundle drift guard (lf9xe, im9q8). A JSON file has no import edge, so neither
+ * suite is reachable by the selector's graph; they are DECLARED here instead, per file, and their
+ * tables are declared below as the only entries they actually inspect.
  */
-export const DEPENDENCY_LOCK_GUARD = "tests/security-dependency-locks.test.ts";
+export const DEPENDENCY_LOCK_GUARDS = Object.freeze([
+  "tests/security-dependency-locks.test.ts",
+  "tests/bundle-budget.test.ts",
+]);
+
+/**
+ * The suite that asserts the RELEASE IDENTITY across all three counter surfaces
+ * (package.json version == package-lock version == packages[""].version == manifest.version ==
+ * manifest.version_name). It is the stamp's real reader - stronger than the changelog guard, which
+ * only checks the changelog's newest entry against package.json. Also found by review round 1: it
+ * reads all three files by path and appears in no import graph.
+ */
+export const RELEASE_IDENTITY_GUARD = "tests/first-run-onboarding-composition.test.ts";
+
+/**
+ * The package entries a declared reader ACTUALLY inspects, read out of the readers themselves:
+ *   * tests/security-dependency-locks.test.ts — its fast-uri advisory ledger (derived from
+ *     scripts/bundle-budget.mjs FAST_URI_ADVISORIES, pinned against the published feed) and its
+ *     behrd patch table (hono, ip-address, proxy-addr, undici, with fix floors).
+ *   * tests/bundle-budget.test.ts — the lock -> shipped drift guard for fast-uri and the
+ *     @modelcontextprotocol/sdk.
+ * A changed entry with NO repo importer is certifiable only when it appears HERE: that is the
+ * review's "unless some suite actually checks that changed entry". Reviewer finding 2, round 1:
+ * the previous blanket claim ("the guard re-reads the new bytes") was not earned by these suites,
+ * so an arbitrary unattributed entry is now REFUSED, named.
+ * tests/lockfile-delta.test.ts pins this table against the readers' own tables so it cannot drift.
+ */
+export const DECLARED_PIN_READERS = Object.freeze({
+  "fast-uri": Object.freeze(["tests/security-dependency-locks.test.ts", "tests/bundle-budget.test.ts"]),
+  hono: Object.freeze(["tests/security-dependency-locks.test.ts"]),
+  "ip-address": Object.freeze(["tests/security-dependency-locks.test.ts"]),
+  "proxy-addr": Object.freeze(["tests/security-dependency-locks.test.ts"]),
+  undici: Object.freeze(["tests/security-dependency-locks.test.ts"]),
+  "@modelcontextprotocol/sdk": Object.freeze(["tests/bundle-budget.test.ts"]),
+});
 
 /** The ledger prefix every verdict line carries, so a reviewer can see the closure, not infer it. */
 export const LOCKFILE_DELTA_LEDGER_PREFIX = "lockfile-delta:";
@@ -386,20 +433,19 @@ function denoLockShape(base, tip) {
     const b = npmBefore[key];
     const t = npmAfter[key];
     if (sameJson(b, t)) continue;
-    let hashOnly = false;
     if (b && t) {
       const restBefore = { ...b };
       const restAfter = { ...t };
       delete restBefore.integrity;
       delete restAfter.integrity;
-      hashOnly = sameJson(restBefore, restAfter);
-      if (!hashOnly) integrityOnly = false;
+      if (!sameJson(restBefore, restAfter)) integrityOnly = false;
     } else {
       integrityOnly = false;
     }
-    // A hash-only change moved no edge, so it names no package: the resolved set is identical and
-    // the only thing that changed is the pin on bytes the build verifies.
-    if (hashOnly) continue;
+    // A hash-only change moved no EDGE, but it moved BYTES: review round 1 (finding 3) is right that
+    // skipping the name left a same-version/different-hash package with nothing checking it. The name
+    // is kept so its importer closure (or its dependents', below) is selected; if nothing resolves it,
+    // the delta is refused further down rather than certified on a guard that never reads the pin.
     // Key changes are named; a same-key dependency-edge change still names the package.
     const name = packageNameFromNpmKey(key);
     if (name) resolved.add(name);
@@ -417,15 +463,19 @@ function denoLockShape(base, tip) {
     else unrecognised.push(`deno.lock: specifier '${key}' changed and names no npm/jsr package`);
   }
 
-  // remote: integrity-pinned URLs. Nothing in a subset reads these as data.
-  for (const url of changedKeys(base.remote ?? {}, tip.remote ?? {})) {
-    integrityOnly = false;
+  // remote: integrity-pinned URLs. Nothing in a subset reads these as data, so every changed URL is
+  // edge-required. A VALUE-only change (the same URL re-pinned to a different hash) is still a delta:
+  // an earlier revision iterated keys only and so could not see it at all.
+  for (const url of new Set([...Object.keys(base.remote ?? {}), ...Object.keys(tip.remote ?? {})])) {
+    if ((base.remote ?? {})[url] === (tip.remote ?? {})[url]) continue;
+    if (url in (base.remote ?? {}) !== url in (tip.remote ?? {})) integrityOnly = false;
     edgeRequired.add(url);
   }
 
-  // redirects: URL -> URL. Same reasoning as remote.
-  for (const url of changedKeys(base.redirects ?? {}, tip.redirects ?? {})) {
-    integrityOnly = false;
+  // redirects: URL -> URL. Same reasoning as remote, including the value-only case.
+  for (const url of new Set([...Object.keys(base.redirects ?? {}), ...Object.keys(tip.redirects ?? {})])) {
+    if ((base.redirects ?? {})[url] === (tip.redirects ?? {})[url]) continue;
+    if (url in (base.redirects ?? {}) !== url in (tip.redirects ?? {})) integrityOnly = false;
     edgeRequired.add(url);
   }
 
@@ -434,18 +484,17 @@ function denoLockShape(base, tip) {
   const jsrAfter = tip.jsr ?? {};
   for (const key of new Set([...Object.keys(jsrBefore), ...Object.keys(jsrAfter)])) {
     if (sameJson(jsrBefore[key], jsrAfter[key])) continue;
-    let hashOnly = false;
     if (jsrBefore[key] && jsrAfter[key]) {
       const restBefore = { ...jsrBefore[key] };
       const restAfter = { ...jsrAfter[key] };
       delete restBefore.integrity;
       delete restAfter.integrity;
-      hashOnly = sameJson(restBefore, restAfter);
-      if (!hashOnly) integrityOnly = false;
+      if (!sameJson(restBefore, restAfter)) integrityOnly = false;
     } else {
       integrityOnly = false;
     }
-    if (hashOnly) continue;
+    // Same rule as the npm section: a jsr hash-only change names the package, and because no guard in
+    // this repo reads jsr entries the name must resolve to real importers (review round 1, finding 3).
     const name = packageNameFromNpmKey(key);
     if (name) edgeRequired.add(name);
     else unrecognised.push(`deno.lock: jsr entry '${key}' changed and no package name could be read from it`);
@@ -481,6 +530,52 @@ function denoLockShape(base, tip) {
   return { resolved, edgeRequired, unrecognised, integrityOnly };
 }
 
+// ── dependency-graph attribution ─────────────────────────────────────────────────────────────
+/** Bounded walk: a pathological lock must never expand into the whole graph. */
+const MAX_DEPENDENTS = 128;
+
+/**
+ * name -> the names that (directly) depend on it, from BOTH sides of the deno.lock and the
+ * package-lock's own dependency edges. This is what lets a TRANSITIVE change be attributed to a
+ * suite: `@types/node` has no importer, but `ai` does, and the lock says `ai` depends on it.
+ */
+function lockDependents(...locks) {
+  const map = new Map();
+  const add = (dependency, dependent) => {
+    if (!dependency || !dependent || dependency === dependent) return;
+    let set = map.get(dependency);
+    if (!set) map.set(dependency, set = new Set());
+    set.add(dependent);
+  };
+  for (const lock of locks) {
+    for (const section of [lock?.npm, lock?.jsr]) {
+      for (const [key, entry] of Object.entries(section ?? {})) {
+        const name = packageNameFromNpmKey(key);
+        for (const dependency of entry?.dependencies ?? []) add(packageNameFromSpecifier(dependency), name);
+      }
+    }
+    for (const [key, entry] of Object.entries(lock?.packages ?? {})) {
+      const name = key === "" ? null : packageNameFromLockPath(key);
+      for (const dependency of Object.keys(entry?.dependencies ?? {})) add(dependency, name);
+    }
+  }
+  return map;
+}
+
+/** Every name that transitively depends on `name` (bounded, cycle-safe). */
+function dependentsOf(dependents, name) {
+  const out = new Set();
+  const queue = [name];
+  while (queue.length && out.size < MAX_DEPENDENTS) {
+    for (const dependent of dependents.get(queue.pop()) ?? []) {
+      if (out.has(dependent)) continue;
+      out.add(dependent);
+      queue.push(dependent);
+    }
+  }
+  return [...out];
+}
+
 // ── the verdict ──────────────────────────────────────────────────────────────────────────────
 function full(reason, extra = {}) {
   return {
@@ -489,6 +584,8 @@ function full(reason, extra = {}) {
     packages: [],
     importers: {},
     unresolved: [],
+    viaDependent: {},
+    viaDeclaredReader: {},
     passive: false,
     integrityOnly: false,
     notes: [reason],
@@ -506,11 +603,13 @@ function full(reason, extra = {}) {
  *   dependencyGuards?: string[],
  *   closureFor?: (names: string[]) => { suites?: string[], importers?: Record<string, string[]>, unattributed?: string[] },
  * }} [options]
- * @returns {{kind: "subset"|"full", suites: string[], packages: string[], importers: Record<string, string[]>, unresolved: string[], passive: boolean, integrityOnly: boolean, notes: string[], reason: string}}
+ * @returns {{kind: "subset"|"full", suites: string[], packages: string[], importers: Record<string, string[]>, unresolved: string[], passive: boolean, integrityOnly: boolean, viaDependent: Record<string, string>, viaDeclaredReader: Record<string, string[]>, notes: string[], reason: string}}
  */
 export function classifyLockfileDelta(delta = {}, options = {}) {
   const coreSuites = [...(options.coreSuites ?? [])];
-  const guards = [...(options.dependencyGuards ?? [DEPENDENCY_LOCK_GUARD])];
+  const guards = [...(options.dependencyGuards ?? DEPENDENCY_LOCK_GUARDS)];
+  const releaseGuards = [...(options.releaseGuards ?? [RELEASE_IDENTITY_GUARD])];
+  const pinReaders = options.pinReaders ?? DECLARED_PIN_READERS;
   const closureFor = typeof options.closureFor === "function"
     ? options.closureFor
     : () => ({ suites: [], importers: {}, unattributed: [] });
@@ -569,7 +668,9 @@ export function classifyLockfileDelta(delta = {}, options = {}) {
     for (const name of shape.resolved) resolved.add(name);
     for (const name of shape.edgeRequired) edgeRequired.add(name);
     unrecognised.push(...shape.unrecognised);
-    integrityOnly = shape.integrityOnly && !resolved.size && !edgeRequired.size && !unrecognised.length;
+    // `integrityOnly` is a FACT about the delta (only pin hashes moved), not a selection shortcut: the
+    // changed entries are still named, so it must not be cancelled by the names now being kept.
+    integrityOnly = shape.integrityOnly && !unrecognised.length;
     if (!integrityOnly && !resolved.size && !edgeRequired.size && !unrecognised.length) {
       unrecognised.push("deno.lock: the delta changed no field this module can name a package or a guard for");
     }
@@ -589,7 +690,7 @@ export function classifyLockfileDelta(delta = {}, options = {}) {
   // 4. A pure version stamp is certified by the always-on set alone (nothing about the dependency
   //    graph, the bundles or the guards moved).
   if (passive) {
-    const suites = [...new Set(coreSuites)].sort();
+    const suites = [...new Set([...coreSuites, ...releaseGuards])].sort();
     return {
       kind: "subset",
       suites,
@@ -605,46 +706,90 @@ export function classifyLockfileDelta(delta = {}, options = {}) {
     };
   }
 
-  // 5. Resolve the closure: importers of the changed packages, then their reverse-import tests.
-  const names = [...new Set([...resolved])].sort();
-  const closure = names.length ? closureFor(names) : { suites: [], importers: {}, unattributed: [] };
-  const importers = closure.importers ?? {};
-  const unattributed = new Set(closure.unattributed ?? []);
+  // 5. Attribute every changed entry to something that INSPECTS it. This is the review round-1
+  //    correction (findings 2 and 3), and it is the whole safety rule of the module:
+  //
+  //      an entry is certifiable only if a suite in the selection ACTUALLY LOOKS AT IT,
+  //      and there are exactly three ways that happens:
+  //        (a) a repo file imports the package -> its reverse-import test closure;
+  //        (b) a repo file imports a package that (transitively) DEPENDS on it -> same closure,
+  //            which is how a transitive pin (a types-only package, a peer pin) is attributed to the
+  //            code that executes its dependents;
+  //        (c) a declared reader inspects that exact entry (DECLARED_PIN_READERS) — its advisory /
+  //            patch table or its lock->shipped drift check.
+  //      Anything else is REFUSED, named. The previous version of this module certified an
+  //      unattributed entry on the strength of "the guard re-reads the new bytes", which the guard
+  //      does not do for arbitrary entries: that claim was not earned, and review was right to fail it.
+  const dependencyNames = [...new Set([...resolved])].sort();
+  const edgeNames = [...new Set([...edgeRequired])].sort();
+  const changedNames = [...new Set([...dependencyNames, ...edgeNames])].sort();
+  const dependents = lockDependents(parsed.denoLock?.tip, parsed.denoLock?.base, parsed.packageLock?.tip);
 
-  // 6. Edge sections no guard reads (remote URLs, jsr entries, redirects) must resolve to a real
-  //    import edge, or a subset would contain nothing that looks at the new bytes.
-  const unresolved = [...edgeRequired].filter((name) => !importers[name]?.length).sort();
-  if (unresolved.length) {
+  // Ask the closure about every name AND the packages that depend on it, so (a) and (b) are one call.
+  const ask = new Set(changedNames);
+  for (const name of changedNames) for (const dependent of dependentsOf(dependents, name)) ask.add(dependent);
+  const closure = ask.size ? closureFor([...ask]) : { suites: [], importers: {}, unattributed: [] };
+  const importers = closure.importers ?? {};
+
+  const uninspected = [];
+  const viaDependent = {};
+  const viaDeclaredReader = {};
+  for (const name of changedNames) {
+    if ((importers[name] ?? []).length) continue; // (a) imported directly
+    const dependentWithImporter = dependentsOf(dependents, name).find((dependent) => (importers[dependent] ?? []).length);
+    if (dependentWithImporter) { // (b) executed through a dependent
+      viaDependent[name] = dependentWithImporter;
+      continue;
+    }
+    // (c) a declared reader inspects this entry — but only for the sections those readers read. No
+    // guard in this repo reads deno.lock's remote/jsr/redirects sections, so those must resolve by
+    // import edge or be refused.
+    const readers = edgeRequired.has(name) ? null : pinReaders[name];
+    if (readers?.length) {
+      viaDeclaredReader[name] = [...readers];
+      continue;
+    }
+    uninspected.push(name);
+  }
+  if (uninspected.length) {
     return full(
-      `deno.lock: ${unresolved.join(", ")} changed in a section no dependency guard reads ` +
-        `(remote/jsr/redirects) and no repo importer resolves it — a subset would not inspect the new bytes`,
-      { unresolved },
+      `no suite in a subset would inspect these changed entries: ${uninspected.join(", ")} — ` +
+        `nothing imports them, nothing that depends on them is imported, and no declared reader ` +
+        `(tests/security-dependency-locks.test.ts, tests/bundle-budget.test.ts) checks that entry; ` +
+        `add the suite that does, or run the full suite`,
+      { unresolved: uninspected },
     );
   }
 
   const declaredGuards = guards.filter((guard) => !coreSuites.includes(guard));
   const suites = [...new Set([...coreSuites, ...declaredGuards, ...(closure.suites ?? [])])].sort();
   const notes = [];
-  if (integrityOnly && !names.length) {
-    notes.push("integrity-only: the resolved set and every dependency edge are unchanged, only pin hashes moved");
+  if (integrityOnly) {
+    notes.push("integrity-only: every dependency edge is unchanged; only pin hashes moved, so the named importers/readers are what re-reads those bytes");
   }
-  for (const name of names) {
+  for (const name of changedNames) {
     const files = importers[name] ?? [];
-    const fileList = files.length ? files.join(", ") : "none";
-    const why = files.length
-      ? "imported by repo file(s) named here"
-      : `no repo importer — certified by its declared reader (${guards.join(", ") || "none"}) over the new bytes`;
-    notes.push(`${name} -> importers: ${fileList} -> ${why}`);
+    if (files.length) {
+      notes.push(`${name} -> importers: ${files.join(", ")}`);
+      continue;
+    }
+    if (viaDependent[name]) {
+      notes.push(`${name} -> no direct importer -> reached through its dependent ${viaDependent[name]} (importers: ${(importers[viaDependent[name]] ?? []).join(", ")})`);
+      continue;
+    }
+    notes.push(`${name} -> no importer -> inspected by ${viaDeclaredReader[name].join(", ")}`);
   }
   return {
     kind: "subset",
     suites,
-    packages: names,
+    packages: changedNames,
     importers,
     unresolved: [],
     passive: false,
     integrityOnly,
     notes,
+    viaDependent,
+    viaDeclaredReader,
     reason: "",
   };
 }

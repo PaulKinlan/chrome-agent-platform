@@ -15,7 +15,8 @@ import { assert, assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import {
-  DEPENDENCY_LOCK_GUARD,
+  DECLARED_PIN_READERS,
+  DEPENDENCY_LOCK_GUARDS,
   LOCKFILE_CLASS_FILES,
   LOCKFILE_DELTA_LEDGER_PREFIX,
   classifyLockfileDelta,
@@ -25,6 +26,7 @@ import {
   packageNameFromLockPath,
   packageNameFromNpmKey,
   packageNameFromSpecifier,
+  RELEASE_IDENTITY_GUARD,
   specifierNamesPackage,
 } from "../scripts/lib/lockfile-delta.mjs";
 import { SELECTOR_INFRASTRUCTURE } from "../scripts/lib/changed-file-mapping.mjs";
@@ -63,11 +65,19 @@ function npmLock({ zodVersion = "3.24.0", rootRange = "^3.24.0" } = {}): string 
   }, null, 2);
 }
 
-function denoLock({ integrity = "sha512-aa", resolved = "3.24.0", npmKey = "zod@3.24.0", extra = {} } = {}): string {
+function denoLock({
+  integrity = "sha512-aa",
+  resolved = "3.24.0",
+  npmKey = "zod@3.24.0",
+  npm = {},
+  jsr = {},
+  extra = {},
+} = {}): string {
   return JSON.stringify({
     version: "5",
     specifiers: { "npm:zod@^3": resolved },
-    npm: { [npmKey]: { integrity } },
+    npm: { [npmKey]: { integrity }, ...npm },
+    ...(Object.keys(jsr).length ? { jsr } : {}),
     workspace: { packageJson: { dependencies: ["npm:zod@^3.24.0"] } },
     ...extra,
   }, null, 2);
@@ -77,7 +87,7 @@ function denoLock({ integrity = "sha512-aa", resolved = "3.24.0", npmKey = "zod@
 const closureStub = (importers: Record<string, string[]> = {}, suites: string[] = ["tests/closure.test.ts"]) =>
   (names: string[]) => ({
     importers: Object.fromEntries(names.map((name) => [name, importers[name] ?? []])),
-    suites: names.every((name) => (importers[name] ?? []).length) ? suites : [],
+    suites: names.some((name) => (importers[name] ?? []).length) ? suites : [],
     unattributed: names.filter((name) => !(importers[name] ?? []).length),
   });
 
@@ -102,7 +112,13 @@ Deno.test("lezl0: the class is the four files, and the classifier is selector in
     SELECTOR_INFRASTRUCTURE.includes("scripts/lib/lockfile-delta.mjs"),
     "the lockfile classifier is part of the selector's own machinery",
   );
-  assert(existsSync(join(ROOT, DEPENDENCY_LOCK_GUARD)), `${DEPENDENCY_LOCK_GUARD} is the declared reader and must exist`);
+  // Review round 1 (finding 1): the class has THREE declared readers, not one. Each is a suite that
+  // reads these files BY PATH — no import edge reaches any of them — so a missing one is a silent gap.
+  for (const reader of [...DEPENDENCY_LOCK_GUARDS, RELEASE_IDENTITY_GUARD]) {
+    assert(existsSync(join(ROOT, reader)), `${reader} is a declared reader and must exist`);
+  }
+  assert(DEPENDENCY_LOCK_GUARDS.includes("tests/bundle-budget.test.ts"), "bundle-budget parses BOTH locks");
+  assertEquals(RELEASE_IDENTITY_GUARD, "tests/first-run-onboarding-composition.test.ts");
 });
 
 Deno.test("lezl0: name extraction reads lock paths, npm keys and specifiers (scoped, subpath, scheme)", () => {
@@ -148,9 +164,43 @@ Deno.test("lezl0: a version-counter-only trio is PASSIVE bookkeeping — a subse
   assertEquals(verdict.kind, "subset", "a landing stamp must never cost the full suite");
   assertEquals(verdict.passive, true);
   assertEquals(verdict.packages, [], "no package changed");
-  assertEquals(verdict.suites, CORE, "the always-on set alone certifies the stamp");
-  assert(!verdict.suites.includes(DEPENDENCY_LOCK_GUARD), "no dependency reader is owed for a stamp");
+  assertEquals(verdict.suites, [...CORE, RELEASE_IDENTITY_GUARD].sort(), "always-on + the release-identity reader");
+  assert(verdict.suites.includes(RELEASE_IDENTITY_GUARD), "the stamp's real reader is selected (finding 1)");
+  for (const guard of DEPENDENCY_LOCK_GUARDS) {
+    assert(!verdict.suites.includes(guard), `no dependency reader is owed for a stamp: ${guard}`);
+  }
   assertStringIncludes(verdict.notes.join("\n"), "version-counter-only");
+});
+
+Deno.test("lezl0: DECLARED_PIN_READERS matches what the readers actually assert (drift pin)", () => {
+  // The declared-reader table is the ONLY thing that lets an entry with no importer be certified, so it
+  // is exactly the kind of list that rots: a new row in a reader's patch table must arrive here in the
+  // same commit, and a row here must point at a reader that really names that package. Both directions
+  // are computed from the readers' own source rather than restated.
+  const locksSrc = readFileSync(join(ROOT, "tests/security-dependency-locks.test.ts"), "utf8");
+  const budgetSrc = readFileSync(join(ROOT, "tests/bundle-budget.test.ts"), "utf8");
+
+  const patchedRows = [...locksSrc.matchAll(/\{\s*name:\s*"([^"]+)",\s*floor:/g)].map((m) => m[1]);
+  assert(patchedRows.length >= 4, `the behrd patch table must be found: ${patchedRows.join(", ")}`);
+  const lockPackages = [...locksSrc.matchAll(/packages\["node_modules\/([^"]+)"\]/g)].map((m) => m[1]);
+  const budgetPackages = [...budgetSrc.matchAll(/packages\["node_modules\/([^"]+)"\]/g)].map((m) => m[1]);
+
+  const expected = [...new Set([...patchedRows, ...lockPackages, ...budgetPackages])].sort();
+  assertEquals(
+    [...Object.keys(DECLARED_PIN_READERS)].sort(),
+    expected,
+    "every entry a reader asserts is declared, and every declared entry is really asserted",
+  );
+  // Each declared suite must be a reader that ASKED about that package, not just any reader.
+  for (const [name, readers] of Object.entries(DECLARED_PIN_READERS)) {
+    for (const reader of readers) {
+      const src = reader === "tests/bundle-budget.test.ts" ? budgetSrc : locksSrc;
+      assert(
+        src.includes(`node_modules/${name}`) || src.includes(`name: "${name}"`),
+        `${reader} must really assert ${name}`,
+      );
+    }
+  }
 });
 
 Deno.test("lezl0: a REAL landing stamp is passive — the exact counter set bump-version.mjs writes", () => {
@@ -187,7 +237,7 @@ Deno.test("lezl0: a REAL landing stamp is passive — the exact counter set bump
   }, { coreSuites: CORE });
   assertEquals(verdict.kind, "subset", `a real landing stamp must not escalate: ${verdict.reason}`);
   assertEquals(verdict.passive, true);
-  assertEquals(verdict.suites, CORE, "the always-on set certifies the stamp");
+  assertEquals(verdict.suites, [...CORE, RELEASE_IDENTITY_GUARD].sort(), "always-on + the release-identity reader");
 
   // The manifest counter is only passive as a COUNTER: anything else in it still refuses.
   const widened = classifyLockfileDelta({
@@ -206,10 +256,14 @@ Deno.test("lezl0: an npm package bump selects its importer closure + the declare
   assertEquals(verdict.kind, "subset");
   assertEquals(verdict.packages, ["zod"], "the changed package is named");
   assertEquals(verdict.importers.zod, ["extension/lib/agent.js"]);
-  for (const suite of [...CORE, DEPENDENCY_LOCK_GUARD, "tests/closure.test.ts"]) {
+  for (const suite of [...CORE, ...DEPENDENCY_LOCK_GUARDS, "tests/closure.test.ts"]) {
     assert(verdict.suites.includes(suite), `the verdict must select ${suite}: ${verdict.suites.join(", ")}`);
   }
-  assertEquals(verdict.suites.length, CORE.length + 2, "guard + closure, nothing invented");
+  assertEquals(
+    verdict.suites.length,
+    CORE.length + DEPENDENCY_LOCK_GUARDS.length + 1,
+    "every declared reader + the closure, nothing invented",
+  );
 });
 
 Deno.test("lezl0: the ledger names package -> importers -> suites", () => {
@@ -247,17 +301,56 @@ Deno.test("lezl0: a dependency bump that rides with the landing stamp is still a
 });
 
 // ── 3. deno.lock ─────────────────────────────────────────────────────────────────────────────
-Deno.test("lezl0: a deno.lock integrity-only change selects the guard + core and no closure", () => {
+Deno.test("lezl0: an integrity-only change NAMES the entry and selects what inspects it (finding 3)", () => {
+  // Review round 1, finding 3: the first version SKIPPED a same-key/different-hash entry and then
+  // selected only the guard — so a package whose bytes moved had no suite looking at it. The entry is
+  // now named, and its importers (or dependents, or a declared reader) decide the selection.
   const verdict = classifyLockfileDelta(
     { denoLock: { base: denoLock(), tip: denoLock({ integrity: "sha512-bb" }) } },
-    { coreSuites: CORE, closureFor: () => ({ importers: {}, suites: ["tests/never.test.ts"], unattributed: [] }) },
+    { coreSuites: CORE, closureFor: closureStub({ zod: ["extension/lib/agent.js"] }) },
   );
   assertEquals(verdict.kind, "subset");
   assertEquals(verdict.integrityOnly, true, "the resolved set did not move");
-  assertEquals(verdict.packages, [], "a hash-only change names no package");
-  assertEquals(verdict.suites, [...CORE, DEPENDENCY_LOCK_GUARD].sort());
-  assert(!verdict.suites.includes("tests/never.test.ts"), "no import graph moved, so no closure is invented");
+  assertEquals(verdict.packages, ["zod"], "the pinned entry is named");
+  assertEquals(verdict.importers.zod, ["extension/lib/agent.js"]);
+  assert(verdict.suites.includes("tests/closure.test.ts"), "the importers' suites re-read the new bytes");
+  for (const guard of DEPENDENCY_LOCK_GUARDS) assert(verdict.suites.includes(guard), `${guard} is selected`);
   assertStringIncludes(verdict.notes.join("\n"), "integrity-only");
+});
+
+Deno.test("lezl0: an integrity-only change NOTHING inspects is FULL — a hash move is not self-certifying", () => {
+  // The reviewer's exact counter-example: same version, different hash, and nothing in the subset reads
+  // it. The old rule called this green on the strength of a guard that never looks at that entry.
+  const verdict = classifyLockfileDelta(
+    { denoLock: { base: denoLock(), tip: denoLock({ integrity: "sha512-bb" }) } },
+    { coreSuites: CORE, closureFor: closureStub({}) },
+  );
+  assertEquals(verdict.kind, "full", "no importer, no dependent, no declared reader -> refuse");
+  assertStringIncludes(verdict.reason, "no suite in a subset would inspect");
+  assertStringIncludes(verdict.reason, "zod");
+});
+
+Deno.test("lezl0: a JSR integrity-only change is covered by its importers, or refused (follow-up pin)", () => {
+  // The follow-up the review asked for: the JSR integrity-only path was untested, and the guard does not
+  // read JSR entries AT ALL, so the only honest cover is a suite that executes the package.
+  const base = denoLock({ jsr: { "@std/assert@1.0.0": { integrity: "aaa" } } });
+  const tip = denoLock({ jsr: { "@std/assert@1.0.0": { integrity: "bbb" } } });
+
+  const covered = classifyLockfileDelta(
+    { denoLock: { base, tip } },
+    { coreSuites: CORE, closureFor: closureStub({ "@std/assert": ["tests/assert-user.test.ts"] }) },
+  );
+  assertEquals(covered.kind, "subset", "a JSR package the suite imports is certified by its importers");
+  assertEquals(covered.packages, ["@std/assert"]);
+  assertEquals(covered.integrityOnly, true);
+  assert(covered.suites.includes("tests/closure.test.ts"), "the importers' closure re-reads the bytes");
+
+  const uncovered = classifyLockfileDelta(
+    { denoLock: { base, tip } },
+    { coreSuites: CORE, closureFor: closureStub({}) },
+  );
+  assertEquals(uncovered.kind, "full", "no guard reads JSR entries, so an unattributed jsr hash move refuses");
+  assertStringIncludes(uncovered.reason, "@std/assert");
 });
 
 Deno.test("lezl0: a deno.lock specifier change resolves the changed name to its importer closure", () => {
@@ -276,21 +369,72 @@ Deno.test("lezl0: a deno.lock specifier change resolves the changed name to its 
   assertEquals(verdict.integrityOnly, false);
   assert(seen.length === 1 && seen[0].includes("zod"), `the closure must be asked about zod: ${JSON.stringify(seen)}`);
   assert(verdict.suites.includes("tests/closure.test.ts"), "the importer closure is selected");
-  assert(verdict.suites.includes(DEPENDENCY_LOCK_GUARD));
+  for (const guard of DEPENDENCY_LOCK_GUARDS) assert(verdict.suites.includes(guard));
 });
 
-Deno.test("lezl0: a changed dependency entry with NO repo importer stays a subset WITH the guard (stated fail-open)", () => {
-  // STATED AND PINNED, per the ADR: most declared dependencies legitimately have no importer (types,
-  // CLIs, peer-transitive pins), and the guard is the declared reader of those declarations. Review is
-  // invited to attack this: flip it and every devDependency bump goes back to a 760-file sweep.
+Deno.test("lezl0: a package.json DECLARATION change selects the declared name's importer closure (follow-up pin)", () => {
+  // The review's other missing pin: a declaration-only delta (no lock movement) must still name the
+  // package and select what imports it — the closure comes from the declaration, not from a lock entry.
+  const pkg = { name: "chrome-agent-platform", version: VERSION, dependencies: { zod: "^3.24.0" } };
+  const declared = { ...pkg, dependencies: { zod: "^3.25.0" } };
   const verdict = classifyLockfileDelta(
-    { denoLock: { base: denoLock(), tip: denoLock({ npmKey: "@types/node@24.13.3" }) } },
+    { packageJson: { base: JSON.stringify(pkg), tip: JSON.stringify(declared) } },
+    { coreSuites: CORE, closureFor: closureStub({ zod: ["extension/lib/agent.js"] }) },
+  );
+  assertEquals(verdict.kind, "subset");
+  assertEquals(verdict.packages, ["zod"]);
+  assert(verdict.suites.includes("tests/closure.test.ts"), "the declaration's package resolves to its importers");
+
+  // And the same declaration with no importer anywhere is refused, not assumed covered.
+  const refused = classifyLockfileDelta(
+    { packageJson: { base: JSON.stringify(pkg), tip: JSON.stringify(declared) } },
     { coreSuites: CORE, closureFor: closureStub({}) },
   );
-  assertEquals(verdict.kind, "subset", "an unattributable DECLARED name is still certified by its reader");
-  assertEquals(verdict.suites, [...CORE, DEPENDENCY_LOCK_GUARD].sort());
-  assertStringIncludes(verdict.notes.join("\n"), "no repo importer");
-  assertStringIncludes(verdict.notes.join("\n"), DEPENDENCY_LOCK_GUARD);
+  assertEquals(refused.kind, "full");
+  assertStringIncludes(refused.reason, "zod");
+});
+
+Deno.test("lezl0: an unattributed entry is certified only when a DECLARED reader inspects it (finding 2)", () => {
+  // Review round 1, finding 2: the old blanket "no importer -> the guard certifies it" was not earned —
+  // the guard asserts its OWN tables. So an unattributed entry now needs a declared reader that names it.
+  // undici IS in the readers' tables (the behrd patch table, with a fix floor), @types/node is NOT.
+  const undici = classifyLockfileDelta(
+    { denoLock: { base: denoLock(), tip: denoLock({ npm: { "undici@7.29.1": { integrity: "sha512-u" } } }) } },
+    { coreSuites: CORE, closureFor: closureStub({}) },
+  );
+  assertEquals(undici.kind, "subset", "a table entry has a suite that asserts it");
+  assertStringIncludes(undici.notes.join("\n"), "inspected by tests/security-dependency-locks.test.ts");
+
+  const typesOnly = classifyLockfileDelta(
+    { denoLock: { base: denoLock(), tip: denoLock({ npm: { "@types/node@24.13.3": { integrity: "sha512-t" } } }) } },
+    { coreSuites: CORE, closureFor: closureStub({}) },
+  );
+  assertEquals(typesOnly.kind, "full", "an entry no suite inspects is refused, not assumed covered");
+  assertStringIncludes(typesOnly.reason, "@types/node");
+});
+
+Deno.test("lezl0: a transitive pin is attributed to the suite that executes its DEPENDENT", () => {
+  // (b) of the inspection rule: the lock's own dependency edges are the evidence. `zod` here has no
+  // importer, but `agent-tools` depends on it and IS imported — so the change is covered by that code.
+  const lock = npmLock();
+  const withDependent = JSON.parse(lock);
+  withDependent.packages["node_modules/agent-tools"] = {
+    version: "1.0.0",
+    resolved: "https://registry.npmjs.org/agent-tools/-/agent-tools-1.0.0.tgz",
+    integrity: "sha512-agent",
+    dependencies: { zod: "^3.24.0" },
+  };
+  const tip = JSON.parse(JSON.stringify(withDependent));
+  tip.packages["node_modules/zod"] = { ...tip.packages["node_modules/zod"], version: "3.25.0", integrity: "sha512-3.25.0" };
+
+  const verdict = classifyLockfileDelta(
+    { packageLock: { base: JSON.stringify(withDependent), tip: JSON.stringify(tip) } },
+    { coreSuites: CORE, closureFor: closureStub({ "agent-tools": ["extension/lib/agent-loop.js"] }) },
+  );
+  assertEquals(verdict.kind, "subset", "the dependent's importers cover the transitive pin");
+  assertEquals(verdict.viaDependent.zod, "agent-tools");
+  assertStringIncludes(verdict.notes.join("\n"), "reached through its dependent agent-tools");
+  assert(verdict.suites.includes("tests/closure.test.ts"), "the dependent's closure is selected");
 });
 
 Deno.test("lezl0: a remote URL or jsr entry with no importer is FULL — no guard reads those bytes", () => {
@@ -303,7 +447,7 @@ Deno.test("lezl0: a remote URL or jsr entry with no importer is FULL — no guar
       { coreSuites: CORE, closureFor: closureStub({}) },
     );
     assertEquals(verdict.kind, "full", `${label}: an unattributable edge section must refuse`);
-    assertStringIncludes(verdict.reason, "no repo importer");
+    assertStringIncludes(verdict.reason, "no suite in a subset would inspect");
     assert(verdict.unresolved.length > 0, "the refusal names what could not be resolved");
   }
 });
@@ -366,11 +510,15 @@ Deno.test("lezl0 MUTANT: dropping a closure edge or the declared-reader guard is
     dependencyGuards: [],
     closureFor: closureStub({ zod: ["extension/lib/agent.js"] }),
   });
-  assert(!noGuard.suites.includes(DEPENDENCY_LOCK_GUARD), "dropping the guard loses it — the pins catch it");
+  for (const guard of DEPENDENCY_LOCK_GUARDS) {
+    assert(!noGuard.suites.includes(guard), `dropping the readers loses ${guard} — the pins catch it`);
+  }
 
   // MUTANT 3: the guard is not smuggled in through core either, so the pins are pinning the CLASSIFIER
   // and not an accident of the always-on set.
-  assert(!CORE.includes(DEPENDENCY_LOCK_GUARD), "the guard is not always-on: the classifier must select it");
+  for (const guard of DEPENDENCY_LOCK_GUARDS) {
+    assert(!CORE.includes(guard), `${guard} is not always-on: the classifier must select it`);
+  }
 });
 
 Deno.test("lezl0 MUTANT: a real dependency change can never be read as a version-counter stamp", () => {
@@ -434,7 +582,11 @@ Deno.test("lezl0: planLockfileDelta turns bytes into the same mapped/unmappable 
   assertEquals(passive!.unmappable, [], "an unchanged lock certifies to a subset");
   assertEquals(passive!.mapped.length, 1, "the lockfile is mapped, not unmappable");
   assertEquals(passive!.mapped[0].file, "package-lock.json");
-  assertEquals(passive!.mapped[0].tests, CORE, "a passive stamp maps to the always-on set");
+  assertEquals(
+    passive!.mapped[0].tests,
+    [...CORE, RELEASE_IDENTITY_GUARD].sort(),
+    "a passive stamp maps to the always-on set plus its release-identity reader",
+  );
 
   const subset = planLockfileDelta(["package-lock.json"], {
     mergeBase: "cafebabe",
@@ -444,7 +596,7 @@ Deno.test("lezl0: planLockfileDelta turns bytes into the same mapped/unmappable 
     coreSuites: CORE,
     closureFor: closureStub({ zod: ["extension/lib/agent.js"] }),
   });
-  assert(subset!.mapped[0].tests.includes(DEPENDENCY_LOCK_GUARD), "the guard is in the mapped row");
+  for (const guard of DEPENDENCY_LOCK_GUARDS) assert(subset!.mapped[0].tests.includes(guard), `${guard} is in the mapped row`);
   assert(subset!.ledger.some((line) => line.startsWith(LOCKFILE_DELTA_LEDGER_PREFIX)), "the ledger trail is emitted");
 
   const refused = planLockfileDelta(["deno.lock"], {
@@ -529,7 +681,10 @@ Deno.test("lezl0: planSelection EXECUTES the lockfile refusal path (subset vs FU
   assertEquals(certified.kind, "subset", "a version stamp certifies to a subset");
   assertEquals(certified.unmappable, []);
   assertEquals(certified.mapped.map((m: { file: string }) => m.file), ["package-lock.json"]);
-  assert(certified.files!.includes(DEPENDENCY_LOCK_GUARD) === false, "a stamp owes no dependency reader");
+  for (const guard of DEPENDENCY_LOCK_GUARDS) {
+    assert(certified.files!.includes(guard) === false, `a stamp owes no dependency reader: ${guard}`);
+  }
+  assert(certified.files!.includes(RELEASE_IDENTITY_GUARD), "a stamp is certified by its release-identity reader");
   assert(certified.files!.length > 0, "the always-on set still runs");
 });
 
@@ -575,7 +730,7 @@ Deno.test("lezl0: a real package bump resolves real repo importers through the b
   });
   assertEquals(plan!.verdict.packages, ["zod"]);
   assert(plan!.verdict.importers.zod.length > 0, "the real closure is resolved");
-  assert(plan!.mapped[0].tests.includes(DEPENDENCY_LOCK_GUARD), "the declared reader is selected");
+  for (const guard of DEPENDENCY_LOCK_GUARDS) assert(plan!.mapped[0].tests.includes(guard), `${guard} is selected`);
   assert(
     plan!.mapped[0].tests.includes("tests/agent-abort.test.ts"),
     `the reverse-import closure reaches the importer's test: ${plan!.mapped[0].tests.slice(0, 6).join(", ")}`,
