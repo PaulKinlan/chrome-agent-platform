@@ -153,6 +153,49 @@ Deno.test("lezl0: a version-counter-only trio is PASSIVE bookkeeping — a subse
   assertStringIncludes(verdict.notes.join("\n"), "version-counter-only");
 });
 
+Deno.test("lezl0: a REAL landing stamp is passive — the exact counter set bump-version.mjs writes", () => {
+  // This pin replicates scripts/bump-version.mjs's stamp against the REAL files on disk, because a
+  // synthetic trio is exactly how the first version of this module missed a field: the merger's stamp
+  // also rewrites extension/manifest.json's `version_name`, so a real landing classified as
+  // "field 'version_name' changed" and escalated the landing itself back to the FULL suite. The
+  // source assertions below fail loudly if the stamp grows a field the classifier has not been taught.
+  const src = readFileSync(join(ROOT, "scripts/bump-version.mjs"), "utf8");
+  for (const assignment of [
+    "pkg.version = next",
+    "lock.version = next",
+    'lock.packages[""].version = next',
+    "manifest.version = next",
+    "manifest.version_name = next",
+  ]) {
+    assertStringIncludes(src, assignment);
+  }
+
+  const read = (rel: string) => readFileSync(join(ROOT, rel), "utf8");
+  const pkg = JSON.parse(read("package.json"));
+  const lock = JSON.parse(read("package-lock.json"));
+  const manifest = JSON.parse(read("extension/manifest.json"));
+  const next = "99.0.0";
+
+  const pkgTip = { ...pkg, version: next };
+  const lockTip = { ...lock, version: next, packages: { ...lock.packages, "": { ...lock.packages[""], version: next } } };
+  const manifestTip = { ...manifest, version: next, version_name: next };
+
+  const verdict = classifyLockfileDelta({
+    packageJson: { base: JSON.stringify(pkg), tip: JSON.stringify(pkgTip) },
+    packageLock: { base: JSON.stringify(lock), tip: JSON.stringify(lockTip) },
+    manifest: { base: JSON.stringify(manifest), tip: JSON.stringify(manifestTip) },
+  }, { coreSuites: CORE });
+  assertEquals(verdict.kind, "subset", `a real landing stamp must not escalate: ${verdict.reason}`);
+  assertEquals(verdict.passive, true);
+  assertEquals(verdict.suites, CORE, "the always-on set certifies the stamp");
+
+  // The manifest counter is only passive as a COUNTER: anything else in it still refuses.
+  const widened = classifyLockfileDelta({
+    manifest: { base: JSON.stringify(manifest), tip: JSON.stringify({ ...manifestTip, version_name: next, permissions: [...(manifest.permissions ?? []), "tabs"] }) },
+  }, { coreSuites: CORE });
+  assertEquals(widened.kind, "full", "a permission change inside the same file still fails closed");
+});
+
 // ── 2. an npm package set change ─────────────────────────────────────────────────────────────
 Deno.test("lezl0: an npm package bump selects its importer closure + the declared-reader guard + core", () => {
   const closure = closureStub({ zod: ["extension/lib/agent.js"] });

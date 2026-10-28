@@ -21,7 +21,8 @@
 //
 //   1. THE VERSION COUNTER ONLY — the landing stamp (scripts/bump-version.mjs rewrites package.json
 //      version, package-lock.json version + packages[""].version, and extension/manifest.json
-//      version on EVERY landing). This is not a dependency change and it is not even a source change
+//      version + version_name on EVERY landing; the set is pinned by
+//      "lezl0: a REAL landing stamp is passive" in tests/lockfile-delta.test.ts). This is not a dependency change and it is not even a source change
 //      to any module the tree executes: it is bookkeeping, and chrome-agent-platform-nco2 conflated
 //      it with a dependency bump when it made the whole class fail closed. Verdict: PASSIVE
 //      BOOKKEEPING, certified by the always-on set alone (which includes the manifest and changelog
@@ -255,9 +256,16 @@ export function isVersionCounterOnly(rel, side) {
   if (path === "extension/manifest.json") {
     const before = { ...(asObject(side.base) ?? {}) };
     const after = { ...(asObject(side.tip) ?? {}) };
-    if (before.version === after.version) return false;
+    // `version_name` is the manifest's DISPLAY copy of the same counter: scripts/bump-version.mjs
+    // writes `manifest.version = next` and `manifest.version_name = next` on every landing (measured
+    // on a real --landing stamp, 2026-10-28: a stamp that only listed `version` classified as
+    // "field 'version_name' changed" and escalated the landing itself back to the FULL suite).
+    const moved = before.version !== after.version || before.version_name !== after.version_name;
+    if (!moved) return false;
     delete before.version;
     delete after.version;
+    delete before.version_name;
+    delete after.version_name;
     return sameJson(before, after);
   }
   return false;

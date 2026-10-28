@@ -1375,9 +1375,9 @@ async function main() {
     return;
   }
   for (const notice of plan.notices) console.error(notice);
-  // The lockfile closure, named: package -> importers -> suites, so a reviewer reads the decision
-  // instead of reconstructing it from the diff (ADR gx0wg's evidence requirement).
-  for (const line of plan.lockfileDelta ?? []) console.error(line);
+  // The lockfile closure (package -> importers -> suites) is NOT printed here: the ledger emits it
+  // immediately before the manifest line, which is where a reader (and the fleet's tail-window log
+  // reader) actually looks. Printing it in both places put the same trail in the log twice.
 
   if (plan.kind === "full") {
     // The caller keeps this EXACT shape: tests/changed-file-mapping.test.ts (nco2/R1b) pins that
