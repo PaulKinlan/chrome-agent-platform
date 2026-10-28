@@ -145,7 +145,13 @@ export function isRouteWithinSettingsSession(session, route, explicitAllowedRout
     const norm = normalizeSettingsSessionRoutes(SETTINGS_SESSION_ROUTES);
     return isRouteAuthorizedForScopes(route, scopeList, norm);
   }
-  return scopeList.includes(route);
+  // FAIL CLOSED (chrome-agent-platform-jrl0l / T20): with no explicit routes, no
+  // session-bound allowlist, and an empty static allowlist, NO route is
+  // authorized. The session's self-declared scope list is never an
+  // authorization source on its own — THREAT_MODEL.md T20 documents the
+  // empty-allowlist posture as fail-closed, and a scope word only gains
+  // meaning when a non-empty allowlist maps it to routes.
+  return false;
 }
 
 function defaultCanonicalOrigin(url) {
