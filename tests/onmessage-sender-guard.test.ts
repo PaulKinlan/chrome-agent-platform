@@ -12,6 +12,11 @@
 //      id-only-checking listeners fail RED.
 //   3. Behavioral tests verify that execution hosts reject untrusted senders (tabs, content scripts, foreign IDs).
 //   4. docs/SW-DISPATCH-AUTHORITY-CENSUS.md documents all non-dispatcher listeners and their sender predicates.
+//   5. The inventory resolves simple aliases of chrome.runtime / its onMessage event object
+//      (const ev = chrome.runtime.onMessage; ev.addListener(...), destructuring, runtime-object
+//      aliases) and FAILS CLOSED on any runtime onMessage reference it cannot enumerate
+//      (event object passed away, aliased addListener method) instead of silently skipping it
+//      (chrome-agent-platform-2i86h). onConnect hosts are out of scope by design (T18).
 
 import { fileURLToPath } from "node:url";
 import * as fs from "node:fs";
@@ -45,16 +50,16 @@ function walkJsFiles(dir: string): string[] {
   return files;
 }
 
-function walkAst(node: any, visitor: (n: any) => void) {
+function walkAst(node: any, visitor: (n: any, parent?: any) => void, parent: any = null) {
   if (!node || typeof node !== "object") return;
-  visitor(node);
+  visitor(node, parent);
   for (const key of Object.keys(node)) {
     if (key === "parent") continue;
     const child = node[key];
     if (Array.isArray(child)) {
-      for (const item of child) walkAst(item, visitor);
+      for (const item of child) walkAst(item, visitor, node);
     } else if (child && typeof child === "object" && typeof child.type === "string") {
-      walkAst(child, visitor);
+      walkAst(child, visitor, node);
     }
   }
 }
@@ -165,6 +170,11 @@ function analyzeOnMessageListeners(code: string, filePath: string): ListenerSite
     throw new Error(`Failed to parse ${filePath}: ${err.message}`);
   }
 
+  // Parent pointers for use-context classification (walkAst never recurses into "parent").
+  walkAst(ast, (node, parent) => {
+    if (parent) node.parent = parent;
+  });
+
   const functions = new Map<string, any>();
   walkAst(ast, (node) => {
     if (node.type === "FunctionDeclaration" && node.id?.name) {
@@ -179,6 +189,114 @@ function analyzeOnMessageListeners(code: string, filePath: string): ListenerSite
     }
   });
 
+  // 2i86h: the inventory must not be escapeable by aliasing. Resolve simple
+  // aliases of chrome.runtime and of its onMessage event object, and FAIL
+  // CLOSED on any runtime onMessage reference the scan cannot enumerate.
+  const runtimeAliases = new Set<string>();
+  const eventAliases = new Set<string>();
+
+  const propName = (memberExpr: any): string | undefined =>
+    memberExpr?.property?.name ?? (memberExpr?.computed ? memberExpr?.property?.value : undefined);
+
+  const isRuntimeRootExpr = (node: any): boolean => {
+    if (!node) return false;
+    if (node.type === "Identifier") return node.name === "runtime" || runtimeAliases.has(node.name);
+    if (node.type === "MemberExpression") return propName(node) === "runtime";
+    // Historical leniency: (a || b).onMessage.addListener chains.
+    if (node.type === "LogicalExpression") return true;
+    return false;
+  };
+
+  const isOnMessageEventExpr = (node: any): boolean => {
+    if (!node) return false;
+    if (node.type === "Identifier") return eventAliases.has(node.name);
+    if (node.type === "MemberExpression" && propName(node) === "onMessage") return isRuntimeRootExpr(node.object);
+    return false;
+  };
+
+  // Fixpoint alias collection: const rt = chrome.runtime; const ev = rt.onMessage;
+  // const ev2 = ev; const { onMessage } = chrome.runtime.
+  let changed = true;
+  while (changed) {
+    changed = false;
+    walkAst(ast, (node) => {
+      if (node.type !== "VariableDeclarator" || !node.init) return;
+      if (node.id?.type === "Identifier") {
+        if (!runtimeAliases.has(node.id.name) && isRuntimeRootExpr(node.init)) {
+          runtimeAliases.add(node.id.name);
+          changed = true;
+        }
+        if (!eventAliases.has(node.id.name) && isOnMessageEventExpr(node.init)) {
+          eventAliases.add(node.id.name);
+          changed = true;
+        }
+      }
+      if (node.id?.type === "ObjectPattern" && isRuntimeRootExpr(node.init)) {
+        for (const prop of node.id.properties ?? []) {
+          const key = prop.key?.name ?? prop.key?.value;
+          const local = prop.value?.name;
+          if (key === "onMessage" && typeof local === "string" && !eventAliases.has(local)) {
+            eventAliases.add(local);
+            changed = true;
+          }
+        }
+      }
+    });
+  }
+
+  // Fail-closed classification: EVERY reference to the runtime onMessage event
+  // object must be enumerable — a direct addListener/removeListener/hasListener
+  // call, a tracked alias declaration, or a benign existence guard in a test
+  // position. Anything else (passed to a function, stored on an object, an
+  // aliased addListener METHOD) is reported instead of silently skipped.
+  const LISTENER_METHODS = new Set(["addListener", "removeListener", "hasListener", "hasListeners"]);
+  const unenumerable: string[] = [];
+
+  const classifyEventUse = (node: any): "ok" | "unenumerable" => {
+    let child = node;
+    let p = node.parent;
+    while (p?.type === "ChainExpression") { child = p; p = p.parent; }
+    if (!p) return "unenumerable";
+    // const ev = <event> (alias declaration), or the declaration name itself.
+    if (p.type === "VariableDeclarator" && (p.init === child || p.id === child)) return "ok";
+    // <event>.addListener(...) — the method must be CALLED immediately; an
+    // aliased method (const add = ev.addListener) escapes enumeration.
+    if (p.type === "MemberExpression" && p.object === child) {
+      if (LISTENER_METHODS.has(propName(p))) {
+        let mChild = p;
+        let mp = p.parent;
+        while (mp?.type === "ChainExpression") { mChild = mp; mp = mp.parent; }
+        if (mp?.type === "CallExpression" && mp.callee === mChild) return "ok";
+      }
+      return "unenumerable";
+    }
+    // Benign existence guard: if (!runtime?.onMessage) / if (runtime?.onMessage).
+    let tChild = child;
+    let tp = p;
+    while (tp && (tp.type === "UnaryExpression" || tp.type === "LogicalExpression" || tp.type === "ChainExpression")) {
+      tChild = tp;
+      tp = tp.parent;
+    }
+    if (
+      tp &&
+      (tp.type === "IfStatement" || tp.type === "WhileStatement" || tp.type === "DoWhileStatement" || tp.type === "ConditionalExpression") &&
+      tp.test === tChild
+    ) {
+      return "ok";
+    }
+    return "unenumerable";
+  };
+
+  walkAst(ast, (node) => {
+    const isEventRef =
+      (node.type === "MemberExpression" && propName(node) === "onMessage" && isRuntimeRootExpr(node.object)) ||
+      (node.type === "Identifier" && eventAliases.has(node.name));
+    if (!isEventRef) return;
+    if (classifyEventUse(node) !== "ok") {
+      unenumerable.push(`${path.relative(ROOT, filePath)}:${node.loc?.start?.line ?? 0}`);
+    }
+  });
+
   const sites: ListenerSite[] = [];
 
   walkAst(ast, (node) => {
@@ -186,17 +304,9 @@ function analyzeOnMessageListeners(code: string, filePath: string): ListenerSite
       const callee = node.callee;
       if (
         callee.type === "MemberExpression" &&
-        callee.property?.name === "addListener" &&
-        callee.object?.type === "MemberExpression" &&
-        callee.object?.property?.name === "onMessage"
+        propName(callee) === "addListener" &&
+        isOnMessageEventExpr(callee.object)
       ) {
-        const objObj = callee.object.object;
-        const isRuntime =
-          (objObj?.type === "Identifier" && objObj.name === "runtime") ||
-          (objObj?.type === "MemberExpression" && objObj.property?.name === "runtime") ||
-          objObj?.type === "LogicalExpression";
-        if (!isRuntime) return;
-
         const arg = node.arguments[0];
         let fn: any = null;
         if (arg?.type === "ArrowFunctionExpression" || arg?.type === "FunctionExpression") {
@@ -227,6 +337,9 @@ function analyzeOnMessageListeners(code: string, filePath: string): ListenerSite
     }
   });
 
+  // Attached out-of-band so existing array usages keep working: references to
+  // the runtime onMessage event object that the inventory cannot enumerate.
+  (sites as any).unenumerable = unenumerable;
   return sites;
 }
 
@@ -238,13 +351,23 @@ Deno.test("guard: all extension/ runtime.onMessage listeners accept and check se
   assert(jsFiles.length > 50, `must scan extension JS files, found ${jsFiles.length}`);
 
   const allSites: ListenerSite[] = [];
+  const allUnenumerable: string[] = [];
   for (const file of jsFiles) {
     const code = fs.readFileSync(file, "utf8");
     const sites = analyzeOnMessageListeners(code, file);
     allSites.push(...sites);
+    allUnenumerable.push(...((sites as any).unenumerable ?? []));
   }
 
   assert(allSites.length >= 17, `expected at least 17 onMessage listeners, found ${allSites.length}`);
+
+  // 2i86h: fail closed — a runtime onMessage reference the scan cannot enumerate
+  // (aliased-away event object or method) is a violation, not a skipped site.
+  assertEquals(
+    allUnenumerable,
+    [],
+    `Found runtime onMessage references the inventory cannot enumerate (fail closed):\n${allUnenumerable.join("\n")}`,
+  );
 
   const violations: string[] = [];
   for (const site of allSites) {
@@ -430,6 +553,105 @@ Deno.test("behavioral: isTrustedServiceWorkerSender enforces SW bundle path and 
 // 69bvp / INV-15: the PRODUCTION predicate must reject same-extension callers that
 // share our sender.id — a content script (tab set, page URL) and an extension
 // document (documentId set, extension-page URL) — and accept only the SW bundle.
+Deno.test("inventory falsification: aliased onMessage registrations are caught, unenumerable references fail closed", () => {
+  // 2i86h: the scan must not be escapeable by aliasing the event object.
+  // An UNCHECKED listener registered through an alias is a violation the old
+  // direct-syntax-only scan could not see (0 sites found -> escape).
+  const probeAliasedUnchecked = `
+    const event = chrome.runtime.onMessage;
+    event.addListener((message, sender, sendResponse) => {
+      sendResponse({ ok: true });
+    });
+  `;
+  const sitesA = analyzeOnMessageListeners(probeAliasedUnchecked, "extension/test-alias1.js");
+  assertEquals(sitesA.length, 1, "aliased registration must be enumerated as a site");
+  assertEquals(sitesA[0].checksSender, false, "aliased unchecked listener must be flagged un-gated");
+
+  // Aliased registration WITH the vetted predicate is enumerated and counts as gated.
+  const probeAliasedChecked = `
+    const event = chrome.runtime.onMessage;
+    event.addListener((message, sender, sendResponse) => {
+      if (!isTrustedServiceWorkerSender(sender)) return false;
+      sendResponse({ ok: true });
+      return true;
+    });
+  `;
+  const sitesB = analyzeOnMessageListeners(probeAliasedChecked, "extension/test-alias2.js");
+  assertEquals(sitesB.length, 1, "aliased checked registration must be enumerated");
+  assertEquals(sitesB[0].checksSender, true);
+
+  // Destructured alias of the event object.
+  const probeDestructured = `
+    const { onMessage } = chrome.runtime;
+    onMessage.addListener((message, sender, sendResponse) => {
+      if (!isTrustedServiceWorkerSender(sender)) return false;
+      sendResponse({ ok: true });
+      return true;
+    });
+  `;
+  const sitesC = analyzeOnMessageListeners(probeDestructured, "extension/test-alias3.js");
+  assertEquals(sitesC.length, 1, "destructured onMessage alias must be enumerated");
+  assertEquals(sitesC[0].checksSender, true);
+
+  // Runtime-object alias one level up.
+  const probeRuntimeAlias = `
+    const rt = chrome.runtime;
+    rt.onMessage.addListener((message, sender, sendResponse) => {
+      sendResponse({ ok: true });
+    });
+  `;
+  const sitesD = analyzeOnMessageListeners(probeRuntimeAlias, "extension/test-alias4.js");
+  assertEquals(sitesD.length, 1, "runtime-alias registration must be enumerated");
+  assertEquals(sitesD[0].checksSender, false);
+
+  // Fail closed when the event object ESCAPES enumeration: passing
+  // chrome.runtime.onMessage to a function means the scanner cannot see what
+  // registers on it — this must be reported, not silently skipped.
+  const probeEscape = `
+    export function registerLater(event) {
+      event.addListener((message, sender, sendResponse) => sendResponse({ ok: true }));
+    }
+    registerLater(chrome.runtime.onMessage);
+  `;
+  const sitesE = analyzeOnMessageListeners(probeEscape, "extension/test-alias5.js");
+  assert(Array.isArray(sitesE.unenumerable), "scanner must expose an unenumerable-references list");
+  assertEquals(sitesE.unenumerable.length, 1, "passing chrome.runtime.onMessage away must fail closed");
+
+  // Fail closed when the addListener METHOD itself is aliased.
+  const probeMethodAlias = `
+    const add = chrome.runtime.onMessage.addListener;
+    add((message, sender, sendResponse) => sendResponse({ ok: true }));
+  `;
+  const sitesF = analyzeOnMessageListeners(probeMethodAlias, "extension/test-alias6.js");
+  assert(Array.isArray(sitesF.unenumerable), "scanner must expose an unenumerable-references list");
+  assertEquals(sitesF.unenumerable.length, 1, "aliasing onMessage.addListener must fail closed");
+
+  // Non-runtime onMessage (ports, DOM shims) must NOT be enumerated or flagged.
+  const probePort = `
+    port.onMessage.addListener((message) => console.log(message));
+    this.onMessage = null;
+  `;
+  const sitesG = analyzeOnMessageListeners(probePort, "extension/test-alias7.js");
+  assertEquals(sitesG.length, 0, "port.onMessage is not the runtime broadcast bus");
+  assertEquals(sitesG.unenumerable.length, 0, "port.onMessage must not fail closed");
+
+  // Existence guards on the runtime event object are benign and must not fail closed.
+  const probeExistenceGuard = `
+    function register(runtime) {
+      if (!runtime?.onMessage) return;
+      runtime.onMessage.addListener((message, sender, sendResponse) => {
+        if (!isTrustedServiceWorkerSender(sender)) return false;
+        sendResponse({ ok: true });
+        return true;
+      });
+    }
+  `;
+  const sitesH = analyzeOnMessageListeners(probeExistenceGuard, "extension/test-alias8.js");
+  assertEquals(sitesH.length, 1);
+  assertEquals(sitesH[0].checksSender, true);
+  assertEquals(sitesH.unenumerable.length, 0, "if (!runtime?.onMessage) existence guards are benign");
+});
+
 Deno.test("behavioral: production predicate rejects same-extension id-sharing callers (INV-15)", () => {
   const runtime = {
     id: "test-extension-id",
