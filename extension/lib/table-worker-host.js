@@ -4,6 +4,7 @@
 
 import { TABLE_LIMITS } from "./table-core.js";
 import { runManagedStreamJob, STREAM_PLATFORM_LIMITS } from "./tool-stream-platform.js";
+import { isTrustedServiceWorkerSender } from "./pure.js";
 
 const activeJobs = new Map(); // runId -> Set<controller>
 const TABLE_WORKER_PATH = "lib/table-operation-worker.js";
@@ -133,17 +134,12 @@ export async function runTableWorkerJob(job, {
 
 export const TABLE_WORKER_RUN_TYPE = "cap:table-worker-run";
 export const TABLE_WORKER_CANCEL_TYPE = "cap:table-worker-cancel";
-export const TABLE_WORKER_SERVICE_WORKER_PATH = "dist/background/service-worker.js";
-
 /** Only the extension service worker may ask the offscreen document to run or
  * cancel a table worker. Same-extension pages share sender.id, so they are not
- * sufficient authority. */
-export function isTrustedTableWorkerSender(sender, runtime = chrome.runtime) {
-  if (sender?.id !== runtime.id || sender?.tab != null || sender?.documentId != null) return false;
-  const declared = runtime.getManifest?.()?.background?.service_worker;
-  if (typeof declared === "string" && declared.length > 0 && declared !== TABLE_WORKER_SERVICE_WORKER_PATH) return false;
-  return sender?.url === runtime.getURL(TABLE_WORKER_SERVICE_WORKER_PATH);
-}
+ * sufficient authority. This IS the vetted production predicate from pure.js
+ * (chrome-agent-platform-69bvp round-4: the previous local copy lacked the
+ * missing-runtime-id rejection and could drift; alias, don't duplicate). */
+export const isTrustedTableWorkerSender = isTrustedServiceWorkerSender;
 
 /** Register the offscreen table-worker host. MV3 service workers cannot
  * construct dedicated Workers, so only this owner-local document owns the
