@@ -75,6 +75,36 @@ interface ListenerSite {
   reason?: string;
 }
 
+// Function-boundary nodes: an uncalled nested function never runs on the
+// listener's own execution path, so checks inside it cannot gate the listener.
+const FUNCTION_NODE_TYPES = new Set(["FunctionDeclaration", "FunctionExpression", "ArrowFunctionExpression"]);
+
+// Like walkAst but does NOT descend into nested function bodies (the node
+// itself is visited; its children are not). Used by isAuthenticatingSender so
+// a check inside an uncalled inner function is not credited (69bvp round-2).
+function walkOwnPath(node: any, visitor: (n: any) => void) {
+  if (!node || typeof node !== "object") return;
+  visitor(node);
+  for (const key of Object.keys(node)) {
+    if (key === "parent") continue;
+    const child = node[key];
+    const visitChild = (item: any) => {
+      if (item && typeof item === "object" && typeof item.type === "string") {
+        if (FUNCTION_NODE_TYPES.has(item.type)) {
+          visitor(item); // visit the boundary node, do not descend
+        } else {
+          walkOwnPath(item, visitor);
+        }
+      }
+    };
+    if (Array.isArray(child)) {
+      for (const item of child) visitChild(item);
+    } else {
+      visitChild(child);
+    }
+  }
+}
+
 function isAuthenticatingSender(body: any, senderName: string): boolean {
   const KNOWN_PREDICATES = new Set([
     "isTrustedServiceWorkerSender",
@@ -96,19 +126,6 @@ function isAuthenticatingSender(body: any, senderName: string): boolean {
 
   const stableKey = (node: any): string =>
     JSON.stringify(node, (k, v) => (k === "parent" || k === "loc" || k === "start" || k === "end" ? undefined : v));
-
-  const referencesSender = (node: any): boolean => {
-    let found = false;
-    walkAst(node, (sub) => {
-      if (found) return;
-      if (sub.type !== "Identifier" || sub.name !== senderName) return;
-      const p = sub.parent;
-      if (p && p.type === "MemberExpression" && p.property === sub && !p.computed) return;
-      if (p && p.type === "Property" && p.key === sub && !p.computed) return;
-      found = true;
-    });
-    return found;
-  };
 
   const senderPropsOf = (node: any): string[] => {
     const props = new Set<string>();
@@ -143,6 +160,17 @@ function isAuthenticatingSender(body: any, senderName: string): boolean {
           }
         }
         case "BinaryExpression": {
+          // Identity comparisons on the SAME operand (x === x, x != x, ...) fold
+          // to a constant even when x references the sender: sender.tab !=
+          // sender.tab can never be true, so it must not become a freely
+          // flippable atom that fakes discriminating dependence (69bvp round-2).
+          if (stableKey(node.left) === stableKey(node.right)) {
+            switch (node.operator) {
+              case "===": case "==": case "<=": case ">=": return { ok: true, value: true };
+              case "!==": case "!=": case "<": case ">": return { ok: true, value: false };
+              default: return { ok: false };
+            }
+          }
           const l = tryConstEval(node.left);
           const r = tryConstEval(node.right);
           if (!l.ok || !r.ok) return { ok: false };
@@ -223,7 +251,8 @@ function isAuthenticatingSender(body: any, senderName: string): boolean {
             collect(node.alternate);
             return;
         }
-        if (referencesSender(node) || !tryConstEval(node).ok) register(node);
+        // Constant-foldable (incl. identity comparisons) => not an atom.
+        if (!tryConstEval(node).ok) register(node);
       };
       collect(test);
 
@@ -246,7 +275,6 @@ function isAuthenticatingSender(body: any, senderName: string): boolean {
           case "ConditionalExpression":
             return evalWith(node.test, values) ? evalWith(node.consequent, values) : evalWith(node.alternate, values);
         }
-        if (referencesSender(node)) return values[register(node)];
         const c = tryConstEval(node);
         if (c.ok) return c.value;
         return values[register(node)];
@@ -271,7 +299,9 @@ function isAuthenticatingSender(body: any, senderName: string): boolean {
   };
 
   let validated = false;
-  walkAst(body, (sub) => {
+  // Bound the proof to the listener's OWN execution path: checks inside nested
+  // (possibly uncalled) function bodies do not gate the listener (69bvp round-2).
+  walkOwnPath(body, (sub) => {
     // 1. Passed to a recognized sender authentication helper/predicate
     if (sub.type === "CallExpression") {
       const callee = sub.callee;
@@ -699,6 +729,59 @@ Deno.test("guard falsification: detects un-gated, ignored, or missing sender lis
   const sites16 = analyzeOnMessageListeners(probeConstantTest, "extension/test-probe16.js");
   assertEquals(sites16.length, 1);
   assertEquals(sites16[0].checksSender, false, "a constant-true test rejects everyone and discriminates nothing");
+
+  // 69bvp round-2 review (gpt-6-sol): code that never runs cannot gate anything.
+  // An uncalled NESTED function's IfStatement is not on the listener's execution
+  // path, so its discriminating check must not be credited.
+  const probeUncalledNestedFunction = `
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      if (sender.id !== chrome.runtime.id) return false;
+      function unusedHelper() { if (sender.tab != null) return false; }
+      sendResponse({ ok: true });
+      return true;
+    });
+  `;
+  const sites17 = analyzeOnMessageListeners(probeUncalledNestedFunction, "extension/test-probe17.js");
+  assertEquals(sites17.length, 1);
+  assertEquals(sites17[0].checksSender, false, "a discriminating check inside an uncalled nested function is not on the execution path");
+
+  // Same boundary for the recognized-predicate branch: a predicate call inside
+  // an uncalled nested function does not gate the listener.
+  const probeNestedPredicateCall = `
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      function unusedHelper() { return isTrustedServiceWorkerSender(sender); }
+      sendResponse({ ok: true });
+    });
+  `;
+  const sites18 = analyzeOnMessageListeners(probeNestedPredicateCall, "extension/test-probe18.js");
+  assertEquals(sites18.length, 1);
+  assertEquals(sites18[0].checksSender, false, "a predicate call inside an uncalled nested function does not gate the listener");
+
+  // Self-comparison is an identity contradiction: sender.tab != sender.tab can
+  // never be true, so it cannot reject non-SW callers and must not be credited
+  // as dependence on tab.
+  const probeSelfComparison = `
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      if (sender.id !== chrome.runtime.id || sender.tab != sender.tab) return false;
+      sendResponse({ ok: true });
+      return true;
+    });
+  `;
+  const sites19 = analyzeOnMessageListeners(probeSelfComparison, "extension/test-probe19.js");
+  assertEquals(sites19.length, 1);
+  assertEquals(sites19[0].checksSender, false, "sender.tab != sender.tab is an identity contradiction, not a discriminating check");
+
+  // Positive pin: the discriminating check at the listener's OWN top level still counts.
+  const probeTopLevelTabCheck = `
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      if (sender.id !== chrome.runtime.id || sender.tab != null) return false;
+      sendResponse({ ok: true });
+      return true;
+    });
+  `;
+  const sites20 = analyzeOnMessageListeners(probeTopLevelTabCheck, "extension/test-probe20.js");
+  assertEquals(sites20.length, 1);
+  assertEquals(sites20[0].checksSender, true, "id-mismatch OR tab-present at the listener top level must count");
 });
 
 Deno.test("behavioral: isTrustedServiceWorkerSender enforces SW bundle path and rejects documents/tabs", () => {
