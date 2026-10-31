@@ -475,9 +475,11 @@ consequences are carried by the matching register entry where one exists.
   `runtime.onMessage.addListener` registrations. It resolves simple aliases of
   `chrome.runtime` / its `onMessage` event object and fails closed on any
   reference it cannot enumerate (`chrome-agent-platform-2i86h`), and it credits
-  a rejecting sender conditional only when the test PROVABLY depends on an
-  SW-discriminating property (`tab`/`documentId`/`url`) — an extension-ID-only
-  comparison is rejected per INV-15 (`chrome-agent-platform-69bvp`). `onConnect`
+  a listener's sender check ONLY when it calls the vetted production predicate
+  (`isTrustedServiceWorkerSender` or its exported aliases, resolved through the
+  file's import bindings) or carries an explicit allowlist entry with a
+  justification — inline sender checks, including ID-only comparisons, never
+  count per INV-15 (`chrome-agent-platform-69bvp`). `onConnect`
   hosts are outside its scope by design — the ACP model host validates its own
   port sender separately (`extension/lib/acp-model-host.js:5-13`), as noted in
   the controls above. Census §6.2 remains onMessage-only and does not enumerate
