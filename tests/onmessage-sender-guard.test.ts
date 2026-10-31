@@ -4,7 +4,12 @@
 // Invariants guarded:
 //   1. Every `chrome.runtime.onMessage.addListener` call in extension/ must accept a `sender` parameter
 //      and reference/validate it in its body, or be explicitly allowlisted with a documented reason.
-//   2. Falsification tests verify that un-checked, ignored (_sender), or single-param listeners fail RED.
+//      A rejecting conditional counts as validation ONLY when its test references an
+//      SW-discriminating property (tab / documentId / url): per THREAT_MODEL.md INV-15,
+//      an extension-ID-only (or origin/frameId-only) check establishes nothing because
+//      same-extension documents and content scripts share sender.id (chrome-agent-platform-69bvp).
+//   2. Falsification tests verify that un-checked, ignored (_sender), single-param, and
+//      id-only-checking listeners fail RED.
 //   3. Behavioral tests verify that execution hosts reject untrusted senders (tabs, content scripts, foreign IDs).
 //   4. docs/SW-DISPATCH-AUTHORITY-CENSUS.md documents all non-dispatcher listeners and their sender predicates.
 
@@ -79,6 +84,13 @@ function isAuthenticatingSender(body: any, senderName: string): boolean {
     "origin",
     "frameId",
   ]);
+  // INV-15 (THREAT_MODEL.md): an extension ID alone does not establish the SW
+  // principal — same-extension documents and content scripts share sender.id.
+  // A rejecting conditional only counts as authenticating the service worker
+  // when its test ALSO references a property that discriminates the SW from
+  // same-extension callers: tab/documentId absence or the SW bundle URL.
+  // id/origin/frameId-only checks establish nothing (chrome-agent-platform-69bvp).
+  const SW_DISCRIMINATING_PROPERTIES = new Set(["tab", "documentId", "url"]);
   let validated = false;
   walkAst(body, (sub) => {
     // 1. Passed to a recognized sender authentication helper/predicate
@@ -95,6 +107,7 @@ function isAuthenticatingSender(body: any, senderName: string): boolean {
     // and whose consequent returns or throws.
     if (sub.type === "IfStatement") {
       let testHasSenderCheck = false;
+      const referencedProps = new Set<string>();
       walkAst(sub.test, (tNode: any) => {
         if (tNode.type === "BinaryExpression") {
           const isComp = ["===", "!==", "==", "!="].includes(tNode.operator);
@@ -102,7 +115,10 @@ function isAuthenticatingSender(body: any, senderName: string): boolean {
             walkAst(tNode, (operand: any) => {
               if (operand.type === "MemberExpression" && operand.object?.name === senderName) {
                 const prop = operand.property?.name || operand.property?.value;
-                if (KNOWN_PROPERTIES.has(prop)) testHasSenderCheck = true;
+                if (KNOWN_PROPERTIES.has(prop)) {
+                  testHasSenderCheck = true;
+                  referencedProps.add(prop);
+                }
               }
             });
           }
@@ -113,20 +129,27 @@ function isAuthenticatingSender(body: any, senderName: string): boolean {
           }
           if (tNode.argument?.type === "MemberExpression" && tNode.argument.object?.name === senderName) {
             const prop = tNode.argument.property?.name || tNode.argument.property?.value;
-            if (KNOWN_PROPERTIES.has(prop)) testHasSenderCheck = true;
+            if (KNOWN_PROPERTIES.has(prop)) {
+              testHasSenderCheck = true;
+              referencedProps.add(prop);
+            }
           }
         }
       });
 
       if (testHasSenderCheck) {
-        let consequentRejects = false;
-        walkAst(sub.consequent, (cNode: any) => {
-          if (cNode.type === "ReturnStatement" || cNode.type === "ThrowStatement") {
-            consequentRejects = true;
+        // id/origin/frameId-only: establishes nothing per INV-15
+        const discriminatesSw = [...referencedProps].some((p) => SW_DISCRIMINATING_PROPERTIES.has(p));
+        if (discriminatesSw) {
+          let consequentRejects = false;
+          walkAst(sub.consequent, (cNode: any) => {
+            if (cNode.type === "ReturnStatement" || cNode.type === "ThrowStatement") {
+              consequentRejects = true;
+            }
+          });
+          if (consequentRejects) {
+            validated = true;
           }
-        });
-        if (consequentRejects) {
-          validated = true;
         }
       }
     }
@@ -316,6 +339,67 @@ Deno.test("guard falsification: detects un-gated, ignored, or missing sender lis
   const sites8 = analyzeOnMessageListeners(probeIneffectualAssignment, "extension/test-probe8.js");
   assertEquals(sites8.length, 1);
   assertEquals(sites8[0].checksSender, false, "const id = sender.id must not count as validation without rejecting branch");
+
+  // INV-15 (THREAT_MODEL.md): an extension ID alone does not establish the SW
+  // principal — same-extension documents and content scripts share sender.id.
+  // A rejecting conditional that compares ONLY sender.id must NOT count as
+  // authenticating (chrome-agent-platform-69bvp).
+  const probeIdOnlyRejectingCheck = `
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      if (sender.id !== chrome.runtime.id) return false;
+      sendResponse({ ok: true });
+      return true;
+    });
+  `;
+  const sites9 = analyzeOnMessageListeners(probeIdOnlyRejectingCheck, "extension/test-probe9.js");
+  assertEquals(sites9.length, 1);
+  assertEquals(sites9[0].checksSender, false, "id-only rejecting check must not count as SW authentication (INV-15)");
+
+  const probeNegatedIdOnlyCheck = `
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      if (!sender || sender.id !== chrome.runtime.id) return;
+      sendResponse({ ok: true });
+    });
+  `;
+  const sites10 = analyzeOnMessageListeners(probeNegatedIdOnlyCheck, "extension/test-probe10.js");
+  assertEquals(sites10.length, 1);
+  assertEquals(sites10[0].checksSender, false, "!sender || id-mismatch rejecting check is still id-only and must not count");
+
+  // origin/frameId do not discriminate same-extension non-SW callers either.
+  const probeOriginOnlyCheck = `
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      if (sender.origin !== chrome.runtime.getURL("/").slice(0, -1)) return false;
+      sendResponse({ ok: true });
+      return true;
+    });
+  `;
+  const sites11 = analyzeOnMessageListeners(probeOriginOnlyCheck, "extension/test-probe11.js");
+  assertEquals(sites11.length, 1);
+  assertEquals(sites11[0].checksSender, false, "origin-only rejecting check must not count as SW authentication");
+
+  // Positive pins: a rejecting conditional that ALSO excludes same-extension
+  // tabs/documents (tab/documentId) or pins the SW bundle URL DOES count.
+  const probeIdAndTabCheck = `
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      if (!sender || sender.id !== chrome.runtime.id || sender.tab != null) return false;
+      sendResponse({ ok: true });
+      return true;
+    });
+  `;
+  const sites12 = analyzeOnMessageListeners(probeIdAndTabCheck, "extension/test-probe12.js");
+  assertEquals(sites12.length, 1);
+  assertEquals(sites12[0].checksSender, true, "id + tab-absence rejecting check must count as SW authentication");
+
+  const probeSwBundleUrlCheck = `
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      if (sender.url !== chrome.runtime.getURL("dist/background/service-worker.js")) return false;
+      sendResponse({ ok: true });
+      return true;
+    });
+  `;
+  const sites13 = analyzeOnMessageListeners(probeSwBundleUrlCheck, "extension/test-probe13.js");
+  assertEquals(sites13.length, 1);
+  assertEquals(sites13[0].checksSender, true, "SW bundle URL rejecting check must count as SW authentication");
 });
 
 Deno.test("behavioral: isTrustedServiceWorkerSender enforces SW bundle path and rejects documents/tabs", () => {
