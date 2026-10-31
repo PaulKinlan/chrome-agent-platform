@@ -427,6 +427,29 @@ Deno.test("behavioral: isTrustedServiceWorkerSender enforces SW bundle path and 
   assert(!isTrustedServiceWorkerSender({ ...validSender, url: runtime.getURL("ntp/ntp.html") }, runtime));
 });
 
+// 69bvp / INV-15: the PRODUCTION predicate must reject same-extension callers that
+// share our sender.id — a content script (tab set, page URL) and an extension
+// document (documentId set, extension-page URL) — and accept only the SW bundle.
+Deno.test("behavioral: production predicate rejects same-extension id-sharing callers (INV-15)", () => {
+  const runtime = {
+    id: "test-extension-id",
+    getURL: (p: string) => `chrome-extension://test-extension-id/${p}`,
+    getManifest: () => ({ background: { service_worker: SERVICE_WORKER_BUNDLE_PATH } }),
+  };
+
+  // Same-extension content script: shares sender.id, carries tab + page URL.
+  const contentScriptSender = { id: "test-extension-id", tab: { id: 7 }, url: "https://example.com/page" };
+  assert(!isTrustedServiceWorkerSender(contentScriptSender, runtime), "content script sharing our id must be rejected");
+
+  // Same-extension document (options/ntp/offscreen frame): shares sender.id, carries documentId + extension URL.
+  const documentSender = { id: "test-extension-id", documentId: "doc-9", url: runtime.getURL("options/options.html") };
+  assert(!isTrustedServiceWorkerSender(documentSender, runtime), "extension document sharing our id must be rejected");
+
+  // The real service worker: id match, no tab/documentId, exact SW bundle URL.
+  const swSender = { id: "test-extension-id", url: runtime.getURL(SERVICE_WORKER_BUNDLE_PATH) };
+  assert(isTrustedServiceWorkerSender(swSender, runtime), "service worker sender must be accepted");
+});
+
 Deno.test("behavioral: python host listener refuses untrusted senders", async () => {
   let registeredListener: any = null;
   const fakeRuntime = {
