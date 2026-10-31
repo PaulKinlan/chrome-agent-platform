@@ -602,6 +602,9 @@ function full(reason, extra = {}) {
  *   coreSuites?: string[],
  *   dependencyGuards?: string[],
  *   closureFor?: (names: string[]) => { suites?: string[], importers?: Record<string, string[]>, unattributed?: string[] },
+ *   referrerSuites?: string[],
+ *   releaseGuards?: string[],
+ *   pinReaders?: Record<string, readonly string[]>,
  * }} [options]
  * @returns {{kind: "subset"|"full", suites: string[], packages: string[], importers: Record<string, string[]>, unresolved: string[], passive: boolean, integrityOnly: boolean, viaDependent: Record<string, string>, viaDeclaredReader: Record<string, string[]>, notes: string[], reason: string}}
  */
@@ -610,6 +613,13 @@ export function classifyLockfileDelta(delta = {}, options = {}) {
   const guards = [...(options.dependencyGuards ?? DEPENDENCY_LOCK_GUARDS)];
   const releaseGuards = [...(options.releaseGuards ?? [RELEASE_IDENTITY_GUARD])];
   const pinReaders = options.pinReaders ?? DECLARED_PIN_READERS;
+  // Design amendment (architect, 2026-10-31): the minimum certifying set for an ATTRIBUTABLE delta is
+  // enumerable by construction — always-on + the DIRECT READERS the repo can compute (the caller
+  // supplies `referrerSuites`: every suite that mentions the changed path, via referrersFor) + the
+  // attributed importer closure. The declared readers above are the pinned core of that set; the
+  // referrers make it complete for readers nobody wrote down (owed-changelog-ledger, build-tier-inputs,
+  // …), which is exactly the class of miss review round 1 caught by hand.
+  const referrerSuites = [...new Set(options.referrerSuites ?? [])];
   const closureFor = typeof options.closureFor === "function"
     ? options.closureFor
     : () => ({ suites: [], importers: {}, unattributed: [] });
@@ -690,7 +700,7 @@ export function classifyLockfileDelta(delta = {}, options = {}) {
   // 4. A pure version stamp is certified by the always-on set alone (nothing about the dependency
   //    graph, the bundles or the guards moved).
   if (passive) {
-    const suites = [...new Set([...coreSuites, ...releaseGuards])].sort();
+    const suites = [...new Set([...coreSuites, ...releaseGuards, ...referrerSuites])].sort();
     return {
       kind: "subset",
       suites,
@@ -701,6 +711,8 @@ export function classifyLockfileDelta(delta = {}, options = {}) {
       integrityOnly: false,
       notes: [
         "version-counter-only (the landing stamp scripts/bump-version.mjs rewrites on every landing)",
+        `certified by always-on (${coreSuites.length}) + release-identity reader (${releaseGuards.length}) + ` +
+          `direct readers that name the changed path (${referrerSuites.length})`,
       ],
       reason: "",
     };
@@ -762,8 +774,11 @@ export function classifyLockfileDelta(delta = {}, options = {}) {
   }
 
   const declaredGuards = guards.filter((guard) => !coreSuites.includes(guard));
-  const suites = [...new Set([...coreSuites, ...declaredGuards, ...(closure.suites ?? [])])].sort();
+  const suites = [...new Set([...coreSuites, ...declaredGuards, ...referrerSuites, ...(closure.suites ?? [])])].sort();
   const notes = [];
+  if (referrerSuites.length) {
+    notes.push(`direct readers (suites that name the changed path): ${referrerSuites.join(", ")}`);
+  }
   if (integrityOnly) {
     notes.push("integrity-only: every dependency edge is unchanged; only pin hashes moved, so the named importers/readers are what re-reads those bytes");
   }
@@ -809,7 +824,10 @@ export function lockfileDeltaLedgerLines({ verdict, files = [], suites = verdict
     return lines;
   }
   if (verdict.passive) {
-    lines.push(`${name} ${scope}: version-counter-only (landing stamp) -> suites: the always-on set (${suites.length})`);
+    lines.push(
+      `${name} ${scope}: version-counter-only (landing stamp) -> suites: ${suites.length} ` +
+        `(always-on + release-identity reader + the direct readers that name the changed path)`,
+    );
     return lines;
   }
   for (const note of verdict.notes ?? []) lines.push(`${name} ${scope}: ${note}`);

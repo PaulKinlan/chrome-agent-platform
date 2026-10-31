@@ -736,6 +736,7 @@ export const LOCKFILE_DELTA_REFUSAL =
  *   coreSuites?: string[],
  *   readBase?: (rel: string) => string|null,
  *   readTip?: (rel: string) => string|null,
+ *   referrers?: (rel: string) => string[],
  *   closureFor?: Function|null,
  * }} [options]
  * @returns {null | { verdict: any, files: string[], mapped: Array<{file: string, mechanism: string, tests: string[]}>, unmappable: Array<{file: string, mechanism: string}>, ledger: string[] }}
@@ -755,6 +756,7 @@ export function planLockfileDelta(changed = [], options = {}) {
         return null;
       }
     },
+    referrers = referrersFor,
     closureFor = null,
   } = options;
 
@@ -767,8 +769,16 @@ export function planLockfileDelta(changed = [], options = {}) {
   };
   for (const rel of files) delta[deltaKey[rel]] = { base: readBase(rel), tip: readTip(rel) };
 
+  // DIRECT READERS, computed rather than remembered (design amendment 2026-10-31): every suite that
+  // MENTIONS a changed class file is a reader of it, and a JSON file has no import edge to bring them
+  // in. referrersFor already answers this for fixtures and text-referenced scripts; here it is what
+  // makes the certifying set enumerable by construction — the declared readers in lockfile-delta.mjs
+  // are its pinned core, and this is the complete current population.
+  const referrerSuites = [...new Set(files.flatMap((rel) => referrers(rel)))]
+    .filter((suite) => existsSync(join(ROOT, suite)));
   const verdict = classifyLockfileDelta(delta, {
     coreSuites,
+    referrerSuites,
     closureFor: closureFor ?? lockfileClosureFor(reverse),
   });
   const ledger = lockfileDeltaLedgerLines({ verdict, files, suites: verdict.suites ?? [] });

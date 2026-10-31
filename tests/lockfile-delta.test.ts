@@ -560,6 +560,41 @@ Deno.test("lezl0 MUTANT: a real dependency change can never be read as a version
 });
 
 // ── 6. the selector wiring ──────────────────────────────────────────────────────────────────
+Deno.test("lezl0: the certifying set adds the DIRECT READERS computed by referrersFor (amendment 2026-10-31)", () => {
+  // The architect's amendment: for an ATTRIBUTABLE delta the certifying set is enumerable by
+  // construction — always-on + the direct readers the repo can compute + the attributed closure. The
+  // declared readers are the pinned core; referrersFor finds the rest (every suite that names the path),
+  // which is exactly the population review round 1 had to find by hand.
+  const verdict = classifyLockfileDelta(
+    { packageLock: { base: npmLock(), tip: npmLock({ zodVersion: "3.25.0" }) } },
+    {
+      coreSuites: CORE,
+      referrerSuites: ["tests/owed-changelog-ledger.test.ts"],
+      closureFor: closureStub({ zod: ["extension/lib/agent.js"] }),
+    },
+  );
+  assert(verdict.suites.includes("tests/owed-changelog-ledger.test.ts"), "a computed reader is selected");
+  assertStringIncludes(verdict.notes.join("\n"), "direct readers");
+
+  // The population is COMPUTED, so it cannot be a hand-written list that rots: planLockfileDelta with
+  // the real tree must select the suites that really read these files.
+  const plan = planLockfileDelta(["package-lock.json"], {
+    mergeBase: "cafebabe",
+    readBase: () => npmLock(),
+    readTip: () => npmLock({ zodVersion: "3.25.0" }),
+    reverse: null,
+    coreSuites: CORE,
+    closureFor: closureStub({ zod: ["extension/lib/agent.js"] }),
+  });
+  for (const reader of [
+    DEPENDENCY_LOCK_GUARDS[0],
+    "tests/bundle-budget.test.ts",
+    "tests/first-run-onboarding-composition.test.ts",
+  ]) {
+    assert(plan!.mapped[0].tests.includes(reader), `${reader} reads package-lock.json and must be selected`);
+  }
+});
+
 Deno.test("lezl0: planLockfileDelta turns bytes into the same mapped/unmappable rows every class uses", () => {
   const lock = npmLock();
   const bumped = npmLock({ zodVersion: "3.25.0" });
@@ -572,6 +607,7 @@ Deno.test("lezl0: planLockfileDelta turns bytes into the same mapped/unmappable 
   };
   const passive = planLockfileDelta(["package-lock.json"], {
     mergeBase: "cafebabe",
+    referrers: () => [],
     readBase: () => lock,
     readTip: () => JSON.stringify(passiveTip),
     reverse: null,
@@ -590,6 +626,7 @@ Deno.test("lezl0: planLockfileDelta turns bytes into the same mapped/unmappable 
 
   const subset = planLockfileDelta(["package-lock.json"], {
     mergeBase: "cafebabe",
+    referrers: () => [],
     readBase: () => lock,
     readTip: () => bumped,
     reverse: null,
@@ -681,10 +718,14 @@ Deno.test("lezl0: planSelection EXECUTES the lockfile refusal path (subset vs FU
   assertEquals(certified.kind, "subset", "a version stamp certifies to a subset");
   assertEquals(certified.unmappable, []);
   assertEquals(certified.mapped.map((m: { file: string }) => m.file), ["package-lock.json"]);
-  for (const guard of DEPENDENCY_LOCK_GUARDS) {
-    assert(certified.files!.includes(guard) === false, `a stamp owes no dependency reader: ${guard}`);
-  }
+  // Amendment 2026-10-31: the certifying set is always-on + the DIRECT READERS computed by referrersFor
+  // + the closure. tests/security-dependency-locks.test.ts names package-lock.json, so it is a computed
+  // reader of a stamp too — the class does not have to hand-list it, and it is not the full suite.
   assert(certified.files!.includes(RELEASE_IDENTITY_GUARD), "a stamp is certified by its release-identity reader");
+  assert(
+    certified.files!.length < 200,
+    `a stamp must stay a subset, not a sweep: ${certified.files!.length} files`,
+  );
   assert(certified.files!.length > 0, "the always-on set still runs");
 });
 
