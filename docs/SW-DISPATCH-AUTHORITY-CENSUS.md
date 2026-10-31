@@ -421,6 +421,7 @@ Because `chrome.runtime.onMessage` is a broadcast message bus within the extensi
 ### 6.1 Defense-in-Depth Invariant: Sender Identity Predicates
 Every non-dispatcher message listener in `extension/` MUST enforce a sender predicate or be explicitly allowlisted in `tests/onmessage-sender-guard.test.ts`.
 Per THREAT_MODEL.md INV-15, an extension-ID match alone establishes nothing (same-extension documents and content scripts share `sender.id`), so the static guard only credits a rejecting conditional whose test also references an SW-discriminating property (`tab`, `documentId`, or `url`); ID-only (or origin/frameId-only) checks fail the inventory guard (chrome-agent-platform-69bvp).
+The inventory also resolves simple aliases of `chrome.runtime` / its `onMessage` event object and fails closed on any runtime `onMessage` reference it cannot enumerate (e.g. the event object passed to a function, or an aliased `addListener` method) rather than silently skipping it (chrome-agent-platform-2i86h). `onConnect` hosts are out of scope for this census by design (THREAT_MODEL.md T18); the ACP model host validates its own port sender.
 
 1. **Service Worker Authority Fences (`isTrustedServiceWorkerSender`)**:
    Execution hosts (offscreen Worker executors, Python Pyodide runner, shared agent workers, on-device text models, sandboxed iframe script execution, and clipboard writes) must accept execution commands ONLY from the background Service Worker:
