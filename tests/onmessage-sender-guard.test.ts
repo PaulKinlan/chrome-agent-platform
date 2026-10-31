@@ -4,10 +4,12 @@
 // Invariants guarded:
 //   1. Every `chrome.runtime.onMessage.addListener` call in extension/ must accept a `sender` parameter
 //      and reference/validate it in its body, or be explicitly allowlisted with a documented reason.
-//      A rejecting conditional counts as validation ONLY when its test references an
-//      SW-discriminating property (tab / documentId / url): per THREAT_MODEL.md INV-15,
-//      an extension-ID-only (or origin/frameId-only) check establishes nothing because
-//      same-extension documents and content scripts share sender.id (chrome-agent-platform-69bvp).
+//      A rejecting conditional counts as validation ONLY when its test PROVABLY depends
+//      on an SW-discriminating property (tab / documentId / url) via exhaustive truth-table
+//      evaluation: per THREAT_MODEL.md INV-15, an extension-ID-only (or origin/frameId-only)
+//      check establishes nothing because same-extension documents and content scripts share
+//      sender.id, and a discriminating property MENTIONED in a dead or short-circuited
+//      clause (&& false / || true) establishes nothing either (chrome-agent-platform-69bvp).
 //   2. Falsification tests verify that un-checked, ignored (_sender), single-param, and
 //      id-only-checking listeners fail RED.
 //   3. Behavioral tests verify that execution hosts reject untrusted senders (tabs, content scripts, foreign IDs).
@@ -81,21 +83,193 @@ function isAuthenticatingSender(body: any, senderName: string): boolean {
     "authorizeToolReport",
     "handleScriptRunMessage",
   ]);
-  const KNOWN_PROPERTIES = new Set([
-    "id",
-    "tab",
-    "url",
-    "documentId",
-    "origin",
-    "frameId",
-  ]);
   // INV-15 (THREAT_MODEL.md): an extension ID alone does not establish the SW
   // principal — same-extension documents and content scripts share sender.id.
   // A rejecting conditional only counts as authenticating the service worker
-  // when its test ALSO references a property that discriminates the SW from
+  // when its test PROVABLY DEPENDS on a property that discriminates the SW from
   // same-extension callers: tab/documentId absence or the SW bundle URL.
-  // id/origin/frameId-only checks establish nothing (chrome-agent-platform-69bvp).
+  // id/origin/frameId-only checks establish nothing (chrome-agent-platform-69bvp),
+  // and neither does a discriminating property MENTIONED in a dead or
+  // short-circuited clause (&& false / || true) — proven by exhaustive
+  // truth-table evaluation of the test over its atoms (69bvp re-review).
   const SW_DISCRIMINATING_PROPERTIES = new Set(["tab", "documentId", "url"]);
+
+  const stableKey = (node: any): string =>
+    JSON.stringify(node, (k, v) => (k === "parent" || k === "loc" || k === "start" || k === "end" ? undefined : v));
+
+  const referencesSender = (node: any): boolean => {
+    let found = false;
+    walkAst(node, (sub) => {
+      if (found) return;
+      if (sub.type !== "Identifier" || sub.name !== senderName) return;
+      const p = sub.parent;
+      if (p && p.type === "MemberExpression" && p.property === sub && !p.computed) return;
+      if (p && p.type === "Property" && p.key === sub && !p.computed) return;
+      found = true;
+    });
+    return found;
+  };
+
+  const senderPropsOf = (node: any): string[] => {
+    const props = new Set<string>();
+    walkAst(node, (sub) => {
+      if (sub.type === "MemberExpression" && sub.object?.type === "Identifier" && sub.object.name === senderName) {
+        const p = sub.property?.name || sub.property?.value;
+        if (typeof p === "string") props.add(p);
+      }
+    });
+    return [...props];
+  };
+
+  // Constant-fold sub-expressions that do not reference the sender.
+  const tryConstEval = (node: any): { ok: boolean; value?: any } => {
+    try {
+      switch (node?.type) {
+        case "Literal":
+          return { ok: true, value: node.value };
+        case "ChainExpression":
+          return tryConstEval(node.expression);
+        case "UnaryExpression": {
+          const a = tryConstEval(node.argument);
+          if (!a.ok) return { ok: false };
+          switch (node.operator) {
+            case "!": return { ok: true, value: !a.value };
+            case "-": return { ok: true, value: -a.value };
+            case "+": return { ok: true, value: +a.value };
+            case "~": return { ok: true, value: ~a.value };
+            case "void": return { ok: true, value: undefined };
+            case "typeof": return { ok: true, value: typeof a.value };
+            default: return { ok: false };
+          }
+        }
+        case "BinaryExpression": {
+          const l = tryConstEval(node.left);
+          const r = tryConstEval(node.right);
+          if (!l.ok || !r.ok) return { ok: false };
+          switch (node.operator) {
+            case "===": return { ok: true, value: l.value === r.value };
+            case "!==": return { ok: true, value: l.value !== r.value };
+            case "==": return { ok: true, value: l.value == r.value };
+            case "!=": return { ok: true, value: l.value != r.value };
+            case "<": return { ok: true, value: l.value < r.value };
+            case "<=": return { ok: true, value: l.value <= r.value };
+            case ">": return { ok: true, value: l.value > r.value };
+            case ">=": return { ok: true, value: l.value >= r.value };
+            case "+": return { ok: true, value: l.value + r.value };
+            case "-": return { ok: true, value: l.value - r.value };
+            case "*": return { ok: true, value: l.value * r.value };
+            case "/": return { ok: true, value: l.value / r.value };
+            case "%": return { ok: true, value: l.value % r.value };
+            default: return { ok: false };
+          }
+        }
+        case "LogicalExpression": {
+          const l = tryConstEval(node.left);
+          if (!l.ok) return { ok: false };
+          if (node.operator === "||") return l.value ? l : tryConstEval(node.right);
+          if (node.operator === "&&") return l.value ? tryConstEval(node.right) : l;
+          if (node.operator === "??") return l.value ?? tryConstEval(node.right);
+          return { ok: false };
+        }
+        case "ConditionalExpression": {
+          const t = tryConstEval(node.test);
+          if (!t.ok) return { ok: false };
+          return tryConstEval(t.value ? node.consequent : node.alternate);
+        }
+        default:
+          return { ok: false };
+      }
+    } catch {
+      return { ok: false };
+    }
+  };
+
+  // Prove that the test's outcome DEPENDS on an SW-discriminating sender
+  // property: split the test into atoms at the transparent boolean structure
+  // (||, &&, ??, !, ternary, chain), constant-fold what does not reference the
+  // sender, then exhaustively evaluate the truth table. A discriminating atom
+  // whose value never changes the result is dead — exactly the
+  // `sender.id !== id || (sender.tab != null && false)` counterexample from the
+  // 69bvp re-review. Fail closed (false) when unprovable.
+  const proveDiscriminatingDependence = (test: any): boolean => {
+    try {
+      const atomNodes: any[] = [];
+      const atomIndex = new Map<string, number>();
+      const register = (node: any): number => {
+        const key = stableKey(node);
+        let idx = atomIndex.get(key);
+        if (idx === undefined) {
+          idx = atomNodes.length;
+          atomIndex.set(key, idx);
+          atomNodes.push(node);
+        }
+        return idx;
+      };
+      const collect = (node: any): void => {
+        switch (node.type) {
+          case "LogicalExpression":
+            collect(node.left);
+            collect(node.right);
+            return;
+          case "ChainExpression":
+            collect(node.expression);
+            return;
+          case "UnaryExpression":
+            if (node.operator === "!") { collect(node.argument); return; }
+            break;
+          case "ConditionalExpression":
+            collect(node.test);
+            collect(node.consequent);
+            collect(node.alternate);
+            return;
+        }
+        if (referencesSender(node) || !tryConstEval(node).ok) register(node);
+      };
+      collect(test);
+
+      const n = atomNodes.length;
+      if (n === 0 || n > 10) return false; // constant test, or too complex to prove: fail closed
+
+      const evalWith = (node: any, values: boolean[]): any => {
+        switch (node.type) {
+          case "LogicalExpression": {
+            const l = evalWith(node.left, values);
+            if (node.operator === "||") return l ? l : evalWith(node.right, values);
+            if (node.operator === "&&") return l ? evalWith(node.right, values) : l;
+            return l ?? evalWith(node.right, values);
+          }
+          case "ChainExpression":
+            return evalWith(node.expression, values);
+          case "UnaryExpression":
+            if (node.operator === "!") return !evalWith(node.argument, values);
+            break;
+          case "ConditionalExpression":
+            return evalWith(node.test, values) ? evalWith(node.consequent, values) : evalWith(node.alternate, values);
+        }
+        if (referencesSender(node)) return values[register(node)];
+        const c = tryConstEval(node);
+        if (c.ok) return c.value;
+        return values[register(node)];
+      };
+
+      const rows = 1 << n;
+      const results: boolean[] = new Array(rows);
+      for (let mask = 0; mask < rows; mask++) {
+        const values = atomNodes.map((_, i) => Boolean((mask >> i) & 1));
+        results[mask] = Boolean(evalWith(test, values));
+      }
+      for (let i = 0; i < n; i++) {
+        if (!senderPropsOf(atomNodes[i]).some((p) => SW_DISCRIMINATING_PROPERTIES.has(p))) continue;
+        for (let mask = 0; mask < rows; mask++) {
+          if (results[mask] !== results[mask ^ (1 << i)]) return true; // live dependence on a discriminating property
+        }
+      }
+      return false;
+    } catch {
+      return false; // fail closed
+    }
+  };
+
   let validated = false;
   walkAst(body, (sub) => {
     // 1. Passed to a recognized sender authentication helper/predicate
@@ -108,53 +282,19 @@ function isAuthenticatingSender(body: any, senderName: string): boolean {
         }
       }
     }
-    // 2. Rejecting conditional check: IfStatement whose test checks sender / sender.prop
-    // and whose consequent returns or throws.
+    // 2. Rejecting conditional check: IfStatement whose test PROVABLY depends on
+    // an SW-discriminating sender property (tab/documentId/url), and whose
+    // consequent returns or throws. Dead or short-circuited clauses do not count.
     if (sub.type === "IfStatement") {
-      let testHasSenderCheck = false;
-      const referencedProps = new Set<string>();
-      walkAst(sub.test, (tNode: any) => {
-        if (tNode.type === "BinaryExpression") {
-          const isComp = ["===", "!==", "==", "!="].includes(tNode.operator);
-          if (isComp) {
-            walkAst(tNode, (operand: any) => {
-              if (operand.type === "MemberExpression" && operand.object?.name === senderName) {
-                const prop = operand.property?.name || operand.property?.value;
-                if (KNOWN_PROPERTIES.has(prop)) {
-                  testHasSenderCheck = true;
-                  referencedProps.add(prop);
-                }
-              }
-            });
+      if (proveDiscriminatingDependence(sub.test)) {
+        let consequentRejects = false;
+        walkAst(sub.consequent, (cNode: any) => {
+          if (cNode.type === "ReturnStatement" || cNode.type === "ThrowStatement") {
+            consequentRejects = true;
           }
-        }
-        if (tNode.type === "UnaryExpression" && tNode.operator === "!") {
-          if (tNode.argument?.type === "Identifier" && tNode.argument?.name === senderName) {
-            testHasSenderCheck = true;
-          }
-          if (tNode.argument?.type === "MemberExpression" && tNode.argument.object?.name === senderName) {
-            const prop = tNode.argument.property?.name || tNode.argument.property?.value;
-            if (KNOWN_PROPERTIES.has(prop)) {
-              testHasSenderCheck = true;
-              referencedProps.add(prop);
-            }
-          }
-        }
-      });
-
-      if (testHasSenderCheck) {
-        // id/origin/frameId-only: establishes nothing per INV-15
-        const discriminatesSw = [...referencedProps].some((p) => SW_DISCRIMINATING_PROPERTIES.has(p));
-        if (discriminatesSw) {
-          let consequentRejects = false;
-          walkAst(sub.consequent, (cNode: any) => {
-            if (cNode.type === "ReturnStatement" || cNode.type === "ThrowStatement") {
-              consequentRejects = true;
-            }
-          });
-          if (consequentRejects) {
-            validated = true;
-          }
+        });
+        if (consequentRejects) {
+          validated = true;
         }
       }
     }
@@ -523,6 +663,42 @@ Deno.test("guard falsification: detects un-gated, ignored, or missing sender lis
   const sites13 = analyzeOnMessageListeners(probeSwBundleUrlCheck, "extension/test-probe13.js");
   assertEquals(sites13.length, 1);
   assertEquals(sites13[0].checksSender, true, "SW bundle URL rejecting check must count as SW authentication");
+
+  // 69bvp re-review (gpt-6-sol): a property MENTION in a dead or short-circuited
+  // clause does not establish rejection — the discriminating property must be in a
+  // live branch whose value can change the outcome of the test.
+  const probeDeadAndFalseClause = `
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      if (sender.id !== chrome.runtime.id || (sender.tab != null && false)) return false;
+      sendResponse({ ok: true });
+      return true;
+    });
+  `;
+  const sites14 = analyzeOnMessageListeners(probeDeadAndFalseClause, "extension/test-probe14.js");
+  assertEquals(sites14.length, 1);
+  assertEquals(sites14[0].checksSender, false, "sender.tab in a dead (&& false) clause must not count — the guard is ID-only");
+
+  const probeShortCircuitedOrTrueClause = `
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      if ((sender.url !== chrome.runtime.getURL("dist/background/service-worker.js") || true) && sender.id !== chrome.runtime.id) return false;
+      sendResponse({ ok: true });
+      return true;
+    });
+  `;
+  const sites15 = analyzeOnMessageListeners(probeShortCircuitedOrTrueClause, "extension/test-probe15.js");
+  assertEquals(sites15.length, 1);
+  assertEquals(sites15[0].checksSender, false, "sender.url in a short-circuited (|| true) clause must not count — the guard is ID-only");
+
+  const probeConstantTest = `
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      if (sender.id !== chrome.runtime.id || true) return false;
+      sendResponse({ ok: true });
+      return true;
+    });
+  `;
+  const sites16 = analyzeOnMessageListeners(probeConstantTest, "extension/test-probe16.js");
+  assertEquals(sites16.length, 1);
+  assertEquals(sites16[0].checksSender, false, "a constant-true test rejects everyone and discriminates nothing");
 });
 
 Deno.test("behavioral: isTrustedServiceWorkerSender enforces SW bundle path and rejects documents/tabs", () => {
