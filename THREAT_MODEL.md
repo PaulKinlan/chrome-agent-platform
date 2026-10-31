@@ -470,9 +470,17 @@ consequences are carried by the matching register entry where one exists.
   exact background URL (`extension/lib/acp-model-host.js:5-13`). The Emscripten
   request uses an exact-key envelope (`extension/lib/emscripten-host.js:30-54`,
   `:110`) and checks each asset's size and SHA-256 before a fresh worker (:168).
-  **Residual:** census §6.2 is onMessage-only and does not enumerate the ACP
-  port or every registered host; `tests/onmessage-sender-guard.test.ts` covers
-  known listeners but does not yet pin the complete `register*Host()` inventory.
+  **Residual:** the listener inventory in
+  `tests/onmessage-sender-guard.test.ts` (:161-175, :213-238) is a
+  minimum-count syntactic scan of direct `runtime.onMessage.addListener`
+  registrations, so it guarantees no unregistered direct listener — not
+  complete coverage. Aliased onMessage registrations escape it
+  (`chrome-agent-platform-2i86h`), and the scan counts an extension-ID-only
+  sender comparison as gated, which INV-15 says establishes nothing
+  (`chrome-agent-platform-69bvp`). `onConnect` hosts are outside its scope by
+  design — the ACP model host validates its own port sender separately
+  (`extension/lib/acp-model-host.js:5-13`), as noted in the controls above.
+  Census §6.2 remains onMessage-only and does not enumerate the ACP port.
   A new host must be reviewed for sender and envelope authority, not inferred
   safe from another host's guard. **Register:** R12/R14/R15.
 
