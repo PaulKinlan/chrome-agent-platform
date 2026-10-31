@@ -66,6 +66,36 @@ function npmLock({ zodVersion = "3.24.0", rootRange = "^3.24.0" } = {}): string 
   }, null, 2);
 }
 
+/**
+ * A package-lock delta whose pinned BYTES do not move: a `file:` (link) dependency carries no integrity
+ * hash, so its version can change without changing any pin. Coord's round-3 ruling makes ANY change to
+ * an integrity value FULL, so this is the only entry-level shape a subset can still certify — the pins
+ * that exercise the closure/ledger mechanics use it deliberately rather than pretending a real bump
+ * still certifies.
+ */
+function linkLock({ agentToolsVersion = "1.0.0", zodRange = "^3.24.0", declareAgentTools = false } = {}): string {
+  return JSON.stringify({
+    name: "chrome-agent-platform",
+    version: VERSION,
+    lockfileVersion: 3,
+    requires: true,
+    packages: {
+      "": {
+        name: "chrome-agent-platform",
+        version: VERSION,
+        dependencies: { zod: zodRange, ...(declareAgentTools ? { "agent-tools": "file:../agent-tools" } : {}) },
+      },
+      "node_modules/agent-tools": {
+        version: agentToolsVersion,
+        resolved: "file:../agent-tools",
+        link: true,
+        dependencies: { "virtual-dep": "*" },
+      },
+      "node_modules/virtual-dep": { version: "2.0.0", resolved: "file:../virtual-dep", link: true },
+    },
+  }, null, 2);
+}
+
 function denoLock({
   integrity = "sha512-aa",
   resolved = "3.24.0",
@@ -263,15 +293,17 @@ Deno.test("lezl0: a REAL landing stamp is passive — the exact counter set bump
 });
 
 // ── 2. an npm package set change ─────────────────────────────────────────────────────────────
-Deno.test("lezl0: an npm package bump selects its importer closure + the declared-reader guard + core", () => {
-  const closure = closureStub({ zod: ["extension/lib/agent.js"] });
+Deno.test("lezl0: a PIN-LESS package change selects its importer closure + declared readers + core", () => {
+  // Coord's round-3 ruling sends any changed integrity value to the FULL suite, so a real npm bump no
+  // longer certifies (see the falsifier pins). The closure mechanics are unchanged and are pinned here
+  // on a `file:` dependency, whose version can move without moving a pin.
   const verdict = classifyLockfileDelta(
-    { packageLock: { base: npmLock(), tip: npmLock({ zodVersion: "3.25.0" }) } },
-    { coreSuites: CORE, closureFor: closure },
+    { packageLock: { base: linkLock(), tip: linkLock({ agentToolsVersion: "1.0.1" }) } },
+    { coreSuites: CORE, closureFor: closureStub({ "agent-tools": ["extension/lib/agent-loop.js"] }) },
   );
-  assertEquals(verdict.kind, "subset");
-  assertEquals(verdict.packages, ["zod"], "the changed package is named");
-  assertEquals(verdict.importers.zod, ["extension/lib/agent.js"]);
+  assertEquals(verdict.kind, "subset", verdict.reason);
+  assertEquals(verdict.packages, ["agent-tools"], "the changed package is named");
+  assertEquals(verdict.importers["agent-tools"], ["extension/lib/agent-loop.js"]);
   for (const suite of [...CORE, ...DEPENDENCY_LOCK_GUARDS, "tests/closure.test.ts"]) {
     assert(verdict.suites.includes(suite), `the verdict must select ${suite}: ${verdict.suites.join(", ")}`);
   }
@@ -284,14 +316,14 @@ Deno.test("lezl0: an npm package bump selects its importer closure + the declare
 
 Deno.test("lezl0: the ledger names package -> importers -> suites", () => {
   const verdict = classifyLockfileDelta(
-    { packageLock: { base: npmLock(), tip: npmLock({ zodVersion: "3.25.0" }) } },
-    { coreSuites: CORE, closureFor: closureStub({ zod: ["extension/lib/agent.js"] }) },
+    { packageLock: { base: linkLock(), tip: linkLock({ agentToolsVersion: "1.0.1" }) } },
+    { coreSuites: CORE, closureFor: closureStub({ "agent-tools": ["extension/lib/agent-loop.js"] }) },
   );
   const lines = lockfileDeltaLedgerLines({ verdict, files: ["package-lock.json"], suites: verdict.suites });
   assert(lines.length >= 2, "one line per package plus a summary");
   for (const line of lines) assertStringIncludes(line, LOCKFILE_DELTA_LEDGER_PREFIX);
-  assertStringIncludes(lines[0], "zod");
-  assertStringIncludes(lines[0], "extension/lib/agent.js");
+  assertStringIncludes(lines[0], "agent-tools");
+  assertStringIncludes(lines[0], "extension/lib/agent-loop.js");
   assertStringIncludes(lines[0], "importers:");
   assertStringIncludes(lines.at(-1)!, "suite(s) selected");
 });
@@ -311,9 +343,9 @@ Deno.test("lezl0: a dependency bump that rides with the landing stamp is still a
     { packageLock: { base: JSON.stringify(lock), tip: JSON.stringify(stamped) } },
     { coreSuites: CORE, closureFor: closureStub({ zod: ["extension/lib/agent.js"] }) },
   );
-  assertEquals(verdict.kind, "subset");
+  assertEquals(verdict.kind, "full", "a real bump moves the pinned bytes, so it is not certifiable");
   assertEquals(verdict.passive, false, "a stamp riding along must not hide the dependency change");
-  assertEquals(verdict.packages, ["zod"]);
+  assertStringIncludes(verdict.reason, "zod");
 });
 
 // ── 3. deno.lock ─────────────────────────────────────────────────────────────────────────────
@@ -333,6 +365,28 @@ Deno.test("lezl0 ROUND 2: a HASH-ONLY change is FULL — no suite verifies lockf
   assertStringIncludes(verdict.reason, "integrity/hash-only");
   assertStringIncludes(verdict.reason, "zod");
   assert(verdict.unresolved.includes("zod"), "the refusal names the entry");
+});
+
+Deno.test("lezl0 ROUND 3: a version bump whose hash ALSO moved is FULL (the mixed falsifier)", () => {
+  // The one-line predicate this replaces tested "everything except integrity is equal", so a
+  // version+hash change never set bytes-only and then satisfied importer attribution while the
+  // importer ran with deno.runner.jsonc's "lock": false — the changed hash was never verified.
+  // The predicate is now "the integrity VALUE changed", so a mixed change is FULL too.
+  const lock = JSON.parse(npmLock());
+  const bumped = JSON.parse(JSON.stringify(lock));
+  bumped.packages["node_modules/zod"] = {
+    ...bumped.packages["node_modules/zod"],
+    version: "3.25.0",
+    resolved: "https://registry.npmjs.org/zod/-/zod-3.25.0.tgz",
+    integrity: "sha512-3.25.0",
+  };
+  const verdict = classifyLockfileDelta(
+    { packageLock: { base: npmLock(), tip: JSON.stringify(bumped) } },
+    { coreSuites: CORE, closureFor: closureStub({ zod: ["extension/lib/agent.js"] }) },
+  );
+  assertEquals(verdict.kind, "full", "a version+hash change cannot be certified by a subset either");
+  assertStringIncludes(verdict.reason, "integrity/hash-only");
+  assertStringIncludes(verdict.reason, "zod");
 });
 
 Deno.test("lezl0 ROUND 2: an importer does NOT make a hash-only change certifiable (naming is not inspection)", () => {
@@ -369,23 +423,26 @@ Deno.test("lezl0 ROUND 2: a JSR hash-only change is FULL, and so is a remote URL
   assertStringIncludes(remote.reason, "deno.land");
 });
 
-Deno.test("lezl0 ROUND 2: a VERSION bump stays on the fast path — attributable, with or without importers", () => {
-  // The win the ruling protects: version/declaration deltas are certifiable. zod has real importers;
-  // undici has none but IS version-asserted by its reader's advisory floor (DECLARED_PIN_READERS).
-  const withImporters = classifyLockfileDelta(
+Deno.test("lezl0 ROUND 3: what still certifies, now that any changed integrity value is FULL", () => {
+  // Coord's round-3 ruling is deliberately conservative: an entry whose integrity VALUE changed is
+  // FULL even when its version moved with it, because the changed hash is verified by nothing in the
+  // suite (the runner has "lock": false, and nothing runs npm ci). A real bump always moves the pin,
+  // so a real bump is now FULL — stated here rather than left for a reader to discover:
+  const realBump = classifyLockfileDelta(
     { packageLock: { base: npmLock(), tip: npmLock({ zodVersion: "3.25.0" }) } },
     { coreSuites: CORE, closureFor: closureStub({ zod: ["extension/lib/agent.js"] }) },
   );
-  assertEquals(withImporters.kind, "subset", withImporters.reason);
-  assert(withImporters.suites.includes("tests/closure.test.ts"));
+  assertEquals(realBump.kind, "full", "a real bump moves the tarball hash, so it is not certifyable");
+  assertStringIncludes(realBump.reason, "zod");
 
-  // No importer, but a reader VERIFIES the entry (fast-uri: npm <-> deno equality + shipped drift).
-  const pinsOnly = classifyLockfileDelta(
-    { denoLock: { base: denoLock(), tip: denoLock({ npm: { "fast-uri@3.1.6": { integrity: "sha512-f2" } } }) } },
-    { coreSuites: CORE, closureFor: closureStub({}) },
+  // What remains on the fast path: changes that do NOT move a pin — a declaration/edge change, or a
+  // link/file dependency whose version moves with no hash at all. Both are pinned elsewhere in this
+  // file; this second half proves the pin-less case is not accidental.
+  const pinless = classifyLockfileDelta(
+    { packageLock: { base: linkLock(), tip: linkLock({ agentToolsVersion: "1.0.1" }) } },
+    { coreSuites: CORE, closureFor: closureStub({ "agent-tools": ["extension/lib/agent-loop.js"] }) },
   );
-  assertEquals(pinsOnly.kind, "subset", pinsOnly.reason);
-  assertStringIncludes(pinsOnly.notes.join("\n"), "no importer");
+  assertEquals(pinless.kind, "subset", pinless.reason);
 });
 
 Deno.test("lezl0: a deno.lock specifier change resolves the changed name to its importer closure", () => {
@@ -460,25 +517,21 @@ Deno.test("lezl0 ROUND 2: an unattributed version change is certified only where
 });
 
 Deno.test("lezl0: a transitive pin is attributed to the suite that executes its DEPENDENT", () => {
-  // (b) of the inspection rule: the lock's own dependency edges are the evidence. `zod` here has no
-  // importer, but `agent-tools` depends on it and IS imported — so the change is covered by that code.
-  const lock = npmLock();
-  const withDependent = JSON.parse(lock);
-  withDependent.packages["node_modules/agent-tools"] = {
-    version: "1.0.0",
-    resolved: "https://registry.npmjs.org/agent-tools/-/agent-tools-1.0.0.tgz",
-    integrity: "sha512-agent",
-    dependencies: { zod: "^3.24.0" },
-  };
-  const tip = JSON.parse(JSON.stringify(withDependent));
-  tip.packages["node_modules/zod"] = { ...tip.packages["node_modules/zod"], version: "3.25.0", integrity: "sha512-3.25.0" };
+  // (b) of the inspection rule: the lock's own dependency edges are the evidence. `virtual-dep` has no
+  // importer, but `agent-tools` depends on it and IS imported — so that code is what must run.
+  const base = linkLock();
+  const tip = (() => {
+    const parsed = JSON.parse(base);
+    parsed.packages["node_modules/virtual-dep"] = { version: "2.0.1", resolved: "file:../virtual-dep", link: true };
+    return JSON.stringify(parsed);
+  })();
 
   const verdict = classifyLockfileDelta(
-    { packageLock: { base: JSON.stringify(withDependent), tip: JSON.stringify(tip) } },
+    { packageLock: { base, tip } },
     { coreSuites: CORE, closureFor: closureStub({ "agent-tools": ["extension/lib/agent-loop.js"] }) },
   );
-  assertEquals(verdict.kind, "subset", "the dependent's importers cover the transitive pin");
-  assertEquals(verdict.viaDependent.zod, "agent-tools");
+  assertEquals(verdict.kind, "subset", verdict.reason);
+  assertEquals(verdict.viaDependent["virtual-dep"], "agent-tools");
   assertStringIncludes(verdict.notes.join("\n"), "reached through its dependent agent-tools");
   assert(verdict.suites.includes("tests/closure.test.ts"), "the dependent's closure is selected");
 });
@@ -538,10 +591,15 @@ Deno.test("lezl0: a manifest delta beyond the version counter, and a package.jso
 
 // ── 5. mutants: prove the pins above bite ───────────────────────────────────────────────────
 Deno.test("lezl0 MUTANT: dropping a closure edge or the declared-reader guard is caught here", () => {
-  const base = { packageLock: { base: npmLock(), tip: npmLock({ zodVersion: "3.25.0" }) } };
+  // Pin-less entries, because a real bump is FULL since round 3; the mechanics under test (closure edge,
+  // declared readers) are the same either way.
+  const base = { packageLock: { base: linkLock(), tip: linkLock({ agentToolsVersion: "1.0.1" }) } };
 
   // The live verdict selects the closure edge.
-  const live = classifyLockfileDelta(base, { coreSuites: CORE, closureFor: closureStub({ zod: ["extension/lib/agent.js"] }) });
+  const live = classifyLockfileDelta(base, {
+    coreSuites: CORE,
+    closureFor: closureStub({ "agent-tools": ["extension/lib/agent-loop.js"] }),
+  });
   assert(live.suites.includes("tests/closure.test.ts"), "the live verdict carries the closure edge");
 
   // MUTANT 1: the closure resolves the package to nothing (a dropped reverse-import edge). The pin
@@ -554,7 +612,7 @@ Deno.test("lezl0 MUTANT: dropping a closure edge or the declared-reader guard is
   const noGuard = classifyLockfileDelta(base, {
     coreSuites: CORE,
     dependencyGuards: [],
-    closureFor: closureStub({ zod: ["extension/lib/agent.js"] }),
+    closureFor: closureStub({ "agent-tools": ["extension/lib/agent-loop.js"] }),
   });
   for (const guard of DEPENDENCY_LOCK_GUARDS) {
     assert(!noGuard.suites.includes(guard), `dropping the readers loses ${guard} — the pins catch it`);
@@ -612,11 +670,11 @@ Deno.test("lezl0: the certifying set adds the DIRECT READERS computed by referre
   // declared readers are the pinned core; referrersFor finds the rest (every suite that names the path),
   // which is exactly the population review round 1 had to find by hand.
   const verdict = classifyLockfileDelta(
-    { packageLock: { base: npmLock(), tip: npmLock({ zodVersion: "3.25.0" }) } },
+    { packageLock: { base: linkLock(), tip: linkLock({ agentToolsVersion: "1.0.1" }) } },
     {
       coreSuites: CORE,
       referrerSuites: ["tests/owed-changelog-ledger.test.ts"],
-      closureFor: closureStub({ zod: ["extension/lib/agent.js"] }),
+      closureFor: closureStub({ "agent-tools": ["extension/lib/agent-loop.js"] }),
     },
   );
   assert(verdict.suites.includes("tests/owed-changelog-ledger.test.ts"), "a computed reader is selected");
@@ -626,11 +684,11 @@ Deno.test("lezl0: the certifying set adds the DIRECT READERS computed by referre
   // the real tree must select the suites that really read these files.
   const plan = planLockfileDelta(["package-lock.json"], {
     mergeBase: "cafebabe",
-    readBase: () => npmLock(),
-    readTip: () => npmLock({ zodVersion: "3.25.0" }),
+    readBase: () => linkLock(),
+    readTip: () => linkLock({ agentToolsVersion: "1.0.1" }),
     reverse: null,
     coreSuites: CORE,
-    closureFor: closureStub({ zod: ["extension/lib/agent.js"] }),
+    closureFor: closureStub({ "agent-tools": ["extension/lib/agent-loop.js"] }),
   });
   for (const reader of [
     DEPENDENCY_LOCK_GUARDS[0],
@@ -643,7 +701,7 @@ Deno.test("lezl0: the certifying set adds the DIRECT READERS computed by referre
 
 Deno.test("lezl0: planLockfileDelta turns bytes into the same mapped/unmappable rows every class uses", () => {
   const lock = npmLock();
-  const bumped = npmLock({ zodVersion: "3.25.0" });
+  const bumped = linkLock({ agentToolsVersion: "1.0.1" });
 
   const stamped = JSON.parse(lock);
   const passiveTip = {
@@ -673,11 +731,11 @@ Deno.test("lezl0: planLockfileDelta turns bytes into the same mapped/unmappable 
   const subset = planLockfileDelta(["package-lock.json"], {
     mergeBase: "cafebabe",
     referrers: () => [],
-    readBase: () => lock,
-    readTip: () => bumped,
+    readBase: () => linkLock(),
+    readTip: () => linkLock({ agentToolsVersion: "1.0.1" }),
     reverse: null,
     coreSuites: CORE,
-    closureFor: closureStub({ zod: ["extension/lib/agent.js"] }),
+    closureFor: closureStub({ "agent-tools": ["extension/lib/agent-loop.js"] }),
   });
   for (const guard of DEPENDENCY_LOCK_GUARDS) assert(subset!.mapped[0].tests.includes(guard), `${guard} is in the mapped row`);
   assert(subset!.ledger.some((line) => line.startsWith(LOCKFILE_DELTA_LEDGER_PREFIX)), "the ledger trail is emitted");
@@ -720,11 +778,11 @@ Deno.test("lezl0 REGRESSION: a lockfile refusal survives the row merge even with
   // And the happy path still merges both sides.
   const subset = planLockfileDelta(["package-lock.json"], {
     mergeBase: "cafebabe",
-    readBase: () => npmLock(),
-    readTip: () => npmLock({ zodVersion: "3.25.0" }),
+    readBase: () => linkLock(),
+    readTip: () => linkLock({ agentToolsVersion: "1.0.1" }),
     reverse: null,
     coreSuites: CORE,
-    closureFor: closureStub({ zod: ["extension/lib/agent.js"] }),
+    closureFor: closureStub({ "agent-tools": ["extension/lib/agent-loop.js"] }),
   });
   const both = planRows({
     importRows: { mapped: [{ file: "scripts/x.mjs", mechanism: "m", tests: ["tests/x.test.ts"] }], unmappable: [] },
@@ -775,22 +833,18 @@ Deno.test("lezl0: planSelection EXECUTES the lockfile refusal path (subset vs FU
   assert(certified.files!.length > 0, "the always-on set still runs");
 });
 
-Deno.test("lezl0: a real package bump resolves real repo importers through the bare-specifier index", () => {
+Deno.test("lezl0: a real package change resolves real repo importers through the bare-specifier index", () => {
   clearBareSpecifierCache();
   const lock = readFileSync(join(ROOT, "package-lock.json"), "utf8");
   const doc = JSON.parse(lock);
-  assert(doc.packages["node_modules/zod"], "zod is a direct dependency this pin can bump");
-  const bumped = JSON.parse(lock);
-  bumped.packages["node_modules/zod"] = {
-    ...bumped.packages["node_modules/zod"],
-    version: "3.25.0",
-    resolved: "https://registry.npmjs.org/zod/-/zod-3.25.0.tgz",
-    integrity: "sha512-lezl0-fixture",
-  };
+  assert(doc.packages["node_modules/zod"], "zod is a direct dependency this pin can change");
 
-  // The index finds REAL importers of a bare specifier. This is the half the reverse graph cannot
-  // supply: it records only relative edges, so without this index a package bump resolves to nothing
-  // and the closure would be a fiction.
+  // Round 3: a real npm bump moves the tarball hash, so it is FULL. The declaration change below is
+  // the shape a subset can still certify, and it exercises exactly the same real-tree machinery: the
+  // bare-specifier index for the half the reverse graph cannot supply (it records only relative edges).
+  const declared = JSON.parse(lock);
+  declared.packages[""].dependencies = { ...declared.packages[""].dependencies, zod: "^3.24.1" };
+
   const importers = packageImporters(["zod"]);
   assert(importers.zod.length > 0, "zod is imported by repo source");
   assert(
@@ -798,7 +852,7 @@ Deno.test("lezl0: a real package bump resolves real repo importers through the b
     `expected extension/lib/agent.js among ${importers.zod.slice(0, 5).join(", ")}`,
   );
   assert(bareSpecifierIndex().size > 0, "the index is populated from the tree");
-  // A package nobody imports is not attributed, so the fail-open rule (guard only) stays honest.
+  // A package nobody imports is not attributed.
   const unattributed = packageImporters(["@levl0/never-imported"]);
   assertEquals(unattributed["@levl0/never-imported"], [], "a package nobody imports has no importer");
 
@@ -811,11 +865,11 @@ Deno.test("lezl0: a real package bump resolves real repo importers through the b
   const plan = planLockfileDelta(["package-lock.json"], {
     mergeBase: "cafebabe",
     readBase: () => lock,
-    readTip: () => JSON.stringify(bumped),
+    readTip: () => JSON.stringify(declared),
     reverse,
     coreSuites: CORE,
   });
-  assertEquals(plan!.verdict.packages, ["zod"]);
+  assertEquals(plan!.verdict.packages, ["zod"], "the declaration names the package");
   assert(plan!.verdict.importers.zod.length > 0, "the real closure is resolved");
   for (const guard of DEPENDENCY_LOCK_GUARDS) assert(plan!.mapped[0].tests.includes(guard), `${guard} is selected`);
   assert(
@@ -826,4 +880,22 @@ Deno.test("lezl0: a real package bump resolves real repo importers through the b
     assert(existsSync(join(ROOT, suite)), `${suite} is a real suite`);
     assert(suite.endsWith(".test.ts"), `${suite} is a test file`);
   }
+
+  // And the bump that moves the pin is FULL against the REAL lock, not just in a fixture.
+  const bumped = JSON.parse(lock);
+  bumped.packages["node_modules/zod"] = {
+    ...bumped.packages["node_modules/zod"],
+    version: "3.25.0",
+    resolved: "https://registry.npmjs.org/zod/-/zod-3.25.0.tgz",
+    integrity: "sha512-lezl0-fixture",
+  };
+  const refused = planLockfileDelta(["package-lock.json"], {
+    mergeBase: "cafebabe",
+    readBase: () => lock,
+    readTip: () => JSON.stringify(bumped),
+    reverse,
+    coreSuites: CORE,
+  });
+  assertEquals(refused!.mapped, [], "a real bump reaches no subset on the real tree");
+  assertStringIncludes(refused!.unmappable[0].mechanism, "integrity/hash-only");
 });

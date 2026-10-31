@@ -386,13 +386,11 @@ function packageLockShape(base, tip) {
     const name = packageNameFromLockPath(key);
     if (name) {
       names.add(name);
-      // Same version, same edges, only the integrity hash moved -> bytes-only (review round 2:
-      // the reviewer's own counterexample was exactly this, on node_modules/zod).
-      const restBefore = { ...b };
-      const restAfter = { ...t };
-      delete restBefore.integrity;
-      delete restAfter.integrity;
-      if (sameJson(restBefore, restAfter)) bytesOnly.add(name);
+      // Review round 3: the predicate is "the integrity VALUE changed", not "everything except
+      // integrity is equal". A version bump moves the resolved tarball and therefore its hash in the
+      // same commit, and that hash is just as unverified as a bare re-pin — nothing in this repo
+      // checks lockfile bytes without an install. So a mixed version+hash change is FULL too.
+      if (b?.integrity !== t?.integrity) bytesOnly.add(name);
     } else unrecognised.push(`package-lock.json: package entry '${key}' changed and no package name could be read from it`);
   }
   return { names, bytesOnly, unrecognised };
@@ -463,14 +461,15 @@ function denoLockShape(base, tip) {
     const b = npmBefore[key];
     const t = npmAfter[key];
     if (sameJson(b, t)) continue;
-    let hashOnly = false;
+    // Review round 3: "any changed integrity value", including when a version moved with it — the
+    // stripped-equality test missed exactly that case.
+    const hashOnly = Boolean(b && t) && b.integrity !== t.integrity;
     if (b && t) {
       const restBefore = { ...b };
       const restAfter = { ...t };
       delete restBefore.integrity;
       delete restAfter.integrity;
-      hashOnly = sameJson(restBefore, restAfter);
-      if (!hashOnly) integrityOnly = false;
+      if (!sameJson(restBefore, restAfter)) integrityOnly = false;
     } else {
       integrityOnly = false;
     }
@@ -521,14 +520,16 @@ function denoLockShape(base, tip) {
   const jsrAfter = tip.jsr ?? {};
   for (const key of new Set([...Object.keys(jsrBefore), ...Object.keys(jsrAfter)])) {
     if (sameJson(jsrBefore[key], jsrAfter[key])) continue;
-    let hashOnly = false;
+    // Review round 3: any changed integrity value, including alongside a version change (jsr entries
+    // carry the same unverified-pin problem as npm ones).
+    const hashOnly = Boolean(jsrBefore[key] && jsrAfter[key]) &&
+      jsrBefore[key].integrity !== jsrAfter[key].integrity;
     if (jsrBefore[key] && jsrAfter[key]) {
       const restBefore = { ...jsrBefore[key] };
       const restAfter = { ...jsrAfter[key] };
       delete restBefore.integrity;
       delete restAfter.integrity;
-      hashOnly = sameJson(restBefore, restAfter);
-      if (!hashOnly) integrityOnly = false;
+      if (!sameJson(restBefore, restAfter)) integrityOnly = false;
     } else {
       integrityOnly = false;
     }
