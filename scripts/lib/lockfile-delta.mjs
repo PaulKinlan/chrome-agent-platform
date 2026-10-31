@@ -133,6 +133,10 @@ export const DECLARED_PIN_READERS = Object.freeze({
   "ip-address": Object.freeze(["tests/security-dependency-locks.test.ts"]),
   "proxy-addr": Object.freeze(["tests/security-dependency-locks.test.ts"]),
   undici: Object.freeze(["tests/security-dependency-locks.test.ts"]),
+  // e7lsv landed this advisory row on main while the branch was in review (body-parser
+  // GHSA-27r3-jxmh-p828, floor 2.4.0). The drift pin derives this table from the readers' patch-table
+  // rows, so a new row and its declaration travel together.
+  "body-parser": Object.freeze(["tests/security-dependency-locks.test.ts"]),
   "@modelcontextprotocol/sdk": Object.freeze(["tests/bundle-budget.test.ts"]),
 });
 
