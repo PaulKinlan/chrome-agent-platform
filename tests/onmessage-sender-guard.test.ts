@@ -3,15 +3,14 @@
 //
 // Invariants guarded:
 //   1. Every `chrome.runtime.onMessage.addListener` call in extension/ must accept a `sender` parameter
-//      and reference/validate it in its body, or be explicitly allowlisted with a documented reason.
-//      A rejecting conditional counts as validation ONLY when its test PROVABLY depends
-//      on an SW-discriminating property (tab / documentId / url) via exhaustive truth-table
-//      evaluation: per THREAT_MODEL.md INV-15, an extension-ID-only (or origin/frameId-only)
-//      check establishes nothing because same-extension documents and content scripts share
-//      sender.id, and a discriminating property MENTIONED in a dead or short-circuited
-//      clause (&& false / || true) establishes nothing either (chrome-agent-platform-69bvp).
-//   2. Falsification tests verify that un-checked, ignored (_sender), single-param, and
-//      id-only-checking listeners fail RED.
+//      and validate it by CALLING the vetted production predicate (isTrustedServiceWorkerSender or
+//      its exported aliases), resolved through the file's import bindings — or be listed in
+//      ALLOWLISTED_SITES with a one-line justification naming what checks the sender instead.
+//      Inline sender checks, however correct, never count (69bvp round-3 re-scope: sound by
+//      construction, not by dataflow proof).
+//   2. Falsification tests verify that un-checked, ignored (_sender), single-param,
+//      id-only-checking, and inline-checked listeners fail RED, and that predicate credit
+//      requires an actual import binding to the vetted module (name alone does not count).
 //   3. Behavioral tests verify that execution hosts reject untrusted senders (tabs, content scripts, foreign IDs).
 //   4. docs/SW-DISPATCH-AUTHORITY-CENSUS.md documents all non-dispatcher listeners and their sender predicates.
 //   5. The inventory resolves simple aliases of chrome.runtime / its onMessage event object
@@ -75,258 +74,32 @@ interface ListenerSite {
   reason?: string;
 }
 
-// Function-boundary nodes: an uncalled nested function never runs on the
-// listener's own execution path, so checks inside it cannot gate the listener.
-const FUNCTION_NODE_TYPES = new Set(["FunctionDeclaration", "FunctionExpression", "ArrowFunctionExpression"]);
+// VETTED BINDINGS (69bvp re-scope after the round-3 FAIL): the guard no longer
+// infers rejection semantics from arbitrary code shape - four rounds of
+// counterexamples (dead && clauses, uncalled nested functions, identity
+// self-comparisons) proved that approach unsound. The rule is now sound BY
+// CONSTRUCTION: a listener's sender check must be a CALL to the vetted
+// production predicate, resolved through the file's import bindings, or the
+// site must carry an explicit ALLOWLISTED_SITES entry with a justification.
+const VETTED_PREDICATE_SOURCES: Record<string, Set<string>> = {
+  "extension/lib/pure.js": new Set(["isTrustedServiceWorkerSender", "isTrustedWasmStreamSender"]),
+  "extension/lib/wasm-stream-host.js": new Set(["isTrustedWasmStreamSender"]),
+};
 
-// Like walkAst but does NOT descend into nested function bodies (the node
-// itself is visited; its children are not). Used by isAuthenticatingSender so
-// a check inside an uncalled inner function is not credited (69bvp round-2).
-function walkOwnPath(node: any, visitor: (n: any) => void) {
-  if (!node || typeof node !== "object") return;
-  visitor(node);
-  for (const key of Object.keys(node)) {
-    if (key === "parent") continue;
-    const child = node[key];
-    const visitChild = (item: any) => {
-      if (item && typeof item === "object" && typeof item.type === "string") {
-        if (FUNCTION_NODE_TYPES.has(item.type)) {
-          visitor(item); // visit the boundary node, do not descend
-        } else {
-          walkOwnPath(item, visitor);
-        }
-      }
-    };
-    if (Array.isArray(child)) {
-      for (const item of child) visitChild(item);
-    } else {
-      visitChild(child);
-    }
-  }
-}
-
-function isAuthenticatingSender(body: any, senderName: string): boolean {
-  const KNOWN_PREDICATES = new Set([
-    "isTrustedServiceWorkerSender",
-    "isTrustedWasmStreamSender",
-    "isTrustedTableWorkerSender",
-    "authorizeToolReport",
-    "handleScriptRunMessage",
-  ]);
-  // INV-15 (THREAT_MODEL.md): an extension ID alone does not establish the SW
-  // principal — same-extension documents and content scripts share sender.id.
-  // A rejecting conditional only counts as authenticating the service worker
-  // when its test PROVABLY DEPENDS on a property that discriminates the SW from
-  // same-extension callers: tab/documentId absence or the SW bundle URL.
-  // id/origin/frameId-only checks establish nothing (chrome-agent-platform-69bvp),
-  // and neither does a discriminating property MENTIONED in a dead or
-  // short-circuited clause (&& false / || true) — proven by exhaustive
-  // truth-table evaluation of the test over its atoms (69bvp re-review).
-  const SW_DISCRIMINATING_PROPERTIES = new Set(["tab", "documentId", "url"]);
-
-  const stableKey = (node: any): string =>
-    JSON.stringify(node, (k, v) => (k === "parent" || k === "loc" || k === "start" || k === "end" ? undefined : v));
-
-  const senderPropsOf = (node: any): string[] => {
-    const props = new Set<string>();
-    walkAst(node, (sub) => {
-      if (sub.type === "MemberExpression" && sub.object?.type === "Identifier" && sub.object.name === senderName) {
-        const p = sub.property?.name || sub.property?.value;
-        if (typeof p === "string") props.add(p);
-      }
-    });
-    return [...props];
-  };
-
-  // Constant-fold sub-expressions that do not reference the sender.
-  const tryConstEval = (node: any): { ok: boolean; value?: any } => {
-    try {
-      switch (node?.type) {
-        case "Literal":
-          return { ok: true, value: node.value };
-        case "ChainExpression":
-          return tryConstEval(node.expression);
-        case "UnaryExpression": {
-          const a = tryConstEval(node.argument);
-          if (!a.ok) return { ok: false };
-          switch (node.operator) {
-            case "!": return { ok: true, value: !a.value };
-            case "-": return { ok: true, value: -a.value };
-            case "+": return { ok: true, value: +a.value };
-            case "~": return { ok: true, value: ~a.value };
-            case "void": return { ok: true, value: undefined };
-            case "typeof": return { ok: true, value: typeof a.value };
-            default: return { ok: false };
-          }
-        }
-        case "BinaryExpression": {
-          // Identity comparisons on the SAME operand (x === x, x != x, ...) fold
-          // to a constant even when x references the sender: sender.tab !=
-          // sender.tab can never be true, so it must not become a freely
-          // flippable atom that fakes discriminating dependence (69bvp round-2).
-          if (stableKey(node.left) === stableKey(node.right)) {
-            switch (node.operator) {
-              case "===": case "==": case "<=": case ">=": return { ok: true, value: true };
-              case "!==": case "!=": case "<": case ">": return { ok: true, value: false };
-              default: return { ok: false };
-            }
-          }
-          const l = tryConstEval(node.left);
-          const r = tryConstEval(node.right);
-          if (!l.ok || !r.ok) return { ok: false };
-          switch (node.operator) {
-            case "===": return { ok: true, value: l.value === r.value };
-            case "!==": return { ok: true, value: l.value !== r.value };
-            case "==": return { ok: true, value: l.value == r.value };
-            case "!=": return { ok: true, value: l.value != r.value };
-            case "<": return { ok: true, value: l.value < r.value };
-            case "<=": return { ok: true, value: l.value <= r.value };
-            case ">": return { ok: true, value: l.value > r.value };
-            case ">=": return { ok: true, value: l.value >= r.value };
-            case "+": return { ok: true, value: l.value + r.value };
-            case "-": return { ok: true, value: l.value - r.value };
-            case "*": return { ok: true, value: l.value * r.value };
-            case "/": return { ok: true, value: l.value / r.value };
-            case "%": return { ok: true, value: l.value % r.value };
-            default: return { ok: false };
-          }
-        }
-        case "LogicalExpression": {
-          const l = tryConstEval(node.left);
-          if (!l.ok) return { ok: false };
-          if (node.operator === "||") return l.value ? l : tryConstEval(node.right);
-          if (node.operator === "&&") return l.value ? tryConstEval(node.right) : l;
-          if (node.operator === "??") return l.value ?? tryConstEval(node.right);
-          return { ok: false };
-        }
-        case "ConditionalExpression": {
-          const t = tryConstEval(node.test);
-          if (!t.ok) return { ok: false };
-          return tryConstEval(t.value ? node.consequent : node.alternate);
-        }
-        default:
-          return { ok: false };
-      }
-    } catch {
-      return { ok: false };
-    }
-  };
-
-  // Prove that the test's outcome DEPENDS on an SW-discriminating sender
-  // property: split the test into atoms at the transparent boolean structure
-  // (||, &&, ??, !, ternary, chain), constant-fold what does not reference the
-  // sender, then exhaustively evaluate the truth table. A discriminating atom
-  // whose value never changes the result is dead — exactly the
-  // `sender.id !== id || (sender.tab != null && false)` counterexample from the
-  // 69bvp re-review. Fail closed (false) when unprovable.
-  const proveDiscriminatingDependence = (test: any): boolean => {
-    try {
-      const atomNodes: any[] = [];
-      const atomIndex = new Map<string, number>();
-      const register = (node: any): number => {
-        const key = stableKey(node);
-        let idx = atomIndex.get(key);
-        if (idx === undefined) {
-          idx = atomNodes.length;
-          atomIndex.set(key, idx);
-          atomNodes.push(node);
-        }
-        return idx;
-      };
-      const collect = (node: any): void => {
-        switch (node.type) {
-          case "LogicalExpression":
-            collect(node.left);
-            collect(node.right);
-            return;
-          case "ChainExpression":
-            collect(node.expression);
-            return;
-          case "UnaryExpression":
-            if (node.operator === "!") { collect(node.argument); return; }
-            break;
-          case "ConditionalExpression":
-            collect(node.test);
-            collect(node.consequent);
-            collect(node.alternate);
-            return;
-        }
-        // Constant-foldable (incl. identity comparisons) => not an atom.
-        if (!tryConstEval(node).ok) register(node);
-      };
-      collect(test);
-
-      const n = atomNodes.length;
-      if (n === 0 || n > 10) return false; // constant test, or too complex to prove: fail closed
-
-      const evalWith = (node: any, values: boolean[]): any => {
-        switch (node.type) {
-          case "LogicalExpression": {
-            const l = evalWith(node.left, values);
-            if (node.operator === "||") return l ? l : evalWith(node.right, values);
-            if (node.operator === "&&") return l ? evalWith(node.right, values) : l;
-            return l ?? evalWith(node.right, values);
-          }
-          case "ChainExpression":
-            return evalWith(node.expression, values);
-          case "UnaryExpression":
-            if (node.operator === "!") return !evalWith(node.argument, values);
-            break;
-          case "ConditionalExpression":
-            return evalWith(node.test, values) ? evalWith(node.consequent, values) : evalWith(node.alternate, values);
-        }
-        const c = tryConstEval(node);
-        if (c.ok) return c.value;
-        return values[register(node)];
-      };
-
-      const rows = 1 << n;
-      const results: boolean[] = new Array(rows);
-      for (let mask = 0; mask < rows; mask++) {
-        const values = atomNodes.map((_, i) => Boolean((mask >> i) & 1));
-        results[mask] = Boolean(evalWith(test, values));
-      }
-      for (let i = 0; i < n; i++) {
-        if (!senderPropsOf(atomNodes[i]).some((p) => SW_DISCRIMINATING_PROPERTIES.has(p))) continue;
-        for (let mask = 0; mask < rows; mask++) {
-          if (results[mask] !== results[mask ^ (1 << i)]) return true; // live dependence on a discriminating property
-        }
-      }
-      return false;
-    } catch {
-      return false; // fail closed
-    }
-  };
-
+function isAuthenticatingSender(
+  body: any,
+  senderName: string,
+  imports: Map<string, { path: string; imported: string }>,
+): boolean {
   let validated = false;
-  // Bound the proof to the listener's OWN execution path: checks inside nested
-  // (possibly uncalled) function bodies do not gate the listener (69bvp round-2).
-  walkOwnPath(body, (sub) => {
-    // 1. Passed to a recognized sender authentication helper/predicate
-    if (sub.type === "CallExpression") {
-      const callee = sub.callee;
-      const name = callee.name || (callee.property && callee.property.name);
-      if (KNOWN_PREDICATES.has(name)) {
-        if (sub.arguments.some((arg: any) => arg.type === "Identifier" && arg.name === senderName)) {
-          validated = true;
-        }
-      }
-    }
-    // 2. Rejecting conditional check: IfStatement whose test PROVABLY depends on
-    // an SW-discriminating sender property (tab/documentId/url), and whose
-    // consequent returns or throws. Dead or short-circuited clauses do not count.
-    if (sub.type === "IfStatement") {
-      if (proveDiscriminatingDependence(sub.test)) {
-        let consequentRejects = false;
-        walkAst(sub.consequent, (cNode: any) => {
-          if (cNode.type === "ReturnStatement" || cNode.type === "ThrowStatement") {
-            consequentRejects = true;
-          }
-        });
-        if (consequentRejects) {
-          validated = true;
-        }
-      }
+  walkAst(body, (sub) => {
+    if (sub.type !== "CallExpression") return;
+    const callee = sub.callee;
+    if (callee?.type !== "Identifier") return;
+    const binding = imports.get(callee.name);
+    if (!binding || !VETTED_PREDICATE_SOURCES[binding.path]?.has(binding.imported)) return;
+    if (sub.arguments.some((arg: any) => arg.type === "Identifier" && arg.name === senderName)) {
+      validated = true;
     }
   });
   return validated;
@@ -356,6 +129,38 @@ function analyzeOnMessageListeners(code: string, filePath: string): ListenerSite
       (node.init?.type === "ArrowFunctionExpression" || node.init?.type === "FunctionExpression")
     ) {
       functions.set(node.id.name, node.init);
+    }
+  });
+
+  // Import bindings: local name -> resolved repo-relative source + imported
+  // name. The vetted-predicate rule resolves calls through this map.
+  const imports = new Map<string, { path: string; imported: string }>();
+  walkAst(ast, (node) => {
+    if (node.type !== "ImportDeclaration" || typeof node.source?.value !== "string") return;
+    const resolved = path
+      .relative(ROOT, path.resolve(path.dirname(filePath), node.source.value))
+      .split(path.sep)
+      .join("/");
+    for (const spec of node.specifiers ?? []) {
+      if (spec.type === "ImportSpecifier") {
+        imports.set(spec.local.name, { path: resolved, imported: spec.imported?.name ?? spec.local.name });
+      }
+    }
+  });
+  // Single-level const aliases of a vetted import are the same binding
+  // (e.g. wasm-stream-host.js: export const isTrustedWasmStreamSender =
+  // isTrustedServiceWorkerSender).
+  walkAst(ast, (node) => {
+    if (
+      node.type === "VariableDeclarator" &&
+      node.id?.type === "Identifier" &&
+      node.init?.type === "Identifier" &&
+      !imports.has(node.id.name)
+    ) {
+      const binding = imports.get(node.init.name);
+      if (binding && VETTED_PREDICATE_SOURCES[binding.path]?.has(binding.imported)) {
+        imports.set(node.id.name, binding);
+      }
     }
   });
 
@@ -491,7 +296,7 @@ function analyzeOnMessageListeners(code: string, filePath: string): ListenerSite
           const p2 = fn.params[1];
           if (p2.type === "Identifier" && !p2.name.startsWith("_")) {
             senderParamName = p2.name;
-            checksSender = isAuthenticatingSender(fn.body, senderParamName);
+            checksSender = isAuthenticatingSender(fn.body, senderParamName, imports);
           }
         }
 
@@ -513,8 +318,35 @@ function analyzeOnMessageListeners(code: string, filePath: string): ListenerSite
   return sites;
 }
 
-// Allowlist for any listener that is intentionally un-gated (currently EMPTY because all 17 sites validate sender)
-const ALLOWLISTED_SITES = new Map<string, string>();
+// Allowlist for listeners that are intentionally gated by something OTHER than
+// a direct vetted-predicate call (69bvp re-scope: the ONLY alternative the
+// inventory accepts). Every entry must name what checks the sender instead.
+const ALLOWLISTED_SITES = new Map<string, string>([
+  [
+    "extension/background/service-worker.js:13361",
+    "central dispatcher: accepts page/content-script senders BY DESIGN; sender classified by authorizeToolReport (lib/pure.js:912) and route authority enforced per-route (Layers 1-3)",
+  ],
+  [
+    "extension/content/content-script.js:376",
+    "content script receiving SW pushes: inline !sender || sender.id !== runtime.id || sender.tab != null rejects foreign and tab senders; pinned by the behavioral content-script test below",
+  ],
+  [
+    "extension/content/webmcp-detect-relay.js:97",
+    "same SW-push guard shape as content-script.js:376: inline id-match + tab-absence; relay only, no execution authority",
+  ],
+  [
+    "extension/lib/table-worker-host.js:152",
+    "isTrustedTableWorkerSender (:141) is a local byte-equivalent copy of the SW predicate (id + tab/documentId absence + SW bundle URL); dedup-with-pure.js candidate",
+  ],
+  [
+    "extension/ntp/ntp.js:6409",
+    "delegates sender validation to handleScriptRunMessage (lib/script-host.js:184), which enforces isTrustedServiceWorkerSender before any script run",
+  ],
+  [
+    "extension/offscreen/offscreen.js:24",
+    "delegates sender validation to handleScriptRunMessage (lib/script-host.js:184), which enforces isTrustedServiceWorkerSender before any script run",
+  ],
+]);
 
 Deno.test("guard: all extension/ runtime.onMessage listeners accept and check sender", () => {
   const jsFiles = walkJsFiles(EXTENSION_DIR);
@@ -552,6 +384,16 @@ Deno.test("guard: all extension/ runtime.onMessage listeners accept and check se
     [],
     `Found un-gated onMessage.addListener calls missing sender validation:\n${violations.join("\n")}`,
   );
+
+  // Allowlist hygiene: every entry must correspond to a real scanned site —
+  // a stale entry silently suppresses nothing and hides a moved listener.
+  const siteKeys = new Set(allSites.map((s) => `${s.relPath}:${s.line}`));
+  const staleEntries = [...ALLOWLISTED_SITES.keys()].filter((k) => !siteKeys.has(k));
+  assertEquals(
+    staleEntries,
+    [],
+    `stale ALLOWLISTED_SITES entries (no listener found at that site):\n${staleEntries.join("\n")}`,
+  );
 });
 
 Deno.test("guard falsification: detects un-gated, ignored, or missing sender listeners", () => {
@@ -583,6 +425,7 @@ Deno.test("guard falsification: detects un-gated, ignored, or missing sender lis
   assertEquals(sites3[0].checksSender, false);
 
   const probeCheckedSender = `
+    import { isTrustedServiceWorkerSender } from "./lib/pure.js";
     chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (!isTrustedServiceWorkerSender(sender)) return false;
       sendResponse({ ok: true });
@@ -672,6 +515,8 @@ Deno.test("guard falsification: detects un-gated, ignored, or missing sender lis
 
   // Positive pins: a rejecting conditional that ALSO excludes same-extension
   // tabs/documents (tab/documentId) or pins the SW bundle URL DOES count.
+  // 69bvp round-3 re-scope: inline checks NEVER count, however correct - the
+  // only credits are a vetted-predicate call or an allowlist entry.
   const probeIdAndTabCheck = `
     chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (!sender || sender.id !== chrome.runtime.id || sender.tab != null) return false;
@@ -681,7 +526,7 @@ Deno.test("guard falsification: detects un-gated, ignored, or missing sender lis
   `;
   const sites12 = analyzeOnMessageListeners(probeIdAndTabCheck, "extension/test-probe12.js");
   assertEquals(sites12.length, 1);
-  assertEquals(sites12[0].checksSender, true, "id + tab-absence rejecting check must count as SW authentication");
+  assertEquals(sites12[0].checksSender, false, "even a correct inline id+tab check no longer counts - vetted predicate or allowlist only");
 
   const probeSwBundleUrlCheck = `
     chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -692,7 +537,7 @@ Deno.test("guard falsification: detects un-gated, ignored, or missing sender lis
   `;
   const sites13 = analyzeOnMessageListeners(probeSwBundleUrlCheck, "extension/test-probe13.js");
   assertEquals(sites13.length, 1);
-  assertEquals(sites13[0].checksSender, true, "SW bundle URL rejecting check must count as SW authentication");
+  assertEquals(sites13[0].checksSender, false, "even a correct inline SW-bundle-URL check no longer counts - vetted predicate or allowlist only");
 
   // 69bvp re-review (gpt-6-sol): a property MENTION in a dead or short-circuited
   // clause does not establish rejection — the discriminating property must be in a
@@ -747,7 +592,12 @@ Deno.test("guard falsification: detects un-gated, ignored, or missing sender lis
 
   // Same boundary for the recognized-predicate branch: a predicate call inside
   // an uncalled nested function does not gate the listener.
+  // ACCEPTED LIMITATION (viiaq retired by the round-3 re-scope): credit is
+  // binding-level, not execution-path - an IMPORTED vetted-predicate call is
+  // credited even inside an uncalled nested function. Pinned so the acceptance
+  // is explicit, not silent.
   const probeNestedPredicateCall = `
+    import { isTrustedServiceWorkerSender } from "./lib/pure.js";
     chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       function unusedHelper() { return isTrustedServiceWorkerSender(sender); }
       sendResponse({ ok: true });
@@ -755,7 +605,7 @@ Deno.test("guard falsification: detects un-gated, ignored, or missing sender lis
   `;
   const sites18 = analyzeOnMessageListeners(probeNestedPredicateCall, "extension/test-probe18.js");
   assertEquals(sites18.length, 1);
-  assertEquals(sites18[0].checksSender, false, "a predicate call inside an uncalled nested function does not gate the listener");
+  assertEquals(sites18[0].checksSender, true, "binding-level credit: imported vetted call counts even off the execution path (accepted, viiaq retired)");
 
   // Self-comparison is an identity contradiction: sender.tab != sender.tab can
   // never be true, so it cannot reject non-SW callers and must not be credited
@@ -771,7 +621,8 @@ Deno.test("guard falsification: detects un-gated, ignored, or missing sender lis
   assertEquals(sites19.length, 1);
   assertEquals(sites19[0].checksSender, false, "sender.tab != sender.tab is an identity contradiction, not a discriminating check");
 
-  // Positive pin: the discriminating check at the listener's OWN top level still counts.
+  // Positive pin REMOVED by the re-scope: even a correct top-level inline
+  // id+tab check fails - only the vetted predicate or an allowlist entry counts.
   const probeTopLevelTabCheck = `
     chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (sender.id !== chrome.runtime.id || sender.tab != null) return false;
@@ -781,7 +632,33 @@ Deno.test("guard falsification: detects un-gated, ignored, or missing sender lis
   `;
   const sites20 = analyzeOnMessageListeners(probeTopLevelTabCheck, "extension/test-probe20.js");
   assertEquals(sites20.length, 1);
-  assertEquals(sites20[0].checksSender, true, "id-mismatch OR tab-present at the listener top level must count");
+  assertEquals(sites20[0].checksSender, false, "inline checks never count under the re-scoped rule, even at the top level");
+
+  // The vetted predicate credited by NAME alone (no import binding) does not
+  // count: an ID-only local helper shadowing the name must not pass.
+  const probeUnboundPredicateName = `
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      if (!isTrustedServiceWorkerSender(sender)) return false;
+      sendResponse({ ok: true });
+      return true;
+    });
+  `;
+  const sites21 = analyzeOnMessageListeners(probeUnboundPredicateName, "extension/test-probe21.js");
+  assertEquals(sites21.length, 1);
+  assertEquals(sites21[0].checksSender, false, "an unbound predicate NAME (no import) must not be credited");
+
+  // A NON-vetted export imported from the same module does not count.
+  const probeNonVettedImport = `
+    import { redactSecrets } from "./lib/pure.js";
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      if (!redactSecrets(sender)) return false;
+      sendResponse({ ok: true });
+      return true;
+    });
+  `;
+  const sites22 = analyzeOnMessageListeners(probeNonVettedImport, "extension/test-probe22.js");
+  assertEquals(sites22.length, 1);
+  assertEquals(sites22[0].checksSender, false, "a non-vetted import from pure.js must not be credited");
 });
 
 Deno.test("behavioral: isTrustedServiceWorkerSender enforces SW bundle path and rejects documents/tabs", () => {
@@ -828,6 +705,7 @@ Deno.test("inventory falsification: aliased onMessage registrations are caught, 
 
   // Aliased registration WITH the vetted predicate is enumerated and counts as gated.
   const probeAliasedChecked = `
+    import { isTrustedServiceWorkerSender } from "./lib/pure.js";
     const event = chrome.runtime.onMessage;
     event.addListener((message, sender, sendResponse) => {
       if (!isTrustedServiceWorkerSender(sender)) return false;
@@ -841,6 +719,7 @@ Deno.test("inventory falsification: aliased onMessage registrations are caught, 
 
   // Destructured alias of the event object.
   const probeDestructured = `
+    import { isTrustedServiceWorkerSender } from "./lib/pure.js";
     const { onMessage } = chrome.runtime;
     onMessage.addListener((message, sender, sendResponse) => {
       if (!isTrustedServiceWorkerSender(sender)) return false;
@@ -896,6 +775,7 @@ Deno.test("inventory falsification: aliased onMessage registrations are caught, 
 
   // Existence guards on the runtime event object are benign and must not fail closed.
   const probeExistenceGuard = `
+    import { isTrustedServiceWorkerSender } from "./lib/pure.js";
     function register(runtime) {
       if (!runtime?.onMessage) return;
       runtime.onMessage.addListener((message, sender, sendResponse) => {
