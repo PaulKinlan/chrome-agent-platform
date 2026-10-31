@@ -8,7 +8,6 @@
 // (coord, 2026-10-14: producer-first sequencing).
 import { assert, assertEquals, assertThrows } from "jsr:@std/assert@1";
 import {
-  LOCKFILE_DELTA_PREFIX,
   BUILD_GATE_DEFERRAL_SUFFIX,
   GATE_MANIFEST_PREFIX,
   GATE_UNKNOWN_PREFIX,
@@ -68,19 +67,24 @@ Deno.test("lezl0 ledger: lockfile-delta lines are emitted first, prefixed, and a
     selected: ["tests/a.test.ts"],
     certifiable: true,
   };
+  // Deliberately the LITERAL prefix, not the module's export: this pin must red on the PARENT tree for
+  // the behavioural reason (a lockfile delta gets no certification line there at all), and an import
+  // error would be the wrong cause. The constant is pinned against this literal in
+  // tests/lockfile-delta.test.ts, so drift is caught from the other side.
+  const PREFIX = "lockfile-delta: ";
   const written: string[] = [];
   const lines = emitGateLedger({
     manifest,
     lockfileDelta: [
-      `${LOCKFILE_DELTA_PREFIX}zod -> importers: extension/lib/agent.js -> suites: tests/a.test.ts`,
-      "plain text without the prefix is still written with it",
+      "zod -> importers: extension/lib/agent.js -> suites: tests/a.test.ts",
+      "plain text is still written, with the prefix",
       "  ",
       "",
     ],
     log: (line: string) => written.push(line),
   });
-  assertEquals(lines[0], `${LOCKFILE_DELTA_PREFIX}zod -> importers: extension/lib/agent.js -> suites: tests/a.test.ts`);
-  assertEquals(lines[1], `${LOCKFILE_DELTA_PREFIX}plain text without the prefix is still written with it`);
+  assertEquals(lines[0], `${PREFIX}zod -> importers: extension/lib/agent.js -> suites: tests/a.test.ts`);
+  assertEquals(lines[1], `${PREFIX}plain text is still written, with the prefix`);
   assertEquals(lines.filter((line: string) => line.trim() === ""), [], "blank entries are never written");
   const manifestLine = lines.at(-1);
   assert(manifestLine.startsWith(GATE_MANIFEST_PREFIX), "the manifest line stays last");
@@ -90,7 +94,7 @@ Deno.test("lezl0 ledger: lockfile-delta lines are emitted first, prefixed, and a
   const plain: string[] = [];
   emitGateLedger({ manifest, log: (line: string) => plain.push(line) });
   assertEquals(plain.length, 1);
-  assert(!plain.some((line: string) => line.startsWith(LOCKFILE_DELTA_PREFIX)));
+  assert(!plain.some((line: string) => line.startsWith(PREFIX)));
 });
 
 Deno.test("0eq00 ledger: executed>0 with no suites is REFUSED, never written as unreadable green", () => {

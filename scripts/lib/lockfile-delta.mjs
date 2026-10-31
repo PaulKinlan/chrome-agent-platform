@@ -32,13 +32,16 @@
 //      graph reaches it). `version_name` is part of the counter: scripts/bump-version.mjs writes both
 //      fields on every landing.
 //
-//   2. ONLY HASHES MOVED (deno.lock "integrity-only": resolved versions and dependency edges are
-//      unchanged). This is NOT a free pass, and review round 1 (finding 3) was right to say so: a
-//      same-version/different-hash entry still needs something that reads the new bytes. So the entry
-//      is NAMED like any other change and must satisfy the same three-way inspection rule as class 3
-//      below (importer, transitive dependent, or a declared reader whose table asserts that entry).
-//      (The build tier's content key also invalidates on ANY lockfile byte, so "the build ran over the
-//      refetched bytes" is proven there — but a subset gate may not lean on that.)
+//   2. ONLY HASHES MOVED (integrity-only: resolved versions and dependency edges unchanged; npm, JSR
+//      or a remote URL re-pin). NOT CERTIFIABLE BY A SUBSET — coord's ruling on review round 2, and the
+//      reviewer's counterexample proves it: change packages["node_modules/zod"].integrity to a
+//      different hash at the same version and every reader still passes, because a reader compares
+//      VERSIONS, integrity PRESENCE and advisory FLOORS, and never recomputes a hash value. No suite in
+//      this repo runs `npm ci`, and deno.runner.jsonc sets "lock": false, so nothing verifies the bytes
+//      of a lockfile without an install (adding one to the gate is out of scope for this bead). A
+//      bytes-only delta therefore joins parse-level ambiguity: `kind: "full"`, naming the entries.
+//      (The build tier's content key does invalidate on any lockfile byte, so the build re-reads them —
+//      but a subset gate may not lean on that.)
 //
 //   3. A PACKAGE SET CHANGED — and every changed entry must be INSPECTED by a suite in the selection.
 //      This is the module's whole safety rule, and it is where review round 1 (gpt-6-sol) failed the
@@ -56,11 +59,18 @@
 //            tests/security-dependency-locks.test.ts (fast-uri advisory ledger; hono, ip-address,
 //            proxy-addr, undici patch table) and tests/bundle-budget.test.ts (fast-uri and
 //            @modelcontextprotocol/sdk lock->shipped drift) actually assert.
+//      (c) is bounded by what those tables actually assert: a VERSION (an advisory floor, or the
+//      lock->shipped equality), never a hash VALUE. So (c) earns a version/declaration change and
+//      never a bytes-only one — which is exactly what class 2 refuses.
+//
 //      Anything else is `kind: "full"`, naming every entry nothing in the subset would look at.
 //
 //      REMOTE URLS AND REDIRECTS have no (b) and no (c) — no guard in this repo reads those sections —
 //      so they must resolve to a real importer or the delta is FULL. JSR ENTRIES have no (c) for the
 //      same reason, but they DO have (a) and (b): the std libraries are imported across the suite graph.
+//
+// THE BOUNDARY, in one line, so it is not re-derived wrongly: SUBSET for attributable
+// version/declaration changes; FULL for bytes-only changes and for any ambiguity. Nothing else.
 //
 //   4. ANYTHING ELSE — a manifest delta beyond the version counter (permissions, CSP,
 //      web_accessible_resources: the always-on manifest guard does not prove those), a package.json
@@ -341,6 +351,7 @@ function stripDeclaredMaps(entry = {}) {
  */
 function packageLockShape(base, tip) {
   const names = new Set();
+  const bytesOnly = new Set();
   const unrecognised = [];
   for (const key of changedKeys(base, tip)) {
     // `version` is the landing stamp (scripts/bump-version.mjs rewrites it on every landing).
@@ -366,10 +377,18 @@ function packageLockShape(base, tip) {
       continue;
     }
     const name = packageNameFromLockPath(key);
-    if (name) names.add(name);
-    else unrecognised.push(`package-lock.json: package entry '${key}' changed and no package name could be read from it`);
+    if (name) {
+      names.add(name);
+      // Same version, same edges, only the integrity hash moved -> bytes-only (review round 2:
+      // the reviewer's own counterexample was exactly this, on node_modules/zod).
+      const restBefore = { ...b };
+      const restAfter = { ...t };
+      delete restBefore.integrity;
+      delete restAfter.integrity;
+      if (sameJson(restBefore, restAfter)) bytesOnly.add(name);
+    } else unrecognised.push(`package-lock.json: package entry '${key}' changed and no package name could be read from it`);
   }
-  return { names, unrecognised };
+  return { names, bytesOnly, unrecognised };
 }
 
 /** The package set a package.json delta names (beyond the version stamp). */
@@ -414,6 +433,10 @@ function declaredDependencyName(declaration) {
 function denoLockShape(base, tip) {
   const resolved = new Set();
   const edgeRequired = new Set();
+  // Entries whose ONLY delta is an integrity/hash value (same version, same dependency edges).
+  // chrome-agent-platform-lezl0 review round 2 (coord's ruling): these are NOT subset-certifiable —
+  // see the refusal in classifyLockfileDelta.
+  const bytesOnly = new Set();
   const unrecognised = [];
   let integrityOnly = true;
 
@@ -433,12 +456,14 @@ function denoLockShape(base, tip) {
     const b = npmBefore[key];
     const t = npmAfter[key];
     if (sameJson(b, t)) continue;
+    let hashOnly = false;
     if (b && t) {
       const restBefore = { ...b };
       const restAfter = { ...t };
       delete restBefore.integrity;
       delete restAfter.integrity;
-      if (!sameJson(restBefore, restAfter)) integrityOnly = false;
+      hashOnly = sameJson(restBefore, restAfter);
+      if (!hashOnly) integrityOnly = false;
     } else {
       integrityOnly = false;
     }
@@ -448,7 +473,10 @@ function denoLockShape(base, tip) {
     // the delta is refused further down rather than certified on a guard that never reads the pin.
     // Key changes are named; a same-key dependency-edge change still names the package.
     const name = packageNameFromNpmKey(key);
-    if (name) resolved.add(name);
+    if (name) {
+      resolved.add(name);
+      if (hashOnly) bytesOnly.add(name);
+    }
     for (const dep of [...(b?.dependencies ?? []), ...(t?.dependencies ?? [])]) {
       const depName = packageNameFromSpecifier(dep);
       if (depName) resolved.add(depName);
@@ -469,6 +497,7 @@ function denoLockShape(base, tip) {
   for (const url of new Set([...Object.keys(base.remote ?? {}), ...Object.keys(tip.remote ?? {})])) {
     if ((base.remote ?? {})[url] === (tip.remote ?? {})[url]) continue;
     if (url in (base.remote ?? {}) !== url in (tip.remote ?? {})) integrityOnly = false;
+    else bytesOnly.add(url); // same key, new hash: a bytes-only re-pin
     edgeRequired.add(url);
   }
 
@@ -476,6 +505,7 @@ function denoLockShape(base, tip) {
   for (const url of new Set([...Object.keys(base.redirects ?? {}), ...Object.keys(tip.redirects ?? {})])) {
     if ((base.redirects ?? {})[url] === (tip.redirects ?? {})[url]) continue;
     if (url in (base.redirects ?? {}) !== url in (tip.redirects ?? {})) integrityOnly = false;
+    else bytesOnly.add(url);
     edgeRequired.add(url);
   }
 
@@ -484,20 +514,24 @@ function denoLockShape(base, tip) {
   const jsrAfter = tip.jsr ?? {};
   for (const key of new Set([...Object.keys(jsrBefore), ...Object.keys(jsrAfter)])) {
     if (sameJson(jsrBefore[key], jsrAfter[key])) continue;
+    let hashOnly = false;
     if (jsrBefore[key] && jsrAfter[key]) {
       const restBefore = { ...jsrBefore[key] };
       const restAfter = { ...jsrAfter[key] };
       delete restBefore.integrity;
       delete restAfter.integrity;
-      if (!sameJson(restBefore, restAfter)) integrityOnly = false;
+      hashOnly = sameJson(restBefore, restAfter);
+      if (!hashOnly) integrityOnly = false;
     } else {
       integrityOnly = false;
     }
     // Same rule as the npm section: a jsr hash-only change names the package, and because no guard in
     // this repo reads jsr entries the name must resolve to real importers (review round 1, finding 3).
     const name = packageNameFromNpmKey(key);
-    if (name) edgeRequired.add(name);
-    else unrecognised.push(`deno.lock: jsr entry '${key}' changed and no package name could be read from it`);
+    if (name) {
+      edgeRequired.add(name);
+      if (hashOnly) bytesOnly.add(name);
+    } else unrecognised.push(`deno.lock: jsr entry '${key}' changed and no package name could be read from it`);
   }
 
   // workspace: the declared dependency array, i.e. the same declarations as package.json.
@@ -527,7 +561,7 @@ function denoLockShape(base, tip) {
     }
   }
 
-  return { resolved, edgeRequired, unrecognised, integrityOnly };
+  return { resolved, edgeRequired, bytesOnly, unrecognised, integrityOnly };
 }
 
 // ── dependency-graph attribution ─────────────────────────────────────────────────────────────
@@ -647,6 +681,11 @@ export function classifyLockfileDelta(delta = {}, options = {}) {
   const edgeRequired = new Set();
   const unrecognised = [];
   let integrityOnly = false;
+  // Entries whose only delta is an integrity/hash value. Review round 2 (coord's ruling): a hash move
+  // is NOT certifiable by a subset — nothing in this repo verifies lockfile bytes without an install
+  // (deno.runner.jsonc sets "lock": false, and no suite runs `npm ci`), so a green subset would be a
+  // claim no suite backs. Bytes-only deltas therefore join parse-level ambiguity in the FULL suite.
+  const bytesOnly = new Set();
 
   if (parsed.packageLock || parsed.packageJson) {
     if (versionOnly.packageLock !== false && versionOnly.packageJson !== false) {
@@ -655,6 +694,7 @@ export function classifyLockfileDelta(delta = {}, options = {}) {
       if (parsed.packageLock) {
         const shape = packageLockShape(parsed.packageLock.base, parsed.packageLock.tip);
         for (const name of shape.names) resolved.add(name);
+        for (const name of shape.bytesOnly) bytesOnly.add(name);
         unrecognised.push(...shape.unrecognised);
       }
       if (parsed.packageJson) {
@@ -676,6 +716,7 @@ export function classifyLockfileDelta(delta = {}, options = {}) {
   if (parsed.denoLock && !versionOnly.denoLock) {
     const shape = denoLockShape(parsed.denoLock.base, parsed.denoLock.tip);
     for (const name of shape.resolved) resolved.add(name);
+    for (const name of shape.bytesOnly) bytesOnly.add(name);
     for (const name of shape.edgeRequired) edgeRequired.add(name);
     unrecognised.push(...shape.unrecognised);
     // `integrityOnly` is a FACT about the delta (only pin hashes moved), not a selection shortcut: the
@@ -696,6 +737,22 @@ export function classifyLockfileDelta(delta = {}, options = {}) {
   }
 
   if (unrecognised.length) return full(unrecognised.join("; "));
+
+  // 3b. THE BYTES-ONLY BOUNDARY (review round 2, coord's ruling). A changed hash is not a changed
+  //     version: every suite that reads these files compares versions, presence and advisory floors,
+  //     and none of them recomputes or checks a hash value. So a delta whose ONLY movement for an
+  //     entry is its integrity/hash value cannot be certified by a subset — the honest answer is the
+  //     full suite, which does run the install-dependent checks. This is stated, not implied: the
+  //     refusal names the entries, so nobody reads it as parse trouble.
+  if (bytesOnly.size) {
+    const named = [...bytesOnly].sort().join(", ");
+    return full(
+      `integrity/hash-only change(s) cannot be certified by a subset: ${named} — no suite verifies ` +
+        `lockfile bytes without an install (deno.runner.jsonc sets "lock": false; nothing runs npm ci), ` +
+        `so only the full suite covers it. Bump a version, or take the full run.`,
+      { unresolved: [...bytesOnly].sort() },
+    );
+  }
 
   // 4. A pure version stamp is certified by the always-on set alone (nothing about the dependency
   //    graph, the bundles or the guards moved).
