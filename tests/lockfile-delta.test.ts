@@ -187,16 +187,25 @@ Deno.test("lezl0: DECLARED_PIN_READERS matches what the readers actually assert 
   const locksSrc = readFileSync(join(ROOT, "tests/security-dependency-locks.test.ts"), "utf8");
   const budgetSrc = readFileSync(join(ROOT, "tests/bundle-budget.test.ts"), "utf8");
 
-  const patchedRows = [...locksSrc.matchAll(/\{\s*name:\s*"([^"]+)",\s*floor:/g)].map((m) => m[1]);
-  assert(patchedRows.length >= 4, `the behrd patch table must be found: ${patchedRows.join(", ")}`);
+  // Only the packages a reader READS BY EXACT LOCK KEY can verify a changed value; the advisory floor
+  // table is a bound (`atLeast(version, floor)`), so it must stay OUT of the declared set — that
+  // disjointness is asserted below rather than left to a comment.
   const lockPackages = [...locksSrc.matchAll(/packages\["node_modules\/([^"]+)"\]/g)].map((m) => m[1]);
   const budgetPackages = [...budgetSrc.matchAll(/packages\["node_modules\/([^"]+)"\]/g)].map((m) => m[1]);
+  const expected = [...new Set([...lockPackages, ...budgetPackages])].sort();
 
-  const expected = [...new Set([...patchedRows, ...lockPackages, ...budgetPackages])].sort();
+  const floorOnlyRows = [...locksSrc.matchAll(/\{\s*name:\s*"([^"]+)",\s*floor:/g)].map((m) => m[1]);
+  assert(floorOnlyRows.length >= 4, `the advisory floor table must be found: ${floorOnlyRows.join(", ")}`);
+  for (const name of floorOnlyRows) {
+    assert(
+      !(name in DECLARED_PIN_READERS),
+      `${name} is only floor-bounded, so a floor assertion cannot certify a change to it`,
+    );
+  }
   assertEquals(
     [...Object.keys(DECLARED_PIN_READERS)].sort(),
     expected,
-    "every entry a reader asserts is declared, and every declared entry is really asserted",
+    "every entry a reader reads by exact key is declared, and every declared entry is really read",
   );
   // Each declared suite must be a reader that ASKED about that package, not just any reader.
   for (const [name, readers] of Object.entries(DECLARED_PIN_READERS)) {
@@ -370,12 +379,13 @@ Deno.test("lezl0 ROUND 2: a VERSION bump stays on the fast path — attributable
   assertEquals(withImporters.kind, "subset", withImporters.reason);
   assert(withImporters.suites.includes("tests/closure.test.ts"));
 
+  // No importer, but a reader VERIFIES the entry (fast-uri: npm <-> deno equality + shipped drift).
   const pinsOnly = classifyLockfileDelta(
-    { denoLock: { base: denoLock(), tip: denoLock({ npm: { "undici@7.29.2": { integrity: "sha512-u2" } } }) } },
+    { denoLock: { base: denoLock(), tip: denoLock({ npm: { "fast-uri@3.1.6": { integrity: "sha512-f2" } } }) } },
     { coreSuites: CORE, closureFor: closureStub({}) },
   );
   assertEquals(pinsOnly.kind, "subset", pinsOnly.reason);
-  assertStringIncludes(pinsOnly.notes.join("\n"), "inspected by tests/security-dependency-locks.test.ts");
+  assertStringIncludes(pinsOnly.notes.join("\n"), "no importer");
 });
 
 Deno.test("lezl0: a deno.lock specifier change resolves the changed name to its importer closure", () => {
@@ -419,23 +429,34 @@ Deno.test("lezl0: a package.json DECLARATION change selects the declared name's 
   assertStringIncludes(refused.reason, "zod");
 });
 
-Deno.test("lezl0: an unattributed VERSION change is certified only by a declared reader that asserts it", () => {
-  // Review round 1, finding 2: the old blanket "no importer -> the guard certifies it" was not earned —
-  // the guard asserts its OWN tables. So an unattributed entry now needs a declared reader that names it.
-  // undici IS in the readers' tables (the behrd patch table, with a fix floor), @types/node is NOT.
-  const undici = classifyLockfileDelta(
-    { denoLock: { base: denoLock(), tip: denoLock({ npm: { "undici@7.29.1": { integrity: "sha512-u" } } }) } },
+Deno.test("lezl0 ROUND 2: an unattributed version change is certified only where a reader VERIFIES it", () => {
+  // Coord's standard: "the declared-pin fallback must require that a selected suite actually verifies
+  // the CHANGED pin, not merely that the package is declared." Measured against it, an advisory FLOOR
+  // (`atLeast(version, floor)`) bounds a version rather than verifying the one that changed, so a
+  // floor-only entry with no importer is FULL. fast-uri is the counter-case: its reader asserts
+  // npm <-> deno equality on version AND hash, and the bundle drift check asserts the shipped version.
+  const floorOnly = classifyLockfileDelta(
+    { denoLock: { base: denoLock(), tip: denoLock({ npm: { "undici@7.29.2": { integrity: "sha512-u2" } } }) } },
     { coreSuites: CORE, closureFor: closureStub({}) },
   );
-  assertEquals(undici.kind, "subset", "a table entry has a suite that asserts its version");
-  assertStringIncludes(undici.notes.join("\n"), "inspected by tests/security-dependency-locks.test.ts");
+  assertEquals(floorOnly.kind, "full", "an advisory floor is a bound, not verification of the change");
+  assertStringIncludes(floorOnly.reason, "undici");
 
-  const typesOnly = classifyLockfileDelta(
-    { denoLock: { base: denoLock(), tip: denoLock({ npm: { "@types/node@24.13.3": { integrity: "sha512-t" } } }) } },
+  const verified = classifyLockfileDelta(
+    { denoLock: { base: denoLock(), tip: denoLock({ npm: { "fast-uri@3.1.6": { integrity: "sha512-f2" } } }) } },
     { coreSuites: CORE, closureFor: closureStub({}) },
   );
-  assertEquals(typesOnly.kind, "full", "an entry no suite inspects is refused, not assumed covered");
-  assertStringIncludes(typesOnly.reason, "@types/node");
+  assertEquals(verified.kind, "subset", verified.reason);
+  assertStringIncludes(verified.notes.join("\n"), "tests/security-dependency-locks.test.ts");
+
+  // An importer still beats the fallback: a floor-only package that the tree actually imports is
+  // attributed by its closure, which is the cheap path review round 1 wanted kept.
+  const imported = classifyLockfileDelta(
+    { denoLock: { base: denoLock(), tip: denoLock({ npm: { "undici@7.29.2": { integrity: "sha512-u2" } } }) } },
+    { coreSuites: CORE, closureFor: closureStub({ undici: ["extension/lib/fetch-guard.js"] }) },
+  );
+  assertEquals(imported.kind, "subset", imported.reason);
+  assert(imported.suites.includes("tests/closure.test.ts"));
 });
 
 Deno.test("lezl0: a transitive pin is attributed to the suite that executes its DEPENDENT", () => {

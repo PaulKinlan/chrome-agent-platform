@@ -55,13 +55,17 @@
 //        (b) a repo file imports a package that TRANSITIVELY DEPENDS on it -> that dependent's
 //            closure (this is how a types-only or peer-transitive pin is attributed to the code that
 //            actually executes it: the lock's own dependency edges are the evidence);
-//        (c) a declared reader inspects that EXACT entry — DECLARED_PIN_READERS lists the entries
-//            tests/security-dependency-locks.test.ts (fast-uri advisory ledger; hono, ip-address,
-//            proxy-addr, undici patch table) and tests/bundle-budget.test.ts (fast-uri and
-//            @modelcontextprotocol/sdk lock->shipped drift) actually assert.
-//      (c) is bounded by what those tables actually assert: a VERSION (an advisory floor, or the
-//      lock->shipped equality), never a hash VALUE. So (c) earns a version/declaration change and
-//      never a bytes-only one — which is exactly what class 2 refuses.
+//        (c) a declared reader VERIFIES that exact entry's changed value — DECLARED_PIN_READERS holds
+//            only the two packages whose version a reader asserts against something other than
+//            itself (fast-uri: npm <-> deno equality AND lock -> shipped drift; the MCP SDK: the same
+//            drift check). Review round 2 stated the standard: a selected suite must verify the
+//            CHANGED pin, not merely declare the package. `atLeast(version, floor)` bounds a version,
+//            it does not verify the one that changed, so the advisory FLOOR tables are NOT declared
+//            (hono, ip-address, proxy-addr, undici, body-parser): a change to those with no importer
+//            and no imported dependent is FULL, because nothing in the tree checks it without an
+//            install.
+//      (c) also never covers a hash VALUE: no reader recomputes one. So (c) earns a version /
+//      declaration change and never a bytes-only one — which is exactly what class 2 refuses.
 //
 //      Anything else is `kind: "full"`, naming every entry nothing in the subset would look at.
 //
@@ -115,28 +119,27 @@ export const DEPENDENCY_LOCK_GUARDS = Object.freeze([
 export const RELEASE_IDENTITY_GUARD = "tests/first-run-onboarding-composition.test.ts";
 
 /**
- * The package entries a declared reader ACTUALLY inspects, read out of the readers themselves:
- *   * tests/security-dependency-locks.test.ts — its fast-uri advisory ledger (derived from
- *     scripts/bundle-budget.mjs FAST_URI_ADVISORIES, pinned against the published feed) and its
- *     behrd patch table (hono, ip-address, proxy-addr, undici, with fix floors).
- *   * tests/bundle-budget.test.ts — the lock -> shipped drift guard for fast-uri and the
- *     @modelcontextprotocol/sdk.
- * A changed entry with NO repo importer is certifiable only when it appears HERE: that is the
- * review's "unless some suite actually checks that changed entry". Reviewer finding 2, round 1:
- * the previous blanket claim ("the guard re-reads the new bytes") was not earned by these suites,
- * so an arbitrary unattributed entry is now REFUSED, named.
- * tests/lockfile-delta.test.ts pins this table against the readers' own tables so it cannot drift.
+ * The ONLY entries an unattributed change can be certified by: those whose version a reader asserts
+ * against something other than itself.
+ *
+ * Coord's ruling on review round 2 stated the standard precisely: "the declared-pin fallback must
+ * require that a selected suite actually verifies the CHANGED pin, not merely that the package is
+ * declared." Measured against that, exactly two packages qualify:
+ *
+ *   * fast-uri — tests/security-dependency-locks.test.ts asserts the Deno entries are EXACTLY
+ *     [["fast-uri@<npm version>", { integrity: npm.integrity }]] (so npm and deno must agree on both
+ *     the version and the hash of the same tarball), and tests/bundle-budget.test.ts proves the
+ *     version that actually SHIPPED in the bundle is the locked one (lf9xe);
+ *   * @modelcontextprotocol/sdk — the same lock -> shipped drift check (im9q8).
+ *
+ * The advisory FLOOR tables are deliberately NOT here, and the drift pin in the tests asserts the two
+ * sets stay disjoint: `atLeast(version, floor)` bounds a version, it does not verify the one that
+ * changed (hono, ip-address, proxy-addr, undici, body-parser). A change to any of those with no repo
+ * importer and no imported dependent is FULL, which is the honest answer — nothing in the tree checks
+ * it without an install.
  */
 export const DECLARED_PIN_READERS = Object.freeze({
   "fast-uri": Object.freeze(["tests/security-dependency-locks.test.ts", "tests/bundle-budget.test.ts"]),
-  hono: Object.freeze(["tests/security-dependency-locks.test.ts"]),
-  "ip-address": Object.freeze(["tests/security-dependency-locks.test.ts"]),
-  "proxy-addr": Object.freeze(["tests/security-dependency-locks.test.ts"]),
-  undici: Object.freeze(["tests/security-dependency-locks.test.ts"]),
-  // e7lsv landed this advisory row on main while the branch was in review (body-parser
-  // GHSA-27r3-jxmh-p828, floor 2.4.0). The drift pin derives this table from the readers' patch-table
-  // rows, so a new row and its declaration travel together.
-  "body-parser": Object.freeze(["tests/security-dependency-locks.test.ts"]),
   "@modelcontextprotocol/sdk": Object.freeze(["tests/bundle-budget.test.ts"]),
 });
 
@@ -788,8 +791,9 @@ export function classifyLockfileDelta(delta = {}, options = {}) {
   //        (b) a repo file imports a package that (transitively) DEPENDS on it -> same closure,
   //            which is how a transitive pin (a types-only package, a peer pin) is attributed to the
   //            code that executes its dependents;
-  //        (c) a declared reader inspects that exact entry (DECLARED_PIN_READERS) — its advisory /
-  //            patch table or its lock->shipped drift check.
+  //        (c) a declared reader VERIFIES that exact entry (DECLARED_PIN_READERS) — npm <-> deno
+  //            equality or the lock -> shipped drift check. Advisory FLOORS are not verification and
+  //            are deliberately not declared.
   //      Anything else is REFUSED, named. The previous version of this module certified an
   //      unattributed entry on the strength of "the guard re-reads the new bytes", which the guard
   //      does not do for arbitrary entries: that claim was not earned, and review was right to fail it.
@@ -828,7 +832,7 @@ export function classifyLockfileDelta(delta = {}, options = {}) {
     return full(
       `no suite in a subset would inspect these changed entries: ${uninspected.join(", ")} — ` +
         `nothing imports them, nothing that depends on them is imported, and no declared reader ` +
-        `(tests/security-dependency-locks.test.ts, tests/bundle-budget.test.ts) checks that entry; ` +
+        `(tests/security-dependency-locks.test.ts, tests/bundle-budget.test.ts) verifies that entry; ` +
         `add the suite that does, or run the full suite`,
       { unresolved: uninspected },
     );
