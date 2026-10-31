@@ -81,10 +81,99 @@ interface ListenerSite {
 // CONSTRUCTION: a listener's sender check must be a CALL to the vetted
 // production predicate, resolved through the file's import bindings, or the
 // site must carry an explicit ALLOWLISTED_SITES entry with a justification.
+// ACCEPTED RESIDUAL (deliberate, reviewer-acknowledged in round 4): credit is
+// binding-level, not execution-path - an imported vetted call inside an
+// uncalled nested function still counts. Do not re-litigate; pinned by probe18.
 const VETTED_PREDICATE_SOURCES: Record<string, Set<string>> = {
   "extension/lib/pure.js": new Set(["isTrustedServiceWorkerSender", "isTrustedWasmStreamSender"]),
   "extension/lib/wasm-stream-host.js": new Set(["isTrustedWasmStreamSender"]),
 };
+
+// True iff a binding pattern (const/let/var id, param, catch param,
+// destructuring) declares `name`.
+function patternBinds(pattern: any, name: string): boolean {
+  if (!pattern) return false;
+  switch (pattern.type) {
+    case "Identifier": return pattern.name === name;
+    case "ObjectPattern":
+      return (pattern.properties ?? []).some((p: any) =>
+        patternBinds(p.type === "RestElement" ? p.argument : p.value, name));
+    case "ArrayPattern":
+      return (pattern.elements ?? []).some((el: any) => patternBinds(el, name));
+    case "AssignmentPattern": return patternBinds(pattern.left, name);
+    case "RestElement": return patternBinds(pattern.argument, name);
+    default: return false;
+  }
+}
+
+const SHADOW_FN_TYPES = new Set(["FunctionDeclaration", "FunctionExpression", "ArrowFunctionExpression"]);
+
+// A declarator that re-binds `name` to a VETTED import binding is an alias of
+// the same predicate, not a shadow (e.g. wasm-stream-host.js:223).
+function isVettedAliasDeclarator(d: any, name: string, imports: Map<string, { path: string; imported: string }>): boolean {
+  if (!patternBinds(d.id, name)) return false;
+  if (d.init?.type !== "Identifier") return false;
+  const b = imports.get(d.init.name);
+  return !!b && !!VETTED_PREDICATE_SOURCES[b.path]?.has(b.imported);
+}
+
+// Descend statements (never into nested function bodies) looking for a hoisted
+// `var` or function declaration of `name` that is not a vetted alias.
+function nestedVarDeclares(node: any, name: string, imports: Map<string, { path: string; imported: string }>): boolean {
+  let found = false;
+  const visit = (n: any) => {
+    if (!n || found || typeof n !== "object") return;
+    if (n !== node && SHADOW_FN_TYPES.has(n.type)) return; // prune nested functions
+    if (n.type === "VariableDeclaration" && n.kind === "var") {
+      for (const d of n.declarations ?? []) {
+        if (patternBinds(d.id, name) && !isVettedAliasDeclarator(d, name, imports)) found = true;
+      }
+    }
+    if (n.type === "FunctionDeclaration" && n.id?.name === name) found = true;
+    for (const key of Object.keys(n)) {
+      if (key === "parent") continue;
+      const child = n[key];
+      if (Array.isArray(child)) child.forEach(visit);
+      else visit(child);
+    }
+  };
+  visit(node);
+  return found;
+}
+
+// 69bvp round-4: a call only invokes the vetted import if NO enclosing scope
+// re-declares the name. Walk the call's ancestor chain: function params,
+// function-expression names, catch bindings, and block/program-level
+// declarations (let/const direct children; var/function hoisted) all shadow -
+// except declarators that alias the vetted import itself.
+function isShadowedAtCall(callNode: any, name: string, imports: Map<string, { path: string; imported: string }>): boolean {
+  let node = callNode.parent;
+  while (node) {
+    if (SHADOW_FN_TYPES.has(node.type)) {
+      for (const param of node.params ?? []) {
+        if (patternBinds(param, name)) return true;
+      }
+      if (node.type === "FunctionExpression" && node.id?.name === name) return true;
+    }
+    if (node.type === "CatchClause" && patternBinds(node.param, name)) return true;
+    if (node.type === "BlockStatement" || node.type === "Program") {
+      for (const stmt of node.body ?? []) {
+        if (stmt.type === "VariableDeclaration") {
+          for (const d of stmt.declarations ?? []) {
+            if (patternBinds(d.id, name) && !isVettedAliasDeclarator(d, name, imports)) return true;
+          }
+        }
+        if (stmt.type === "FunctionDeclaration" && stmt.id?.name === name) return true;
+        // `var` / function declarations hoist past nested blocks (not nested functions)
+        if (!SHADOW_FN_TYPES.has(stmt.type) && stmt.type !== "VariableDeclaration" && nestedVarDeclares(stmt, name, imports)) {
+          return true;
+        }
+      }
+    }
+    node = node.parent;
+  }
+  return false;
+}
 
 function isAuthenticatingSender(
   body: any,
@@ -98,6 +187,8 @@ function isAuthenticatingSender(
     if (callee?.type !== "Identifier") return;
     const binding = imports.get(callee.name);
     if (!binding || !VETTED_PREDICATE_SOURCES[binding.path]?.has(binding.imported)) return;
+    // The call's ACTUAL lexical binding must be the import, not a local shadow.
+    if (isShadowedAtCall(sub, callee.name, imports)) return;
     if (sub.arguments.some((arg: any) => arg.type === "Identifier" && arg.name === senderName)) {
       validated = true;
     }
@@ -335,10 +426,6 @@ const ALLOWLISTED_SITES = new Map<string, string>([
     "same SW-push guard shape as content-script.js:376: inline id-match + tab-absence; relay only, no execution authority",
   ],
   [
-    "extension/lib/table-worker-host.js:152",
-    "isTrustedTableWorkerSender (:141) is a local byte-equivalent copy of the SW predicate (id + tab/documentId absence + SW bundle URL); dedup-with-pure.js candidate",
-  ],
-  [
     "extension/ntp/ntp.js:6409",
     "delegates sender validation to handleScriptRunMessage (lib/script-host.js:184), which enforces isTrustedServiceWorkerSender before any script run",
   ],
@@ -539,9 +626,9 @@ Deno.test("guard falsification: detects un-gated, ignored, or missing sender lis
   assertEquals(sites13.length, 1);
   assertEquals(sites13[0].checksSender, false, "even a correct inline SW-bundle-URL check no longer counts - vetted predicate or allowlist only");
 
-  // 69bvp re-review (gpt-6-sol): a property MENTION in a dead or short-circuited
-  // clause does not establish rejection — the discriminating property must be in a
-  // live branch whose value can change the outcome of the test.
+  // 69bvp history pin: this shape defeated the RETIRED dataflow rule (a property
+  // MENTION in a dead clause was credited). Under the re-scoped rule it fails
+  // simply because there is no vetted-predicate call.
   const probeDeadAndFalseClause = `
     chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (sender.id !== chrome.runtime.id || (sender.tab != null && false)) return false;
@@ -575,9 +662,9 @@ Deno.test("guard falsification: detects un-gated, ignored, or missing sender lis
   assertEquals(sites16.length, 1);
   assertEquals(sites16[0].checksSender, false, "a constant-true test rejects everyone and discriminates nothing");
 
-  // 69bvp round-2 review (gpt-6-sol): code that never runs cannot gate anything.
-  // An uncalled NESTED function's IfStatement is not on the listener's execution
-  // path, so its discriminating check must not be credited.
+  // 69bvp history pin: this shape defeated the RETIRED execution-path rule (an
+  // uncalled nested function's check was credited). Under the re-scoped rule an
+  // inline-only listener fails because there is no vetted-predicate call.
   const probeUncalledNestedFunction = `
     chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (sender.id !== chrome.runtime.id) return false;
@@ -607,9 +694,9 @@ Deno.test("guard falsification: detects un-gated, ignored, or missing sender lis
   assertEquals(sites18.length, 1);
   assertEquals(sites18[0].checksSender, true, "binding-level credit: imported vetted call counts even off the execution path (accepted, viiaq retired)");
 
-  // Self-comparison is an identity contradiction: sender.tab != sender.tab can
-  // never be true, so it cannot reject non-SW callers and must not be credited
-  // as dependence on tab.
+  // 69bvp history pin: this identity contradiction defeated the RETIRED
+  // truth-table rule (a freely flippable atom faked dependence). Under the
+  // re-scoped rule it fails because there is no vetted-predicate call.
   const probeSelfComparison = `
     chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (sender.id !== chrome.runtime.id || sender.tab != sender.tab) return false;
@@ -659,6 +746,40 @@ Deno.test("guard falsification: detects un-gated, ignored, or missing sender lis
   const sites22 = analyzeOnMessageListeners(probeNonVettedImport, "extension/test-probe22.js");
   assertEquals(sites22.length, 1);
   assertEquals(sites22[0].checksSender, false, "a non-vetted import from pure.js must not be credited");
+
+  // 69bvp round-4: the call's ACTUAL lexical binding must be the import. A local
+  // shadow (const/let/var, param, catch, destructuring) of the predicate name
+  // inside an enclosing scope defeats name-keyed credit.
+  const probeShadowedPredicate = `
+    import { isTrustedServiceWorkerSender } from "./lib/pure.js";
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      const isTrustedServiceWorkerSender = (s) => s.id === chrome.runtime.id;
+      if (!isTrustedServiceWorkerSender(sender)) return false;
+      sendResponse({ ok: true });
+      return true;
+    });
+  `;
+  const sites23 = analyzeOnMessageListeners(probeShadowedPredicate, "extension/test-probe23.js");
+  assertEquals(sites23.length, 1);
+  assertEquals(sites23[0].checksSender, false, "a shadowed predicate name is not the vetted import (ID-only arrow must fail)");
+
+  // Positive: a shadow in a DISJOINT sibling scope does not affect the listener's
+  // own binding.
+  const probeSiblingScopeShadow = `
+    import { isTrustedServiceWorkerSender } from "./lib/pure.js";
+    function unrelated() {
+      const isTrustedServiceWorkerSender = () => false;
+      return isTrustedServiceWorkerSender(null);
+    }
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      if (!isTrustedServiceWorkerSender(sender)) return false;
+      sendResponse({ ok: true });
+      return true;
+    });
+  `;
+  const sites24 = analyzeOnMessageListeners(probeSiblingScopeShadow, "extension/test-probe24.js");
+  assertEquals(sites24.length, 1);
+  assertEquals(sites24[0].checksSender, true, "a shadow in a disjoint sibling scope must not defeat the listener's own import binding");
 });
 
 Deno.test("behavioral: isTrustedServiceWorkerSender enforces SW bundle path and rejects documents/tabs", () => {
