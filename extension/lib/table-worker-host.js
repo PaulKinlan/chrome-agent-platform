@@ -147,7 +147,7 @@ export const isTrustedTableWorkerSender = isTrustedServiceWorkerSender;
 export function registerTableWorkerHost() {
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message?.type !== TABLE_WORKER_RUN_TYPE && message?.type !== TABLE_WORKER_CANCEL_TYPE) return undefined;
-    if (!isTrustedTableWorkerSender(sender)) {
+    if (!isTrustedServiceWorkerSender(sender)) {
       sendResponse({ ok: false, code: "table_worker_unavailable" });
       return false;
     }

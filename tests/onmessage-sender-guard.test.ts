@@ -85,8 +85,7 @@ interface ListenerSite {
 // binding-level, not execution-path - an imported vetted call inside an
 // uncalled nested function still counts. Do not re-litigate; pinned by probe18.
 const VETTED_PREDICATE_SOURCES: Record<string, Set<string>> = {
-  "extension/lib/pure.js": new Set(["isTrustedServiceWorkerSender", "isTrustedWasmStreamSender"]),
-  "extension/lib/wasm-stream-host.js": new Set(["isTrustedWasmStreamSender"]),
+  "extension/lib/pure.js": new Set(["isTrustedServiceWorkerSender"]),
 };
 
 // True iff a binding pattern (const/let/var id, param, catch param,
@@ -108,25 +107,16 @@ function patternBinds(pattern: any, name: string): boolean {
 
 const SHADOW_FN_TYPES = new Set(["FunctionDeclaration", "FunctionExpression", "ArrowFunctionExpression"]);
 
-// A declarator that re-binds `name` to a VETTED import binding is an alias of
-// the same predicate, not a shadow (e.g. wasm-stream-host.js:223).
-function isVettedAliasDeclarator(d: any, name: string, imports: Map<string, { path: string; imported: string }>): boolean {
-  if (!patternBinds(d.id, name)) return false;
-  if (d.init?.type !== "Identifier") return false;
-  const b = imports.get(d.init.name);
-  return !!b && !!VETTED_PREDICATE_SOURCES[b.path]?.has(b.imported);
-}
-
 // Descend statements (never into nested function bodies) looking for a hoisted
-// `var` or function declaration of `name` that is not a vetted alias.
-function nestedVarDeclares(node: any, name: string, imports: Map<string, { path: string; imported: string }>): boolean {
+// `var` or function declaration of `name`.
+function nestedVarDeclares(node: any, name: string): boolean {
   let found = false;
   const visit = (n: any) => {
     if (!n || found || typeof n !== "object") return;
     if (n !== node && SHADOW_FN_TYPES.has(n.type)) return; // prune nested functions
     if (n.type === "VariableDeclaration" && n.kind === "var") {
       for (const d of n.declarations ?? []) {
-        if (patternBinds(d.id, name) && !isVettedAliasDeclarator(d, name, imports)) found = true;
+        if (patternBinds(d.id, name)) found = true;
       }
     }
     if (n.type === "FunctionDeclaration" && n.id?.name === name) found = true;
@@ -144,9 +134,10 @@ function nestedVarDeclares(node: any, name: string, imports: Map<string, { path:
 // 69bvp round-4: a call only invokes the vetted import if NO enclosing scope
 // re-declares the name. Walk the call's ancestor chain: function params,
 // function-expression names, catch bindings, and block/program-level
-// declarations (let/const direct children; var/function hoisted) all shadow -
-// except declarators that alias the vetted import itself.
-function isShadowedAtCall(callNode: any, name: string, imports: Map<string, { path: string; imported: string }>): boolean {
+// declarations (let/const direct children; var/function hoisted) all shadow.
+// Round-5: NO alias support - only a direct call to the exact imported
+// identifier counts; every alias level is another place to be wrong.
+function isShadowedAtCall(callNode: any, name: string): boolean {
   let node = callNode.parent;
   while (node) {
     if (SHADOW_FN_TYPES.has(node.type)) {
@@ -160,12 +151,12 @@ function isShadowedAtCall(callNode: any, name: string, imports: Map<string, { pa
       for (const stmt of node.body ?? []) {
         if (stmt.type === "VariableDeclaration") {
           for (const d of stmt.declarations ?? []) {
-            if (patternBinds(d.id, name) && !isVettedAliasDeclarator(d, name, imports)) return true;
+            if (patternBinds(d.id, name)) return true;
           }
         }
         if (stmt.type === "FunctionDeclaration" && stmt.id?.name === name) return true;
         // `var` / function declarations hoist past nested blocks (not nested functions)
-        if (!SHADOW_FN_TYPES.has(stmt.type) && stmt.type !== "VariableDeclaration" && nestedVarDeclares(stmt, name, imports)) {
+        if (!SHADOW_FN_TYPES.has(stmt.type) && stmt.type !== "VariableDeclaration" && nestedVarDeclares(stmt, name)) {
           return true;
         }
       }
@@ -188,7 +179,7 @@ function isAuthenticatingSender(
     const binding = imports.get(callee.name);
     if (!binding || !VETTED_PREDICATE_SOURCES[binding.path]?.has(binding.imported)) return;
     // The call's ACTUAL lexical binding must be the import, not a local shadow.
-    if (isShadowedAtCall(sub, callee.name, imports)) return;
+    if (isShadowedAtCall(sub, callee.name)) return;
     if (sub.arguments.some((arg: any) => arg.type === "Identifier" && arg.name === senderName)) {
       validated = true;
     }
@@ -238,23 +229,6 @@ function analyzeOnMessageListeners(code: string, filePath: string): ListenerSite
       }
     }
   });
-  // Single-level const aliases of a vetted import are the same binding
-  // (e.g. wasm-stream-host.js: export const isTrustedWasmStreamSender =
-  // isTrustedServiceWorkerSender).
-  walkAst(ast, (node) => {
-    if (
-      node.type === "VariableDeclarator" &&
-      node.id?.type === "Identifier" &&
-      node.init?.type === "Identifier" &&
-      !imports.has(node.id.name)
-    ) {
-      const binding = imports.get(node.init.name);
-      if (binding && VETTED_PREDICATE_SOURCES[binding.path]?.has(binding.imported)) {
-        imports.set(node.id.name, binding);
-      }
-    }
-  });
-
   // 2i86h: the inventory must not be escapeable by aliasing. Resolve simple
   // aliases of chrome.runtime and of its onMessage event object, and FAIL
   // CLOSED on any runtime onMessage reference the scan cannot enumerate.
@@ -780,6 +754,37 @@ Deno.test("guard falsification: detects un-gated, ignored, or missing sender lis
   const sites24 = analyzeOnMessageListeners(probeSiblingScopeShadow, "extension/test-probe24.js");
   assertEquals(sites24.length, 1);
   assertEquals(sites24[0].checksSender, true, "a shadow in a disjoint sibling scope must not defeat the listener's own import binding");
+
+  // 69bvp round-5 (coord decision): NO alias support at all. Only a DIRECT call
+  // to the exact imported identifier (unshadowed) counts - every level of
+  // aliasing is another place the analysis can be wrong.
+  const probeAliasChain = `
+    import { isTrustedServiceWorkerSender } from "./lib/pure.js";
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      const guard = isTrustedServiceWorkerSender;
+      if (!guard(sender)) return false;
+      sendResponse({ ok: true });
+      return true;
+    });
+  `;
+  const sites25 = analyzeOnMessageListeners(probeAliasChain, "extension/test-probe25.js");
+  assertEquals(sites25.length, 1);
+  assertEquals(sites25[0].checksSender, false, "an alias of the vetted import must NOT be credited - direct calls only (round-5)");
+
+  // The shadow-then-alias chain the round-5 reviewer constructed.
+  const probeShadowedAliasChain = `
+    import { isTrustedServiceWorkerSender } from "./lib/pure.js";
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      const isTrustedServiceWorkerSender = (s) => s.id === chrome.runtime.id;
+      const guard = isTrustedServiceWorkerSender;
+      if (!guard(sender)) return false;
+      sendResponse({ ok: true });
+      return true;
+    });
+  `;
+  const sites26 = analyzeOnMessageListeners(probeShadowedAliasChain, "extension/test-probe26.js");
+  assertEquals(sites26.length, 1);
+  assertEquals(sites26[0].checksSender, false, "shadow-then-alias must not be credited");
 });
 
 Deno.test("behavioral: isTrustedServiceWorkerSender enforces SW bundle path and rejects documents/tabs", () => {

@@ -228,7 +228,7 @@ export function registerWasmStreamHost() {
     // Only the extension service worker may submit a stream job. Same-extension
     // pages and content scripts share sender.id, so id-only checking is not an
     // authority boundary; document/tab senders are rejected explicitly.
-    if (!isTrustedWasmStreamSender(sender)) {
+    if (!isTrustedServiceWorkerSender(sender)) {
       sendResponse({ ok: false, error: "wasm_stream_sender" });
       return false;
     }

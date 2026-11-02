@@ -1,6 +1,6 @@
 // extension/lib/user-wasm-host.js — Offscreen execution host listener for user-uploaded WASI modules.
 import { executeUserWasmRun } from "./wasm-offscreen-host.js";
-import { isTrustedWasmStreamSender } from "./wasm-stream-host.js";
+import { isTrustedServiceWorkerSender } from "./pure.js";
 import { verifyAndReadOwnerBlobBytes } from "./user-wasm-store.js";
 
 export const USER_WASM_RUN_TYPE = "cap:user-wasm-run";
@@ -44,7 +44,7 @@ export function registerUserWasmHost({ runtime = globalThis.chrome?.runtime } = 
   if (!runtime?.onMessage) return;
   runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message?.type !== USER_WASM_RUN_TYPE) return undefined;
-    if (!isTrustedWasmStreamSender(sender, runtime)) {
+    if (!isTrustedServiceWorkerSender(sender, runtime)) {
       sendResponse({ ok: false, error: "user_wasm_sender_rejected" });
       return false;
     }
