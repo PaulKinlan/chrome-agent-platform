@@ -3,14 +3,15 @@
 //
 // Invariants guarded:
 //   1. Every `chrome.runtime.onMessage.addListener` call in extension/ must accept a `sender` parameter
-//      and validate it by CALLING the vetted production predicate (isTrustedServiceWorkerSender or
-//      its exported aliases), resolved through the file's import bindings — or be listed in
-//      ALLOWLISTED_SITES with a one-line justification naming what checks the sender instead.
-//      Inline sender checks, however correct, never count (69bvp round-3 re-scope: sound by
-//      construction, not by dataflow proof).
+//      and validate it by CALLING the vetted production predicate (isTrustedServiceWorkerSender)
+//      DIRECTLY: the exact imported identifier, unshadowed, not renamed (`as`), not aliased,
+//      not re-exported — or be listed in ALLOWLISTED_SITES with a one-line justification naming
+//      what checks the sender instead. Inline sender checks, however correct, never count
+//      (69bvp round-3 re-scope: sound by construction, not by dataflow proof).
 //   2. Falsification tests verify that un-checked, ignored (_sender), single-param,
 //      id-only-checking, and inline-checked listeners fail RED, and that predicate credit
-//      requires an actual import binding to the vetted module (name alone does not count).
+//      requires a direct call through the exact import binding (name alone, renamed imports,
+//      and aliases do not count).
 //   3. Behavioral tests verify that execution hosts reject untrusted senders (tabs, content scripts, foreign IDs).
 //   4. docs/SW-DISPATCH-AUTHORITY-CENSUS.md documents all non-dispatcher listeners and their sender predicates.
 //   5. The inventory resolves simple aliases of chrome.runtime / its onMessage event object
@@ -178,6 +179,9 @@ function isAuthenticatingSender(
     if (callee?.type !== "Identifier") return;
     const binding = imports.get(callee.name);
     if (!binding || !VETTED_PREDICATE_SOURCES[binding.path]?.has(binding.imported)) return;
+    // Round-6: the call must use the EXACT imported name - a renamed import
+    // (`as t`) is the aliasing this rule removed.
+    if (binding.imported !== callee.name) return;
     // The call's ACTUAL lexical binding must be the import, not a local shadow.
     if (isShadowedAtCall(sub, callee.name)) return;
     if (sub.arguments.some((arg: any) => arg.type === "Identifier" && arg.name === senderName)) {
@@ -770,6 +774,21 @@ Deno.test("guard falsification: detects un-gated, ignored, or missing sender lis
   const sites25 = analyzeOnMessageListeners(probeAliasChain, "extension/test-probe25.js");
   assertEquals(sites25.length, 1);
   assertEquals(sites25[0].checksSender, false, "an alias of the vetted import must NOT be credited - direct calls only (round-5)");
+
+  // 69bvp round-6: a RENAMED import is exactly the aliasing the direct-call rule
+  // removed - 'import { isTrustedServiceWorkerSender as t }' then 't(sender)'
+  // must NOT be credited.
+  const probeRenamedImport = `
+    import { isTrustedServiceWorkerSender as t } from "./lib/pure.js";
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      if (!t(sender)) return false;
+      sendResponse({ ok: true });
+      return true;
+    });
+  `;
+  const sites27 = analyzeOnMessageListeners(probeRenamedImport, "extension/test-probe27.js");
+  assertEquals(sites27.length, 1);
+  assertEquals(sites27[0].checksSender, false, "a renamed vetted import must NOT be credited - the exact imported name must be called directly");
 
   // The shadow-then-alias chain the round-5 reviewer constructed.
   const probeShadowedAliasChain = `
