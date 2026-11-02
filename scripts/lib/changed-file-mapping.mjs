@@ -95,7 +95,15 @@ export const HTML_EXPORT_ENTRY_GUARDS = Object.freeze({
   "extension/artifact/artifact.html": Object.freeze(["tests/thread-export-entry-html.test.ts"]),
 });
 
-/** The three files the post-commit version hook rewrites. */
+/**
+ * The three files the post-commit version hook rewrites.
+ *
+ * chrome-agent-platform-lezl0: these are still the class this module FAILS CLOSED, and that is the
+ * point — `classifyUncovered` is the floor, not the selector. A dependency delta is certified (or
+ * named un-certifiable) from its BYTES by scripts/lib/lockfile-delta.mjs before this mapping is
+ * consulted; anything the classifier cannot name arrives here and lands on this refusal, so the
+ * fail-closed direction is preserved for every shape nobody has opened yet.
+ */
 export const BOOKKEEPING_FILES = Object.freeze([
   "package.json",
   "package-lock.json",
@@ -149,6 +157,10 @@ export const SELECTOR_INFRASTRUCTURE = Object.freeze([
   "scripts/lib/parallel-plan.mjs", // plans parallel execution and failure/refusal handling
   "scripts/lib/environmental-verdict.mjs", // canonical environmental refusal definitions and exit code combination
   "scripts/lib/changed-file-mapping.mjs", // this file: the mapping the subset trusts
+  // chrome-agent-platform-lezl0: the Class-1 lockfile classifier decides WHICH suites certify a
+  // dependency delta, i.e. it is part of the machinery a subset's authority rests on, so editing it
+  // must fail closed to the full suite exactly like the selector itself.
+  "scripts/lib/lockfile-delta.mjs",
   // chrome-agent-platform-0eq00: the gate's build decision and its coverage ledger. Both decide what
   // a green record MEANS, so a change to either must fail closed to the full suite rather than be
   // validated by a subset they themselves chose.

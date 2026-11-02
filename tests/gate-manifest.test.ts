@@ -56,6 +56,47 @@ Deno.test("0eq00 ledger: a manifest line is exactly what the fleet extractor mat
   assertEquals(normalizeSuiteList(["b", "a", "b"]), ["a", "b"]);
 });
 
+Deno.test("lezl0 ledger: lockfile-delta lines are emitted first, prefixed, and are never required", () => {
+  // chrome-agent-platform-lezl0: the Class-1 certification trail. Two properties matter to the fleet
+  // consumer: the lines carry ONE prefix (so they are greppable), and they can never displace the
+  // manifest line, because the extractor takes the LAST manifest line in a log.
+  const manifest = {
+    tier: "fast",
+    executed: 1,
+    executedSuites: ["tests/a.test.ts"],
+    selected: ["tests/a.test.ts"],
+    certifiable: true,
+  };
+  // Deliberately the LITERAL prefix, not the module's export: this pin must red on the PARENT tree for
+  // the behavioural reason (a lockfile delta gets no certification line there at all), and an import
+  // error would be the wrong cause. The constant is pinned against this literal in
+  // tests/lockfile-delta.test.ts, so drift is caught from the other side.
+  const PREFIX = "lockfile-delta: ";
+  const written: string[] = [];
+  const lines = emitGateLedger({
+    manifest,
+    lockfileDelta: [
+      "zod -> importers: extension/lib/agent.js -> suites: tests/a.test.ts",
+      "plain text is still written, with the prefix",
+      "  ",
+      "",
+    ],
+    log: (line: string) => written.push(line),
+  });
+  assertEquals(lines[0], `${PREFIX}zod -> importers: extension/lib/agent.js -> suites: tests/a.test.ts`);
+  assertEquals(lines[1], `${PREFIX}plain text is still written, with the prefix`);
+  assertEquals(lines.filter((line: string) => line.trim() === ""), [], "blank entries are never written");
+  const manifestLine = lines.at(-1);
+  assert(manifestLine.startsWith(GATE_MANIFEST_PREFIX), "the manifest line stays last");
+  assertEquals(parse(manifestLine).executed_suites, ["tests/a.test.ts"]);
+
+  // A run with no lockfile delta writes exactly the old lines: the new field is additive.
+  const plain: string[] = [];
+  emitGateLedger({ manifest, log: (line: string) => plain.push(line) });
+  assertEquals(plain.length, 1);
+  assert(!plain.some((line: string) => line.startsWith(PREFIX)));
+});
+
 Deno.test("0eq00 ledger: executed>0 with no suites is REFUSED, never written as unreadable green", () => {
   // The falsifier from the architect design: `suites:[]` next to a positive executed count reads as
   // "N suites ran, none of them named".

@@ -550,7 +550,13 @@ export async function main(args = process.argv.slice(2)) {
           ? [...killedPhases, ...gaps].join("; ")
           : null,
     });
-    emitGateLedger({ manifest, fileMapping: manifest?.fileMapping ?? [] });
+    emitGateLedger({
+      manifest,
+      fileMapping: manifest?.fileMapping ?? [],
+      // The FAST tier certifies a lockfile delta by a closure; this tier must record the same trail
+      // when a fail-closed FAST run hands its context across (chrome-agent-platform-lezl0).
+      lockfileDelta: fileMappingContext?.lockfileDelta ?? [],
+    });
   }
   // chrome-agent-platform-5xg1w: the LAST line of an incomplete run is the marker the fleet's per-tree
   // gate cache greps for (fleet-check reads tail -c 8000 of the log for "ABORTED: incomplete suite
