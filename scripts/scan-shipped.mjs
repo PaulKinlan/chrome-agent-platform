@@ -289,11 +289,41 @@ const EMSCRIPTEN_STAGE_HOST_CANONICAL_PATH = "extension/lib/emscripten-host-stag
 const EMSCRIPTEN_STAGE_HOST_CANONICAL_LOCATION = { line: 115, column: 26 };
 const EMSCRIPTEN_STAGE_HOST_ALLOWED_RE = /new\s+Worker\s*\(/g;
 // The table host likewise creates exactly one fresh module Worker from the
-// extension-root URL. Its dependency-injected WorkerCtor is pinned to this
-// one file, one node, and one constructor occurrence.
+// extension-root URL. Its dependency-injected WorkerCtor is pinned to this one
+// file and one constructor occurrence — LINE-INSENSITIVELY (5q524): a line-
+// number pin would break the build on any edit above the constructor, with a
+// diagnostic blaming the Worker URL instead of the moved line. The shape pin is
+// the packaged-URL evidence: the TABLE_WORKER_PATH const and its getURL call.
 const TABLE_WORKER_HOST_CANONICAL_PATH = "extension/lib/table-worker-host.js";
-const TABLE_WORKER_HOST_CANONICAL_LOCATION = { line: 89, column: 13 };
 const TABLE_WORKER_HOST_ALLOWED_RE = /new\s+WorkerCtor\s*\(/g;
+const TABLE_WORKER_HOST_WORKER_PATH = "lib/table-operation-worker.js";
+// The table host's Worker URL is the identifier `workerUrl`, defaulted from
+// defaultWorkerUrl() -> chrome.runtime.getURL(TABLE_WORKER_PATH). The pin: the
+// file must bind TABLE_WORKER_PATH to the exact packaged worker path AND call
+// getURL with it (or with the literal directly), exactly once.
+function tableWorkerUrlPinned(ast) {
+  let constBound = false;
+  let getUrlCalls = 0;
+  walk(ast, (node) => {
+    if (node.type === "VariableDeclarator" && node.id?.name === "TABLE_WORKER_PATH") {
+      if (foldString(node.init) === TABLE_WORKER_HOST_WORKER_PATH) constBound = true;
+    }
+    if (
+      node.type === "CallExpression" &&
+      memberPropertyName(node.callee) === "getURL" &&
+      node.arguments?.length === 1
+    ) {
+      const arg = node.arguments[0];
+      if (
+        foldString(arg) === TABLE_WORKER_HOST_WORKER_PATH ||
+        (arg?.type === "Identifier" && arg.name === "TABLE_WORKER_PATH")
+      ) {
+        getUrlCalls++;
+      }
+    }
+  });
+  return constBound && getUrlCalls === 1;
+}
 // Owner upload storage (not execution): one packaged Worker keeps streaming
 // hashing/I/O off the Settings thread. Pin its source node AND exact getURL
 // argument; user bytes and metadata can never select executable code.
@@ -569,10 +599,9 @@ export async function scanShippedJs(files, {
           ) || (
             isCanonicalScannedPath(file, TABLE_WORKER_HOST_CANONICAL_PATH) &&
             workerSink === "WorkerCtor" &&
-            node.loc?.start?.line === TABLE_WORKER_HOST_CANONICAL_LOCATION.line &&
-            node.loc?.start?.column === TABLE_WORKER_HOST_CANONICAL_LOCATION.column &&
             value === null &&
-            (text.match(TABLE_WORKER_HOST_ALLOWED_RE) ?? []).length === 1
+            (text.match(TABLE_WORKER_HOST_ALLOWED_RE) ?? []).length === 1 &&
+            tableWorkerUrlPinned(ast)
           ) || (
             isCanonicalScannedPath(file, USER_WASM_STORE_CLIENT_PATH) &&
             workerSink === "Worker" &&
@@ -587,7 +616,21 @@ export async function scanShippedJs(files, {
             foldString(urlCall.arguments[0]) === "lib/user-wasm-store-worker.js"
           );
           if (value === null && !isCanonicalWorkerHost) {
-            violations.push(`${file}: ${workerSink} URL is not a literal`);
+            // 5q524: the canonical table host with its single WorkerCtor still
+            // present but the exemption SHAPE broken (URL pin changed/missing)
+            // is a moved-pin defect in THIS scanner's pin, not a dynamic URL in
+            // the host - say so instead of blaming the Worker URL.
+            if (
+              isCanonicalScannedPath(file, TABLE_WORKER_HOST_CANONICAL_PATH) &&
+              workerSink === "WorkerCtor" &&
+              (text.match(TABLE_WORKER_HOST_ALLOWED_RE) ?? []).length === 1
+            ) {
+              violations.push(
+                `${file}: MOVED-PIN - the canonical table-host WorkerCtor is present but its exemption shape changed (packaged-URL pin missing or altered); update the pin in scripts/scan-shipped.mjs, not the host`,
+              );
+            } else {
+              violations.push(`${file}: ${workerSink} URL is not a literal`);
+            }
           } else if (
             value !== null &&
             (isRemoteScriptUrl(value) || !allowedWorkerLiterals.has(value))
