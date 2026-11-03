@@ -295,18 +295,48 @@ const EMSCRIPTEN_STAGE_HOST_ALLOWED_RE = /new\s+Worker\s*\(/g;
 // diagnostic blaming the Worker URL instead of the moved line. The shape pin is
 // the packaged-URL evidence: the TABLE_WORKER_PATH const and its getURL call.
 const TABLE_WORKER_HOST_CANONICAL_PATH = "extension/lib/table-worker-host.js";
-const TABLE_WORKER_HOST_ALLOWED_RE = /new\s+WorkerCtor\s*\(/g;
 const TABLE_WORKER_HOST_WORKER_PATH = "lib/table-operation-worker.js";
-// The table host's Worker URL is the identifier `workerUrl`, defaulted from
-// defaultWorkerUrl() -> chrome.runtime.getURL(TABLE_WORKER_PATH). The pin: the
-// file must bind TABLE_WORKER_PATH to the exact packaged worker path AND call
-// getURL with it (or with the literal directly), exactly once.
-function tableWorkerUrlPinned(ast) {
-  let constBound = false;
+// The table host's Worker URL must be the dependency-injected `workerUrl`
+// parameter, defaulted from defaultWorkerUrl() -> chrome.runtime.getURL(
+// TABLE_WORKER_PATH) with TABLE_WORKER_PATH bound to the exact packaged path.
+// The pin verifies that WHOLE CHAIN (5q524 round-5: a pin that checks the
+// container but not the constructor's ARGUMENT lets `new WorkerCtor(
+// otherVariable)` pass while the scan stays green). All line-insensitive.
+function tableWorkerShapePinned(ast) {
+  let pathConstBound = false;
   let getUrlCalls = 0;
+  let workerUrlDefaulted = false;
+  let defaultWorkerUrlHasPin = false;
   walk(ast, (node) => {
     if (node.type === "VariableDeclarator" && node.id?.name === "TABLE_WORKER_PATH") {
-      if (foldString(node.init) === TABLE_WORKER_HOST_WORKER_PATH) constBound = true;
+      if (foldString(node.init) === TABLE_WORKER_HOST_WORKER_PATH) pathConstBound = true;
+    }
+    if (node.type === "FunctionDeclaration" && node.id?.name === "defaultWorkerUrl") {
+      walk(node, (inner) => {
+        if (
+          inner.type === "CallExpression" &&
+          memberPropertyName(inner.callee) === "getURL" &&
+          inner.arguments?.length === 1
+        ) {
+          const arg = inner.arguments[0];
+          if (
+            foldString(arg) === TABLE_WORKER_HOST_WORKER_PATH ||
+            (arg?.type === "Identifier" && arg.name === "TABLE_WORKER_PATH")
+          ) {
+            defaultWorkerUrlHasPin = true;
+          }
+        }
+      });
+    }
+    if (
+      node.type === "AssignmentPattern" &&
+      node.left?.type === "Identifier" &&
+      node.left.name === "workerUrl" &&
+      node.right?.type === "CallExpression" &&
+      node.right.callee?.type === "Identifier" &&
+      node.right.callee.name === "defaultWorkerUrl"
+    ) {
+      workerUrlDefaulted = true;
     }
     if (
       node.type === "CallExpression" &&
@@ -322,7 +352,7 @@ function tableWorkerUrlPinned(ast) {
       }
     }
   });
-  return constBound && getUrlCalls === 1;
+  return pathConstBound && defaultWorkerUrlHasPin && workerUrlDefaulted && getUrlCalls === 1;
 }
 // Owner upload storage (not execution): one packaged Worker keeps streaming
 // hashing/I/O off the Settings thread. Pin its source node AND exact getURL
@@ -452,6 +482,17 @@ export async function scanShippedJs(files, {
           if (sink) sinkAliases.set(node.left.name, sink);
         }
         if (createsScriptElement(node.right)) scriptObjects.add(node.left.name);
+      }
+    });
+
+    // 5q524 round-5: constructor occurrence counts come from the AST, not raw
+    // text - a constructor-like comment or string literal must not defeat the
+    // single-occurrence pin.
+    const newCounts = new Map();
+    walk(ast, (node) => {
+      if (node.type === "NewExpression") {
+        const sink = sinkName(node.callee, sinkAliases);
+        if (sink) newCounts.set(sink, (newCounts.get(sink) ?? 0) + 1);
       }
     });
 
@@ -600,8 +641,10 @@ export async function scanShippedJs(files, {
             isCanonicalScannedPath(file, TABLE_WORKER_HOST_CANONICAL_PATH) &&
             workerSink === "WorkerCtor" &&
             value === null &&
-            (text.match(TABLE_WORKER_HOST_ALLOWED_RE) ?? []).length === 1 &&
-            tableWorkerUrlPinned(ast)
+            node.arguments?.[0]?.type === "Identifier" &&
+            node.arguments[0].name === "workerUrl" &&
+            (newCounts.get("WorkerCtor") ?? 0) === 1 &&
+            tableWorkerShapePinned(ast)
           ) || (
             isCanonicalScannedPath(file, USER_WASM_STORE_CLIENT_PATH) &&
             workerSink === "Worker" &&
@@ -623,7 +666,7 @@ export async function scanShippedJs(files, {
             if (
               isCanonicalScannedPath(file, TABLE_WORKER_HOST_CANONICAL_PATH) &&
               workerSink === "WorkerCtor" &&
-              (text.match(TABLE_WORKER_HOST_ALLOWED_RE) ?? []).length === 1
+              (newCounts.get("WorkerCtor") ?? 0) === 1
             ) {
               violations.push(
                 `${file}: MOVED-PIN - the canonical table-host WorkerCtor is present but its exemption shape changed (packaged-URL pin missing or altered); update the pin in scripts/scan-shipped.mjs, not the host`,
