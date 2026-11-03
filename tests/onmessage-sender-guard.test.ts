@@ -3,10 +3,22 @@
 //
 // Invariants guarded:
 //   1. Every `chrome.runtime.onMessage.addListener` call in extension/ must accept a `sender` parameter
-//      and reference/validate it in its body, or be explicitly allowlisted with a documented reason.
-//   2. Falsification tests verify that un-checked, ignored (_sender), or single-param listeners fail RED.
+//      and validate it by CALLING the vetted production predicate (isTrustedServiceWorkerSender)
+//      DIRECTLY: the exact imported identifier, unshadowed, not renamed (`as`), not aliased,
+//      not re-exported — or be listed in ALLOWLISTED_SITES with a one-line justification naming
+//      what checks the sender instead. Inline sender checks, however correct, never count
+//      (69bvp round-3 re-scope: sound by construction, not by dataflow proof).
+//   2. Falsification tests verify that un-checked, ignored (_sender), single-param,
+//      id-only-checking, and inline-checked listeners fail RED, and that predicate credit
+//      requires a direct call through the exact import binding (name alone, renamed imports,
+//      and aliases do not count).
 //   3. Behavioral tests verify that execution hosts reject untrusted senders (tabs, content scripts, foreign IDs).
 //   4. docs/SW-DISPATCH-AUTHORITY-CENSUS.md documents all non-dispatcher listeners and their sender predicates.
+//   5. The inventory resolves simple aliases of chrome.runtime / its onMessage event object
+//      (const ev = chrome.runtime.onMessage; ev.addListener(...), destructuring, runtime-object
+//      aliases) and FAILS CLOSED on any runtime onMessage reference it cannot enumerate
+//      (event object passed away, aliased addListener method) instead of silently skipping it
+//      (chrome-agent-platform-2i86h). onConnect hosts are out of scope by design (T18).
 
 import { fileURLToPath } from "node:url";
 import * as fs from "node:fs";
@@ -40,16 +52,16 @@ function walkJsFiles(dir: string): string[] {
   return files;
 }
 
-function walkAst(node: any, visitor: (n: any) => void) {
+function walkAst(node: any, visitor: (n: any, parent?: any) => void, parent: any = null) {
   if (!node || typeof node !== "object") return;
-  visitor(node);
+  visitor(node, parent);
   for (const key of Object.keys(node)) {
     if (key === "parent") continue;
     const child = node[key];
     if (Array.isArray(child)) {
-      for (const item of child) walkAst(item, visitor);
+      for (const item of child) walkAst(item, visitor, node);
     } else if (child && typeof child === "object" && typeof child.type === "string") {
-      walkAst(child, visitor);
+      walkAst(child, visitor, node);
     }
   }
 }
@@ -63,72 +75,117 @@ interface ListenerSite {
   reason?: string;
 }
 
-function isAuthenticatingSender(body: any, senderName: string): boolean {
-  const KNOWN_PREDICATES = new Set([
-    "isTrustedServiceWorkerSender",
-    "isTrustedWasmStreamSender",
-    "isTrustedTableWorkerSender",
-    "authorizeToolReport",
-    "handleScriptRunMessage",
-  ]);
-  const KNOWN_PROPERTIES = new Set([
-    "id",
-    "tab",
-    "url",
-    "documentId",
-    "origin",
-    "frameId",
-  ]);
-  let validated = false;
-  walkAst(body, (sub) => {
-    // 1. Passed to a recognized sender authentication helper/predicate
-    if (sub.type === "CallExpression") {
-      const callee = sub.callee;
-      const name = callee.name || (callee.property && callee.property.name);
-      if (KNOWN_PREDICATES.has(name)) {
-        if (sub.arguments.some((arg: any) => arg.type === "Identifier" && arg.name === senderName)) {
-          validated = true;
+// VETTED BINDINGS (69bvp re-scope after the round-3 FAIL): the guard no longer
+// infers rejection semantics from arbitrary code shape - four rounds of
+// counterexamples (dead && clauses, uncalled nested functions, identity
+// self-comparisons) proved that approach unsound. The rule is now sound BY
+// CONSTRUCTION: a listener's sender check must be a CALL to the vetted
+// production predicate, resolved through the file's import bindings, or the
+// site must carry an explicit ALLOWLISTED_SITES entry with a justification.
+// ACCEPTED RESIDUAL (deliberate, reviewer-acknowledged in round 4): credit is
+// binding-level, not execution-path - an imported vetted call inside an
+// uncalled nested function still counts. Do not re-litigate; pinned by probe18.
+const VETTED_PREDICATE_SOURCES: Record<string, Set<string>> = {
+  "extension/lib/pure.js": new Set(["isTrustedServiceWorkerSender"]),
+};
+
+// True iff a binding pattern (const/let/var id, param, catch param,
+// destructuring) declares `name`.
+function patternBinds(pattern: any, name: string): boolean {
+  if (!pattern) return false;
+  switch (pattern.type) {
+    case "Identifier": return pattern.name === name;
+    case "ObjectPattern":
+      return (pattern.properties ?? []).some((p: any) =>
+        patternBinds(p.type === "RestElement" ? p.argument : p.value, name));
+    case "ArrayPattern":
+      return (pattern.elements ?? []).some((el: any) => patternBinds(el, name));
+    case "AssignmentPattern": return patternBinds(pattern.left, name);
+    case "RestElement": return patternBinds(pattern.argument, name);
+    default: return false;
+  }
+}
+
+const SHADOW_FN_TYPES = new Set(["FunctionDeclaration", "FunctionExpression", "ArrowFunctionExpression"]);
+
+// Descend statements (never into nested function bodies) looking for a hoisted
+// `var` or function declaration of `name`.
+function nestedVarDeclares(node: any, name: string): boolean {
+  let found = false;
+  const visit = (n: any) => {
+    if (!n || found || typeof n !== "object") return;
+    if (n !== node && SHADOW_FN_TYPES.has(n.type)) return; // prune nested functions
+    if (n.type === "VariableDeclaration" && n.kind === "var") {
+      for (const d of n.declarations ?? []) {
+        if (patternBinds(d.id, name)) found = true;
+      }
+    }
+    if (n.type === "FunctionDeclaration" && n.id?.name === name) found = true;
+    for (const key of Object.keys(n)) {
+      if (key === "parent") continue;
+      const child = n[key];
+      if (Array.isArray(child)) child.forEach(visit);
+      else visit(child);
+    }
+  };
+  visit(node);
+  return found;
+}
+
+// 69bvp round-4: a call only invokes the vetted import if NO enclosing scope
+// re-declares the name. Walk the call's ancestor chain: function params,
+// function-expression names, catch bindings, and block/program-level
+// declarations (let/const direct children; var/function hoisted) all shadow.
+// Round-5: NO alias support - only a direct call to the exact imported
+// identifier counts; every alias level is another place to be wrong.
+function isShadowedAtCall(callNode: any, name: string): boolean {
+  let node = callNode.parent;
+  while (node) {
+    if (SHADOW_FN_TYPES.has(node.type)) {
+      for (const param of node.params ?? []) {
+        if (patternBinds(param, name)) return true;
+      }
+      if (node.type === "FunctionExpression" && node.id?.name === name) return true;
+    }
+    if (node.type === "CatchClause" && patternBinds(node.param, name)) return true;
+    if (node.type === "BlockStatement" || node.type === "Program") {
+      for (const stmt of node.body ?? []) {
+        if (stmt.type === "VariableDeclaration") {
+          for (const d of stmt.declarations ?? []) {
+            if (patternBinds(d.id, name)) return true;
+          }
+        }
+        if (stmt.type === "FunctionDeclaration" && stmt.id?.name === name) return true;
+        // `var` / function declarations hoist past nested blocks (not nested functions)
+        if (!SHADOW_FN_TYPES.has(stmt.type) && stmt.type !== "VariableDeclaration" && nestedVarDeclares(stmt, name)) {
+          return true;
         }
       }
     }
-    // 2. Rejecting conditional check: IfStatement whose test checks sender / sender.prop
-    // and whose consequent returns or throws.
-    if (sub.type === "IfStatement") {
-      let testHasSenderCheck = false;
-      walkAst(sub.test, (tNode: any) => {
-        if (tNode.type === "BinaryExpression") {
-          const isComp = ["===", "!==", "==", "!="].includes(tNode.operator);
-          if (isComp) {
-            walkAst(tNode, (operand: any) => {
-              if (operand.type === "MemberExpression" && operand.object?.name === senderName) {
-                const prop = operand.property?.name || operand.property?.value;
-                if (KNOWN_PROPERTIES.has(prop)) testHasSenderCheck = true;
-              }
-            });
-          }
-        }
-        if (tNode.type === "UnaryExpression" && tNode.operator === "!") {
-          if (tNode.argument?.type === "Identifier" && tNode.argument?.name === senderName) {
-            testHasSenderCheck = true;
-          }
-          if (tNode.argument?.type === "MemberExpression" && tNode.argument.object?.name === senderName) {
-            const prop = tNode.argument.property?.name || tNode.argument.property?.value;
-            if (KNOWN_PROPERTIES.has(prop)) testHasSenderCheck = true;
-          }
-        }
-      });
+    node = node.parent;
+  }
+  return false;
+}
 
-      if (testHasSenderCheck) {
-        let consequentRejects = false;
-        walkAst(sub.consequent, (cNode: any) => {
-          if (cNode.type === "ReturnStatement" || cNode.type === "ThrowStatement") {
-            consequentRejects = true;
-          }
-        });
-        if (consequentRejects) {
-          validated = true;
-        }
-      }
+function isAuthenticatingSender(
+  body: any,
+  senderName: string,
+  imports: Map<string, { path: string; imported: string }>,
+): boolean {
+  let validated = false;
+  walkAst(body, (sub) => {
+    if (sub.type !== "CallExpression") return;
+    const callee = sub.callee;
+    if (callee?.type !== "Identifier") return;
+    const binding = imports.get(callee.name);
+    if (!binding || !VETTED_PREDICATE_SOURCES[binding.path]?.has(binding.imported)) return;
+    // Round-6: the call must use the EXACT imported name - a renamed import
+    // (`as t`) is the aliasing this rule removed.
+    if (binding.imported !== callee.name) return;
+    // The call's ACTUAL lexical binding must be the import, not a local shadow.
+    if (isShadowedAtCall(sub, callee.name)) return;
+    if (sub.arguments.some((arg: any) => arg.type === "Identifier" && arg.name === senderName)) {
+      validated = true;
     }
   });
   return validated;
@@ -141,6 +198,11 @@ function analyzeOnMessageListeners(code: string, filePath: string): ListenerSite
   } catch (err: any) {
     throw new Error(`Failed to parse ${filePath}: ${err.message}`);
   }
+
+  // Parent pointers for use-context classification (walkAst never recurses into "parent").
+  walkAst(ast, (node, parent) => {
+    if (parent) node.parent = parent;
+  });
 
   const functions = new Map<string, any>();
   walkAst(ast, (node) => {
@@ -156,6 +218,129 @@ function analyzeOnMessageListeners(code: string, filePath: string): ListenerSite
     }
   });
 
+  // Import bindings: local name -> resolved repo-relative source + imported
+  // name. The vetted-predicate rule resolves calls through this map.
+  const imports = new Map<string, { path: string; imported: string }>();
+  walkAst(ast, (node) => {
+    if (node.type !== "ImportDeclaration" || typeof node.source?.value !== "string") return;
+    const resolved = path
+      .relative(ROOT, path.resolve(path.dirname(filePath), node.source.value))
+      .split(path.sep)
+      .join("/");
+    for (const spec of node.specifiers ?? []) {
+      if (spec.type === "ImportSpecifier") {
+        imports.set(spec.local.name, { path: resolved, imported: spec.imported?.name ?? spec.local.name });
+      }
+    }
+  });
+  // 2i86h: the inventory must not be escapeable by aliasing. Resolve simple
+  // aliases of chrome.runtime and of its onMessage event object, and FAIL
+  // CLOSED on any runtime onMessage reference the scan cannot enumerate.
+  const runtimeAliases = new Set<string>();
+  const eventAliases = new Set<string>();
+
+  const propName = (memberExpr: any): string | undefined =>
+    memberExpr?.property?.name ?? (memberExpr?.computed ? memberExpr?.property?.value : undefined);
+
+  const isRuntimeRootExpr = (node: any): boolean => {
+    if (!node) return false;
+    if (node.type === "Identifier") return node.name === "runtime" || runtimeAliases.has(node.name);
+    if (node.type === "MemberExpression") return propName(node) === "runtime";
+    // Historical leniency: (a || b).onMessage.addListener chains.
+    if (node.type === "LogicalExpression") return true;
+    return false;
+  };
+
+  const isOnMessageEventExpr = (node: any): boolean => {
+    if (!node) return false;
+    if (node.type === "Identifier") return eventAliases.has(node.name);
+    if (node.type === "MemberExpression" && propName(node) === "onMessage") return isRuntimeRootExpr(node.object);
+    return false;
+  };
+
+  // Fixpoint alias collection: const rt = chrome.runtime; const ev = rt.onMessage;
+  // const ev2 = ev; const { onMessage } = chrome.runtime.
+  let changed = true;
+  while (changed) {
+    changed = false;
+    walkAst(ast, (node) => {
+      if (node.type !== "VariableDeclarator" || !node.init) return;
+      if (node.id?.type === "Identifier") {
+        if (!runtimeAliases.has(node.id.name) && isRuntimeRootExpr(node.init)) {
+          runtimeAliases.add(node.id.name);
+          changed = true;
+        }
+        if (!eventAliases.has(node.id.name) && isOnMessageEventExpr(node.init)) {
+          eventAliases.add(node.id.name);
+          changed = true;
+        }
+      }
+      if (node.id?.type === "ObjectPattern" && isRuntimeRootExpr(node.init)) {
+        for (const prop of node.id.properties ?? []) {
+          const key = prop.key?.name ?? prop.key?.value;
+          const local = prop.value?.name;
+          if (key === "onMessage" && typeof local === "string" && !eventAliases.has(local)) {
+            eventAliases.add(local);
+            changed = true;
+          }
+        }
+      }
+    });
+  }
+
+  // Fail-closed classification: EVERY reference to the runtime onMessage event
+  // object must be enumerable — a direct addListener/removeListener/hasListener
+  // call, a tracked alias declaration, or a benign existence guard in a test
+  // position. Anything else (passed to a function, stored on an object, an
+  // aliased addListener METHOD) is reported instead of silently skipped.
+  const LISTENER_METHODS = new Set(["addListener", "removeListener", "hasListener", "hasListeners"]);
+  const unenumerable: string[] = [];
+
+  const classifyEventUse = (node: any): "ok" | "unenumerable" => {
+    let child = node;
+    let p = node.parent;
+    while (p?.type === "ChainExpression") { child = p; p = p.parent; }
+    if (!p) return "unenumerable";
+    // const ev = <event> (alias declaration), or the declaration name itself.
+    if (p.type === "VariableDeclarator" && (p.init === child || p.id === child)) return "ok";
+    // <event>.addListener(...) — the method must be CALLED immediately; an
+    // aliased method (const add = ev.addListener) escapes enumeration.
+    if (p.type === "MemberExpression" && p.object === child) {
+      if (LISTENER_METHODS.has(propName(p))) {
+        let mChild = p;
+        let mp = p.parent;
+        while (mp?.type === "ChainExpression") { mChild = mp; mp = mp.parent; }
+        if (mp?.type === "CallExpression" && mp.callee === mChild) return "ok";
+      }
+      return "unenumerable";
+    }
+    // Benign existence guard: if (!runtime?.onMessage) / if (runtime?.onMessage).
+    let tChild = child;
+    let tp = p;
+    while (tp && (tp.type === "UnaryExpression" || tp.type === "LogicalExpression" || tp.type === "ChainExpression")) {
+      tChild = tp;
+      tp = tp.parent;
+    }
+    if (
+      tp &&
+      (tp.type === "IfStatement" || tp.type === "WhileStatement" || tp.type === "DoWhileStatement" || tp.type === "ConditionalExpression") &&
+      tp.test === tChild
+    ) {
+      return "ok";
+    }
+    return "unenumerable";
+  };
+
+  walkAst(ast, (node) => {
+    const isEventRef =
+      (node.type === "MemberExpression" && propName(node) === "onMessage" && isRuntimeRootExpr(node.object)) ||
+      (node.type === "Identifier" && eventAliases.has(node.name));
+    if (!isEventRef) return;
+    if (classifyEventUse(node) !== "ok") {
+      unenumerable.push(`${path.relative(ROOT, filePath)}:${node.loc?.start?.line ?? 0}`);
+    }
+  });
+
   const sites: ListenerSite[] = [];
 
   walkAst(ast, (node) => {
@@ -163,17 +348,9 @@ function analyzeOnMessageListeners(code: string, filePath: string): ListenerSite
       const callee = node.callee;
       if (
         callee.type === "MemberExpression" &&
-        callee.property?.name === "addListener" &&
-        callee.object?.type === "MemberExpression" &&
-        callee.object?.property?.name === "onMessage"
+        propName(callee) === "addListener" &&
+        isOnMessageEventExpr(callee.object)
       ) {
-        const objObj = callee.object.object;
-        const isRuntime =
-          (objObj?.type === "Identifier" && objObj.name === "runtime") ||
-          (objObj?.type === "MemberExpression" && objObj.property?.name === "runtime") ||
-          objObj?.type === "LogicalExpression";
-        if (!isRuntime) return;
-
         const arg = node.arguments[0];
         let fn: any = null;
         if (arg?.type === "ArrowFunctionExpression" || arg?.type === "FunctionExpression") {
@@ -188,7 +365,7 @@ function analyzeOnMessageListeners(code: string, filePath: string): ListenerSite
           const p2 = fn.params[1];
           if (p2.type === "Identifier" && !p2.name.startsWith("_")) {
             senderParamName = p2.name;
-            checksSender = isAuthenticatingSender(fn.body, senderParamName);
+            checksSender = isAuthenticatingSender(fn.body, senderParamName, imports);
           }
         }
 
@@ -204,24 +381,60 @@ function analyzeOnMessageListeners(code: string, filePath: string): ListenerSite
     }
   });
 
+  // Attached out-of-band so existing array usages keep working: references to
+  // the runtime onMessage event object that the inventory cannot enumerate.
+  (sites as any).unenumerable = unenumerable;
   return sites;
 }
 
-// Allowlist for any listener that is intentionally un-gated (currently EMPTY because all 17 sites validate sender)
-const ALLOWLISTED_SITES = new Map<string, string>();
+// Allowlist for listeners that are intentionally gated by something OTHER than
+// a direct vetted-predicate call (69bvp re-scope: the ONLY alternative the
+// inventory accepts). Every entry must name what checks the sender instead.
+const ALLOWLISTED_SITES = new Map<string, string>([
+  [
+    "extension/background/service-worker.js:13361",
+    "central dispatcher: accepts page/content-script senders BY DESIGN; sender classified by authorizeToolReport (lib/pure.js:912) and route authority enforced per-route (Layers 1-3)",
+  ],
+  [
+    "extension/content/content-script.js:376",
+    "content script receiving SW pushes: inline !sender || sender.id !== runtime.id || sender.tab != null rejects foreign and tab senders; pinned by the behavioral content-script test below",
+  ],
+  [
+    "extension/content/webmcp-detect-relay.js:97",
+    "same SW-push guard shape as content-script.js:376: inline id-match + tab-absence; relay only, no execution authority",
+  ],
+  [
+    "extension/ntp/ntp.js:6409",
+    "delegates sender validation to handleScriptRunMessage (lib/script-host.js:184), which enforces isTrustedServiceWorkerSender before any script run",
+  ],
+  [
+    "extension/offscreen/offscreen.js:24",
+    "delegates sender validation to handleScriptRunMessage (lib/script-host.js:184), which enforces isTrustedServiceWorkerSender before any script run",
+  ],
+]);
 
 Deno.test("guard: all extension/ runtime.onMessage listeners accept and check sender", () => {
   const jsFiles = walkJsFiles(EXTENSION_DIR);
   assert(jsFiles.length > 50, `must scan extension JS files, found ${jsFiles.length}`);
 
   const allSites: ListenerSite[] = [];
+  const allUnenumerable: string[] = [];
   for (const file of jsFiles) {
     const code = fs.readFileSync(file, "utf8");
     const sites = analyzeOnMessageListeners(code, file);
     allSites.push(...sites);
+    allUnenumerable.push(...((sites as any).unenumerable ?? []));
   }
 
   assert(allSites.length >= 17, `expected at least 17 onMessage listeners, found ${allSites.length}`);
+
+  // 2i86h: fail closed — a runtime onMessage reference the scan cannot enumerate
+  // (aliased-away event object or method) is a violation, not a skipped site.
+  assertEquals(
+    allUnenumerable,
+    [],
+    `Found runtime onMessage references the inventory cannot enumerate (fail closed):\n${allUnenumerable.join("\n")}`,
+  );
 
   const violations: string[] = [];
   for (const site of allSites) {
@@ -235,6 +448,16 @@ Deno.test("guard: all extension/ runtime.onMessage listeners accept and check se
     violations,
     [],
     `Found un-gated onMessage.addListener calls missing sender validation:\n${violations.join("\n")}`,
+  );
+
+  // Allowlist hygiene: every entry must correspond to a real scanned site —
+  // a stale entry silently suppresses nothing and hides a moved listener.
+  const siteKeys = new Set(allSites.map((s) => `${s.relPath}:${s.line}`));
+  const staleEntries = [...ALLOWLISTED_SITES.keys()].filter((k) => !siteKeys.has(k));
+  assertEquals(
+    staleEntries,
+    [],
+    `stale ALLOWLISTED_SITES entries (no listener found at that site):\n${staleEntries.join("\n")}`,
   );
 });
 
@@ -267,6 +490,7 @@ Deno.test("guard falsification: detects un-gated, ignored, or missing sender lis
   assertEquals(sites3[0].checksSender, false);
 
   const probeCheckedSender = `
+    import { isTrustedServiceWorkerSender } from "./lib/pure.js";
     chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (!isTrustedServiceWorkerSender(sender)) return false;
       sendResponse({ ok: true });
@@ -316,6 +540,270 @@ Deno.test("guard falsification: detects un-gated, ignored, or missing sender lis
   const sites8 = analyzeOnMessageListeners(probeIneffectualAssignment, "extension/test-probe8.js");
   assertEquals(sites8.length, 1);
   assertEquals(sites8[0].checksSender, false, "const id = sender.id must not count as validation without rejecting branch");
+
+  // INV-15 (THREAT_MODEL.md): an extension ID alone does not establish the SW
+  // principal — same-extension documents and content scripts share sender.id.
+  // A rejecting conditional that compares ONLY sender.id must NOT count as
+  // authenticating (chrome-agent-platform-69bvp).
+  const probeIdOnlyRejectingCheck = `
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      if (sender.id !== chrome.runtime.id) return false;
+      sendResponse({ ok: true });
+      return true;
+    });
+  `;
+  const sites9 = analyzeOnMessageListeners(probeIdOnlyRejectingCheck, "extension/test-probe9.js");
+  assertEquals(sites9.length, 1);
+  assertEquals(sites9[0].checksSender, false, "id-only rejecting check must not count as SW authentication (INV-15)");
+
+  const probeNegatedIdOnlyCheck = `
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      if (!sender || sender.id !== chrome.runtime.id) return;
+      sendResponse({ ok: true });
+    });
+  `;
+  const sites10 = analyzeOnMessageListeners(probeNegatedIdOnlyCheck, "extension/test-probe10.js");
+  assertEquals(sites10.length, 1);
+  assertEquals(sites10[0].checksSender, false, "!sender || id-mismatch rejecting check is still id-only and must not count");
+
+  // origin/frameId do not discriminate same-extension non-SW callers either.
+  const probeOriginOnlyCheck = `
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      if (sender.origin !== chrome.runtime.getURL("/").slice(0, -1)) return false;
+      sendResponse({ ok: true });
+      return true;
+    });
+  `;
+  const sites11 = analyzeOnMessageListeners(probeOriginOnlyCheck, "extension/test-probe11.js");
+  assertEquals(sites11.length, 1);
+  assertEquals(sites11[0].checksSender, false, "origin-only rejecting check must not count as SW authentication");
+
+  // Positive pins: a rejecting conditional that ALSO excludes same-extension
+  // tabs/documents (tab/documentId) or pins the SW bundle URL DOES count.
+  // 69bvp round-3 re-scope: inline checks NEVER count, however correct - the
+  // only credits are a vetted-predicate call or an allowlist entry.
+  const probeIdAndTabCheck = `
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      if (!sender || sender.id !== chrome.runtime.id || sender.tab != null) return false;
+      sendResponse({ ok: true });
+      return true;
+    });
+  `;
+  const sites12 = analyzeOnMessageListeners(probeIdAndTabCheck, "extension/test-probe12.js");
+  assertEquals(sites12.length, 1);
+  assertEquals(sites12[0].checksSender, false, "even a correct inline id+tab check no longer counts - vetted predicate or allowlist only");
+
+  const probeSwBundleUrlCheck = `
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      if (sender.url !== chrome.runtime.getURL("dist/background/service-worker.js")) return false;
+      sendResponse({ ok: true });
+      return true;
+    });
+  `;
+  const sites13 = analyzeOnMessageListeners(probeSwBundleUrlCheck, "extension/test-probe13.js");
+  assertEquals(sites13.length, 1);
+  assertEquals(sites13[0].checksSender, false, "even a correct inline SW-bundle-URL check no longer counts - vetted predicate or allowlist only");
+
+  // 69bvp history pin: this shape defeated the RETIRED dataflow rule (a property
+  // MENTION in a dead clause was credited). Under the re-scoped rule it fails
+  // simply because there is no vetted-predicate call.
+  const probeDeadAndFalseClause = `
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      if (sender.id !== chrome.runtime.id || (sender.tab != null && false)) return false;
+      sendResponse({ ok: true });
+      return true;
+    });
+  `;
+  const sites14 = analyzeOnMessageListeners(probeDeadAndFalseClause, "extension/test-probe14.js");
+  assertEquals(sites14.length, 1);
+  assertEquals(sites14[0].checksSender, false, "sender.tab in a dead (&& false) clause must not count — the guard is ID-only");
+
+  const probeShortCircuitedOrTrueClause = `
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      if ((sender.url !== chrome.runtime.getURL("dist/background/service-worker.js") || true) && sender.id !== chrome.runtime.id) return false;
+      sendResponse({ ok: true });
+      return true;
+    });
+  `;
+  const sites15 = analyzeOnMessageListeners(probeShortCircuitedOrTrueClause, "extension/test-probe15.js");
+  assertEquals(sites15.length, 1);
+  assertEquals(sites15[0].checksSender, false, "sender.url in a short-circuited (|| true) clause must not count — the guard is ID-only");
+
+  const probeConstantTest = `
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      if (sender.id !== chrome.runtime.id || true) return false;
+      sendResponse({ ok: true });
+      return true;
+    });
+  `;
+  const sites16 = analyzeOnMessageListeners(probeConstantTest, "extension/test-probe16.js");
+  assertEquals(sites16.length, 1);
+  assertEquals(sites16[0].checksSender, false, "a constant-true test rejects everyone and discriminates nothing");
+
+  // 69bvp history pin: this shape defeated the RETIRED execution-path rule (an
+  // uncalled nested function's check was credited). Under the re-scoped rule an
+  // inline-only listener fails because there is no vetted-predicate call.
+  const probeUncalledNestedFunction = `
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      if (sender.id !== chrome.runtime.id) return false;
+      function unusedHelper() { if (sender.tab != null) return false; }
+      sendResponse({ ok: true });
+      return true;
+    });
+  `;
+  const sites17 = analyzeOnMessageListeners(probeUncalledNestedFunction, "extension/test-probe17.js");
+  assertEquals(sites17.length, 1);
+  assertEquals(sites17[0].checksSender, false, "a discriminating check inside an uncalled nested function is not on the execution path");
+
+  // Same boundary for the recognized-predicate branch: a predicate call inside
+  // an uncalled nested function does not gate the listener.
+  // ACCEPTED LIMITATION (viiaq retired by the round-3 re-scope): credit is
+  // binding-level, not execution-path - an IMPORTED vetted-predicate call is
+  // credited even inside an uncalled nested function. Pinned so the acceptance
+  // is explicit, not silent.
+  const probeNestedPredicateCall = `
+    import { isTrustedServiceWorkerSender } from "./lib/pure.js";
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      function unusedHelper() { return isTrustedServiceWorkerSender(sender); }
+      sendResponse({ ok: true });
+    });
+  `;
+  const sites18 = analyzeOnMessageListeners(probeNestedPredicateCall, "extension/test-probe18.js");
+  assertEquals(sites18.length, 1);
+  assertEquals(sites18[0].checksSender, true, "binding-level credit: imported vetted call counts even off the execution path (accepted, viiaq retired)");
+
+  // 69bvp history pin: this identity contradiction defeated the RETIRED
+  // truth-table rule (a freely flippable atom faked dependence). Under the
+  // re-scoped rule it fails because there is no vetted-predicate call.
+  const probeSelfComparison = `
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      if (sender.id !== chrome.runtime.id || sender.tab != sender.tab) return false;
+      sendResponse({ ok: true });
+      return true;
+    });
+  `;
+  const sites19 = analyzeOnMessageListeners(probeSelfComparison, "extension/test-probe19.js");
+  assertEquals(sites19.length, 1);
+  assertEquals(sites19[0].checksSender, false, "sender.tab != sender.tab is an identity contradiction, not a discriminating check");
+
+  // Positive pin REMOVED by the re-scope: even a correct top-level inline
+  // id+tab check fails - only the vetted predicate or an allowlist entry counts.
+  const probeTopLevelTabCheck = `
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      if (sender.id !== chrome.runtime.id || sender.tab != null) return false;
+      sendResponse({ ok: true });
+      return true;
+    });
+  `;
+  const sites20 = analyzeOnMessageListeners(probeTopLevelTabCheck, "extension/test-probe20.js");
+  assertEquals(sites20.length, 1);
+  assertEquals(sites20[0].checksSender, false, "inline checks never count under the re-scoped rule, even at the top level");
+
+  // The vetted predicate credited by NAME alone (no import binding) does not
+  // count: an ID-only local helper shadowing the name must not pass.
+  const probeUnboundPredicateName = `
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      if (!isTrustedServiceWorkerSender(sender)) return false;
+      sendResponse({ ok: true });
+      return true;
+    });
+  `;
+  const sites21 = analyzeOnMessageListeners(probeUnboundPredicateName, "extension/test-probe21.js");
+  assertEquals(sites21.length, 1);
+  assertEquals(sites21[0].checksSender, false, "an unbound predicate NAME (no import) must not be credited");
+
+  // A NON-vetted export imported from the same module does not count.
+  const probeNonVettedImport = `
+    import { redactSecrets } from "./lib/pure.js";
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      if (!redactSecrets(sender)) return false;
+      sendResponse({ ok: true });
+      return true;
+    });
+  `;
+  const sites22 = analyzeOnMessageListeners(probeNonVettedImport, "extension/test-probe22.js");
+  assertEquals(sites22.length, 1);
+  assertEquals(sites22[0].checksSender, false, "a non-vetted import from pure.js must not be credited");
+
+  // 69bvp round-4: the call's ACTUAL lexical binding must be the import. A local
+  // shadow (const/let/var, param, catch, destructuring) of the predicate name
+  // inside an enclosing scope defeats name-keyed credit.
+  const probeShadowedPredicate = `
+    import { isTrustedServiceWorkerSender } from "./lib/pure.js";
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      const isTrustedServiceWorkerSender = (s) => s.id === chrome.runtime.id;
+      if (!isTrustedServiceWorkerSender(sender)) return false;
+      sendResponse({ ok: true });
+      return true;
+    });
+  `;
+  const sites23 = analyzeOnMessageListeners(probeShadowedPredicate, "extension/test-probe23.js");
+  assertEquals(sites23.length, 1);
+  assertEquals(sites23[0].checksSender, false, "a shadowed predicate name is not the vetted import (ID-only arrow must fail)");
+
+  // Positive: a shadow in a DISJOINT sibling scope does not affect the listener's
+  // own binding.
+  const probeSiblingScopeShadow = `
+    import { isTrustedServiceWorkerSender } from "./lib/pure.js";
+    function unrelated() {
+      const isTrustedServiceWorkerSender = () => false;
+      return isTrustedServiceWorkerSender(null);
+    }
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      if (!isTrustedServiceWorkerSender(sender)) return false;
+      sendResponse({ ok: true });
+      return true;
+    });
+  `;
+  const sites24 = analyzeOnMessageListeners(probeSiblingScopeShadow, "extension/test-probe24.js");
+  assertEquals(sites24.length, 1);
+  assertEquals(sites24[0].checksSender, true, "a shadow in a disjoint sibling scope must not defeat the listener's own import binding");
+
+  // 69bvp round-5 (coord decision): NO alias support at all. Only a DIRECT call
+  // to the exact imported identifier (unshadowed) counts - every level of
+  // aliasing is another place the analysis can be wrong.
+  const probeAliasChain = `
+    import { isTrustedServiceWorkerSender } from "./lib/pure.js";
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      const guard = isTrustedServiceWorkerSender;
+      if (!guard(sender)) return false;
+      sendResponse({ ok: true });
+      return true;
+    });
+  `;
+  const sites25 = analyzeOnMessageListeners(probeAliasChain, "extension/test-probe25.js");
+  assertEquals(sites25.length, 1);
+  assertEquals(sites25[0].checksSender, false, "an alias of the vetted import must NOT be credited - direct calls only (round-5)");
+
+  // 69bvp round-6: a RENAMED import is exactly the aliasing the direct-call rule
+  // removed - 'import { isTrustedServiceWorkerSender as t }' then 't(sender)'
+  // must NOT be credited.
+  const probeRenamedImport = `
+    import { isTrustedServiceWorkerSender as t } from "./lib/pure.js";
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      if (!t(sender)) return false;
+      sendResponse({ ok: true });
+      return true;
+    });
+  `;
+  const sites27 = analyzeOnMessageListeners(probeRenamedImport, "extension/test-probe27.js");
+  assertEquals(sites27.length, 1);
+  assertEquals(sites27[0].checksSender, false, "a renamed vetted import must NOT be credited - the exact imported name must be called directly");
+
+  // The shadow-then-alias chain the round-5 reviewer constructed.
+  const probeShadowedAliasChain = `
+    import { isTrustedServiceWorkerSender } from "./lib/pure.js";
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      const isTrustedServiceWorkerSender = (s) => s.id === chrome.runtime.id;
+      const guard = isTrustedServiceWorkerSender;
+      if (!guard(sender)) return false;
+      sendResponse({ ok: true });
+      return true;
+    });
+  `;
+  const sites26 = analyzeOnMessageListeners(probeShadowedAliasChain, "extension/test-probe26.js");
+  assertEquals(sites26.length, 1);
+  assertEquals(sites26[0].checksSender, false, "shadow-then-alias must not be credited");
 });
 
 Deno.test("behavioral: isTrustedServiceWorkerSender enforces SW bundle path and rejects documents/tabs", () => {
@@ -341,6 +829,131 @@ Deno.test("behavioral: isTrustedServiceWorkerSender enforces SW bundle path and 
   assert(!isTrustedServiceWorkerSender({ ...validSender, url: runtime.getURL("options/options.html") }, runtime));
   assert(!isTrustedServiceWorkerSender({ ...validSender, url: runtime.getURL("offscreen/offscreen.html") }, runtime));
   assert(!isTrustedServiceWorkerSender({ ...validSender, url: runtime.getURL("ntp/ntp.html") }, runtime));
+});
+
+// 69bvp / INV-15: the PRODUCTION predicate must reject same-extension callers that
+// share our sender.id — a content script (tab set, page URL) and an extension
+// document (documentId set, extension-page URL) — and accept only the SW bundle.
+Deno.test("inventory falsification: aliased onMessage registrations are caught, unenumerable references fail closed", () => {
+  // 2i86h: the scan must not be escapeable by aliasing the event object.
+  // An UNCHECKED listener registered through an alias is a violation the old
+  // direct-syntax-only scan could not see (0 sites found -> escape).
+  const probeAliasedUnchecked = `
+    const event = chrome.runtime.onMessage;
+    event.addListener((message, sender, sendResponse) => {
+      sendResponse({ ok: true });
+    });
+  `;
+  const sitesA = analyzeOnMessageListeners(probeAliasedUnchecked, "extension/test-alias1.js");
+  assertEquals(sitesA.length, 1, "aliased registration must be enumerated as a site");
+  assertEquals(sitesA[0].checksSender, false, "aliased unchecked listener must be flagged un-gated");
+
+  // Aliased registration WITH the vetted predicate is enumerated and counts as gated.
+  const probeAliasedChecked = `
+    import { isTrustedServiceWorkerSender } from "./lib/pure.js";
+    const event = chrome.runtime.onMessage;
+    event.addListener((message, sender, sendResponse) => {
+      if (!isTrustedServiceWorkerSender(sender)) return false;
+      sendResponse({ ok: true });
+      return true;
+    });
+  `;
+  const sitesB = analyzeOnMessageListeners(probeAliasedChecked, "extension/test-alias2.js");
+  assertEquals(sitesB.length, 1, "aliased checked registration must be enumerated");
+  assertEquals(sitesB[0].checksSender, true);
+
+  // Destructured alias of the event object.
+  const probeDestructured = `
+    import { isTrustedServiceWorkerSender } from "./lib/pure.js";
+    const { onMessage } = chrome.runtime;
+    onMessage.addListener((message, sender, sendResponse) => {
+      if (!isTrustedServiceWorkerSender(sender)) return false;
+      sendResponse({ ok: true });
+      return true;
+    });
+  `;
+  const sitesC = analyzeOnMessageListeners(probeDestructured, "extension/test-alias3.js");
+  assertEquals(sitesC.length, 1, "destructured onMessage alias must be enumerated");
+  assertEquals(sitesC[0].checksSender, true);
+
+  // Runtime-object alias one level up.
+  const probeRuntimeAlias = `
+    const rt = chrome.runtime;
+    rt.onMessage.addListener((message, sender, sendResponse) => {
+      sendResponse({ ok: true });
+    });
+  `;
+  const sitesD = analyzeOnMessageListeners(probeRuntimeAlias, "extension/test-alias4.js");
+  assertEquals(sitesD.length, 1, "runtime-alias registration must be enumerated");
+  assertEquals(sitesD[0].checksSender, false);
+
+  // Fail closed when the event object ESCAPES enumeration: passing
+  // chrome.runtime.onMessage to a function means the scanner cannot see what
+  // registers on it — this must be reported, not silently skipped.
+  const probeEscape = `
+    export function registerLater(event) {
+      event.addListener((message, sender, sendResponse) => sendResponse({ ok: true }));
+    }
+    registerLater(chrome.runtime.onMessage);
+  `;
+  const sitesE = analyzeOnMessageListeners(probeEscape, "extension/test-alias5.js");
+  assert(Array.isArray(sitesE.unenumerable), "scanner must expose an unenumerable-references list");
+  assertEquals(sitesE.unenumerable.length, 1, "passing chrome.runtime.onMessage away must fail closed");
+
+  // Fail closed when the addListener METHOD itself is aliased.
+  const probeMethodAlias = `
+    const add = chrome.runtime.onMessage.addListener;
+    add((message, sender, sendResponse) => sendResponse({ ok: true }));
+  `;
+  const sitesF = analyzeOnMessageListeners(probeMethodAlias, "extension/test-alias6.js");
+  assert(Array.isArray(sitesF.unenumerable), "scanner must expose an unenumerable-references list");
+  assertEquals(sitesF.unenumerable.length, 1, "aliasing onMessage.addListener must fail closed");
+
+  // Non-runtime onMessage (ports, DOM shims) must NOT be enumerated or flagged.
+  const probePort = `
+    port.onMessage.addListener((message) => console.log(message));
+    this.onMessage = null;
+  `;
+  const sitesG = analyzeOnMessageListeners(probePort, "extension/test-alias7.js");
+  assertEquals(sitesG.length, 0, "port.onMessage is not the runtime broadcast bus");
+  assertEquals(sitesG.unenumerable.length, 0, "port.onMessage must not fail closed");
+
+  // Existence guards on the runtime event object are benign and must not fail closed.
+  const probeExistenceGuard = `
+    import { isTrustedServiceWorkerSender } from "./lib/pure.js";
+    function register(runtime) {
+      if (!runtime?.onMessage) return;
+      runtime.onMessage.addListener((message, sender, sendResponse) => {
+        if (!isTrustedServiceWorkerSender(sender)) return false;
+        sendResponse({ ok: true });
+        return true;
+      });
+    }
+  `;
+  const sitesH = analyzeOnMessageListeners(probeExistenceGuard, "extension/test-alias8.js");
+  assertEquals(sitesH.length, 1);
+  assertEquals(sitesH[0].checksSender, true);
+  assertEquals(sitesH.unenumerable.length, 0, "if (!runtime?.onMessage) existence guards are benign");
+});
+
+Deno.test("behavioral: production predicate rejects same-extension id-sharing callers (INV-15)", () => {
+  const runtime = {
+    id: "test-extension-id",
+    getURL: (p: string) => `chrome-extension://test-extension-id/${p}`,
+    getManifest: () => ({ background: { service_worker: SERVICE_WORKER_BUNDLE_PATH } }),
+  };
+
+  // Same-extension content script: shares sender.id, carries tab + page URL.
+  const contentScriptSender = { id: "test-extension-id", tab: { id: 7 }, url: "https://example.com/page" };
+  assert(!isTrustedServiceWorkerSender(contentScriptSender, runtime), "content script sharing our id must be rejected");
+
+  // Same-extension document (options/ntp/offscreen frame): shares sender.id, carries documentId + extension URL.
+  const documentSender = { id: "test-extension-id", documentId: "doc-9", url: runtime.getURL("options/options.html") };
+  assert(!isTrustedServiceWorkerSender(documentSender, runtime), "extension document sharing our id must be rejected");
+
+  // The real service worker: id match, no tab/documentId, exact SW bundle URL.
+  const swSender = { id: "test-extension-id", url: runtime.getURL(SERVICE_WORKER_BUNDLE_PATH) };
+  assert(isTrustedServiceWorkerSender(swSender, runtime), "service worker sender must be accepted");
 });
 
 Deno.test("behavioral: python host listener refuses untrusted senders", async () => {

@@ -341,9 +341,29 @@ Deno.test("scan: the table operation worker carries no dynamic code-loading sink
   assertEquals(await scanShippedJs(["extension/lib/table-operation-worker.js"], { readText: async () => source }), []);
 });
 
-Deno.test("scan: the table host's one fresh WorkerCtor is exact-path and exact-location pinned", async () => {
+Deno.test("scan: the table host's one fresh WorkerCtor is exact-path pinned, line-insensitive (5q524)", async () => {
   const source = await Deno.readTextFile(new URL("../extension/lib/table-worker-host.js", import.meta.url));
+  // (a) The canonical Worker with the exemption intact passes.
   assertEquals(await scanShippedJs([TABLE_WORKER_CANONICAL_REL], { readText: async () => source }), []);
+  // (b) A line shift ABOVE the constructor must not break the exemption - the
+  // pin is the file path + constructor occurrence + packaged-URL evidence, not
+  // a line number.
+  const shifted = "// an extra import line that shifts every location below\n" + source;
+  assertEquals(
+    await scanShippedJs([TABLE_WORKER_CANONICAL_REL], { readText: async () => shifted }),
+    [],
+    "a line shift above the canonical WorkerCtor must still pass (no line-number pin)",
+  );
+  // MOVED-PIN: the canonical WorkerCtor is present but the packaged-URL pin is
+  // altered - the diagnostic must name the moved pin, not blame the Worker URL.
+  const pinBroken = source.replace('TABLE_WORKER_PATH = "lib/table-operation-worker.js"',
+    'TABLE_WORKER_PATH = "lib/other-worker.js"');
+  assert(pinBroken !== source);
+  const movedPin = await scanShippedJs([TABLE_WORKER_CANONICAL_REL], { readText: async () => pinBroken });
+  assert(movedPin.some((row) => row.includes("MOVED-PIN")),
+    `broken URL pin must report MOVED-PIN, got: ${JSON.stringify(movedPin)}`);
+  assert(!movedPin.some((row) => row.includes("URL is not a literal")),
+    "MOVED-PIN must replace the misleading 'URL is not a literal' for the canonical host");
   for (const file of [
     `/repo/${TABLE_WORKER_CANONICAL_REL}.evil`,
     `/repo/xx${TABLE_WORKER_CANONICAL_REL}`,
@@ -352,6 +372,47 @@ Deno.test("scan: the table host's one fresh WorkerCtor is exact-path and exact-l
     const violations = await scanShippedJs([file], { readText: async () => source });
     assert(violations.length >= 1, `table worker-host lookalike ${JSON.stringify(file)} must violate`);
   }
+});
+
+Deno.test("scan: a genuinely non-literal WorkerCtor URL in the table host still FAILS (5q524)", async () => {
+  const source = await Deno.readTextFile(new URL("../extension/lib/table-worker-host.js", import.meta.url));
+  // Two WorkerCtor constructions: the exemption's single-occurrence pin no
+  // longer holds, so the second (dynamic) construction must violate.
+  const twoWorkers = source.replace(
+    "worker = new WorkerCtor(workerUrl, { type: \"module\" });",
+    "worker = new WorkerCtor(workerUrl, { type: \"module\" });\n  const extra = new WorkerCtor(workerUrl);",
+  );
+  assert(twoWorkers !== source);
+  const violations = await scanShippedJs([TABLE_WORKER_CANONICAL_REL], { readText: async () => twoWorkers });
+  assert(violations.some((row) => row.includes("URL is not a literal")),
+    `a second WorkerCtor construction must fail as non-literal, got: ${JSON.stringify(violations)}`);
+});
+
+Deno.test("scan: the exemption ties the constructor ARGUMENT to the pinned workerUrl chain (5q524 round-5)", async () => {
+  const source = await Deno.readTextFile(new URL("../extension/lib/table-worker-host.js", import.meta.url));
+  // An unrelated variable at the SOLE canonical constructor must FAIL even
+  // though the TABLE_WORKER_PATH binding and getURL call are still present -
+  // the pin covers the argument, not just the container.
+  const swappedArg = source.replace(
+    "worker = new WorkerCtor(workerUrl, { type: \"module\" });",
+    "worker = new WorkerCtor(otherWorkerUrl, { type: \"module\" });",
+  );
+  assert(swappedArg !== source);
+  const violations = await scanShippedJs([TABLE_WORKER_CANONICAL_REL], { readText: async () => swappedArg });
+  assert(violations.length >= 1, "an unrelated constructor argument at the canonical site must violate");
+
+  // A constructor-like COMMENT or string must not count as a second occurrence
+  // (occurrence counting is AST-based, not raw text).
+  const withComment = source.replace(
+    "worker = new WorkerCtor(workerUrl, { type: \"module\" });",
+    "// note: new WorkerCtor( is dependency-injected\n    worker = new WorkerCtor(workerUrl, { type: \"module\" });",
+  );
+  assert(withComment !== source);
+  assertEquals(
+    await scanShippedJs([TABLE_WORKER_CANONICAL_REL], { readText: async () => withComment }),
+    [],
+    "a constructor-like comment must not defeat the single-occurrence pin",
+  );
 });
 
 const CALLEXPORT_HOST_CANONICAL_REL = "extension/lib/wasm-callexport-host.js";

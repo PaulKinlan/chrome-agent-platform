@@ -16,7 +16,7 @@ import { auditWasmBinary } from "./wasm-package-authority.js";
 import { BUNDLED_INVENTORY } from "./bundled-inventory-data.js";
 import { BUNDLED_TOOL_PACKAGE_ROWS } from "./bundled-tool-packages.data.js";
 import { WasmPackageAuthority } from "./wasm-package-authority.js";
-import { isTrustedWasmStreamSender } from "./wasm-stream-host.js";
+import { isTrustedServiceWorkerSender } from "./pure.js";
 
 export const CALLEXPORT_RUN_TYPE = "cap:wasm-callexport-run";
 export const CALLEXPORT_LIMITS = Object.freeze({
@@ -355,7 +355,7 @@ export function registerCallexportHost() {
     if (message?.type !== CALLEXPORT_RUN_TYPE) return undefined;
     // Only the extension service worker may submit (same sender gate as the
     // stream host — document/tab senders are rejected explicitly).
-    if (!isTrustedWasmStreamSender(sender)) {
+    if (!isTrustedServiceWorkerSender(sender)) {
       sendResponse({ ok: false, error: "callexport_sender" });
       return false;
     }

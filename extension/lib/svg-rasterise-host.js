@@ -7,7 +7,7 @@
 // embedded fonts), and external hrefs are NEVER fetched (honest local
 // broken-image placeholder, zero network requests).
 
-import { isTrustedWasmStreamSender } from "./wasm-stream-host.js";
+import { isTrustedServiceWorkerSender } from "./pure.js";
 
 export const SVG_RASTERISE_RUN_TYPE = "cap:svg-rasterise-run";
 export const SVG_RASTERISE_WALL_MS = 8000;
@@ -84,7 +84,7 @@ export function registerSvgRasteriseHost({ runtime = globalThis.chrome?.runtime,
   if (!runtime?.onMessage) return null;
   const listener = (message, sender, sendResponse) => {
     if (message?.type !== SVG_RASTERISE_RUN_TYPE) return undefined;
-    if (!isTrustedWasmStreamSender(sender, runtime)) {
+    if (!isTrustedServiceWorkerSender(sender, runtime)) {
       sendResponse({ ok: false, error: "svg_rasterise host denied: sender is not the service worker" });
       return undefined;
     }
