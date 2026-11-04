@@ -453,6 +453,6 @@ The inventory also resolves simple aliases of `chrome.runtime` / its `onMessage`
 | `extension/offscreen/offscreen.js` | Offscreen Document | `cap:clipboard-write` | `isTrustedServiceWorkerSender` | SW execution authority only |
 | `extension/lib/script-host.js` (`ntp.js`, `offscreen.js`) | NTP Page / Offscreen Document | `cap:script-run-announce`, `cap:script-run` | `isTrustedServiceWorkerSender` | SW execution authority only |
 | `extension/lib/provider-gate.js` | Options / NTP Page | `provider-host-perm:settled` | `isTrustedServiceWorkerSender` | SW broadcast notification |
-| `extension/content/content-script.js` | Web Page (Isolated World) | `invoke-tool`, `collect-tools`, `enrollment-sync`, `disenrollment`, `tool-consent-revoked`, `enrollment.poke`, `bridge.ping` | Extension ID + `tab == null` | Extension origin only |
+| `extension/content/content-script.js` | Web Page (Isolated World) | `invoke-tool`, `collect-tools`, `enrollment-sync`, `disenrollment`, `tool-consent-revoked`, `enrollment.poke`, `bridge.ping` | `isTrustedServiceWorkerSender` port (id + `tab == null` + `documentId == null` + `url` pins `dist/background/service-worker.js`) | Compiled SW bundle only |
 | `extension/content/webmcp-detect-relay.js` | Web Page (Isolated World) | `webmcp.detect.rearm` | Extension ID + `tab == null` | Extension origin only |
 

@@ -65,6 +65,10 @@ function makeBridge(swRoutes = {}) {
   const sent = [];
   const messageListeners = [];
   const runtimeListeners = [];
+// Faithful SW sender: the compiled bundle url the ported predicate pins
+// (chrome-agent-platform-yl0wn — the old `{}` stub passed only because the
+// old inline check compared two undefined ids).
+const SW_SENDER_STUB = { id: "cap-test-ext", url: "chrome-extension://cap-test-ext/dist/background/service-worker.js" };
   const windowObj = {
     CapBridgeAuth: bridgeAuth,
     postMessage(msg) { posted.push(msg); },
@@ -79,6 +83,8 @@ function makeBridge(swRoutes = {}) {
   };
   const chromeObj = {
     runtime: {
+      id: "cap-test-ext",
+      getURL: (p) => `chrome-extension://cap-test-ext/${p}`,
       sendMessage(msg) {
         sent.push(msg);
         const route = swRoutes[msg?.type];
@@ -123,7 +129,7 @@ function makeBridge(swRoutes = {}) {
   };
   const emitRuntime = (message) => {
     const results = [];
-    for (const l of [...runtimeListeners]) l(message, {}, (r) => results.push(r));
+    for (const l of [...runtimeListeners]) l(message, SW_SENDER_STUB, (r) => results.push(r));
     return results;
   };
   const downSince = (start = 0) => {

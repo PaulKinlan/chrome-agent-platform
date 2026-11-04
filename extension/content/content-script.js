@@ -261,8 +261,31 @@ function onWindowMessage(event) {
 }
 window.addEventListener("message", onWindowMessage);
 
+// isTrustedServiceWorkerSenderPort — FAITHFUL PORT of lib/pure.js
+// isTrustedServiceWorkerSender (chrome-agent-platform-yl0wn). Content scripts
+// cannot import ES modules (chrome.scripting injects classic files — the same
+// reason main-world.js keeps a port of redactSecretText), so the predicate is
+// duplicated here. KEEP IN SYNC with extension/lib/pure.js
+// isTrustedServiceWorkerSender and SERVICE_WORKER_BUNDLE_PATH
+// ("dist/background/service-worker.js"): the relay must accept ONLY the
+// compiled service-worker bundle — sender.id + tab absence alone admitted
+// every same-extension principal (ntp hub, options, side panel), letting any
+// extension page drive page-tool execution.
+function isTrustedServiceWorkerSenderPort(sender) {
+  const runtime = chrome?.runtime;
+  if (!runtime || !runtime.id || sender?.id !== runtime.id || sender?.tab != null || sender?.documentId != null) {
+    return false;
+  }
+  const url = typeof sender?.url === "string" ? sender.url : "";
+  const declared = runtime.getManifest?.()?.background?.service_worker;
+  if (typeof declared === "string" && declared.length > 0 && declared !== "dist/background/service-worker.js") {
+    return false;
+  }
+  return url === runtime.getURL("dist/background/service-worker.js");
+}
+
 function onRuntimeMessage(message, sender, sendResponse) {
-  if (!sender || sender.id !== chrome.runtime?.id || sender.tab != null) {
+  if (!isTrustedServiceWorkerSenderPort(sender)) {
     return false;
   }
   if (message?.type === "enrollment.poke" || message?.type === "bridge.ping") {
