@@ -152,13 +152,49 @@ function exactDenseArrayValues(value, maxLength) {
 // One bounded dense BYTE-array validator shared by BOTH classes (no looser
 // scratch parser), producing EXACTLY ONE fresh dense result via its OWN single
 // indexed walk — never routed through the values helper, so no intermediate
-// full values array exists at the 10 MiB boundary. Same exact shape/
-// prototype/key/setter/proxy/value/error semantics as the row validator: exact
-// Array.prototype, a safe own-data `length` within the caller-supplied
-// maximum, exactly `length + 1` own keys (one exact `length`, no symbols,
-// every other a canonical decimal index in [0,length)), every index an own
-// data descriptor (no getter/setter/hole) whose value is an integer 0..255,
-// all checked in the SAME pass that builds the one dense result.
+// full values array exists at the 10 MiB boundary. Exact Array.prototype, a
+// safe own-data `length` within the caller-supplied maximum, NO own symbols, an
+// own-ENUMERABLE string key set proven to be exactly the canonical indices
+// "0".."length-1" by ONE bounded check, and every index yielding an integer
+// 0..255 through a single ordinary Get, copied into the one fresh dense result.
+//
+// j7k25 — WHY A BOUNDED KEY PROOF INSTEAD OF PER-BYTE REFLECTION: the previous
+// shape ran Reflect.ownKeys over the whole array (~6.5s per 10.5M keys) plus a
+// getOwnPropertyDescriptor per index (~3s more): two reflective passes per BYTE,
+// ~13s/MiB, which made five test cases cost 92-378s each and starved the browser
+// suites sharing the worker pool. The replacement is one Object.keys
+// materialization + an O(1) count/endpoint proof + one Get walk: measured
+// ~0.85s per 10 MiB (~150x faster). The key-set proof is sound by the
+// ECMAScript [[OwnPropertyKeys]] ordering contract: integer-index keys are
+// returned ascending BEFORE any other own string key, so a key list whose COUNT
+// is exactly `length`, whose FIRST key is "0" and whose LAST key is the
+// canonical String(length-1), contains exactly the canonical indices and
+// nothing else — any extra, noncanonical or non-index string key would sort
+// after the indices and either break the count or occupy the last position.
+// Holes/sparse arrays fail twice over (missing enumerable key breaks the count;
+// the Get yields undefined and breaks the byte check); a setter-only index
+// fails the byte check; a nonenumerable index or extra nonenumerable STRING key
+// fails the count (the pre-j7k25 ownKeys shape accepted nonenumerable index
+// data — this is a deliberate tightening, not a relaxation).
+//
+// DOCUMENTED RESIDUALS — the same epistemic class as the transparent Proxy
+// residual in validateWorkspaceSeed's contract: JavaScript cannot distinguish
+// these in bounded time (only per-index descriptor reflection can, at the ~13
+// s/MiB this rewrite exists to remove), neither can cross the seed's
+// serialization boundary (structured clone / JSON deliver plain data only), and
+// neither can reach the output:
+//   1. An own ENUMERABLE index accessor whose getter returns valid bytes is
+//      snapshotted, not rejected: the getter runs exactly once, its value is
+//      byte-checked and frozen into the fresh dense result, and the input is
+//      never read again — so a differing second answer cannot exist downstream.
+//      Every accessor shape that is observable in bounded time still fails
+//      (nonenumerable: count; getter-less setter or invalid return: byte check).
+//   2. An extra NONENUMERABLE own string key is invisible to the enumerable
+//      count; it can never enter the dense output. Extra ENUMERABLE keys of any
+//      shape still fail, extra own symbols fail the bounded symbol check.
+// A getter mutating the input mid-walk is re-checked at bounded cost: after the
+// walk the prototype and the `length` descriptor must be unchanged, and every
+// byte in the result passed its own range check at its own single Get.
 function exactDenseByteArray(value, maxLength) {
   if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) seedFail();
   const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
@@ -166,29 +202,24 @@ function exactDenseByteArray(value, maxLength) {
       !Number.isSafeInteger(lengthDescriptor.value) || lengthDescriptor.value < 0 ||
       lengthDescriptor.value > maxLength) seedFail();
   const length = lengthDescriptor.value;
-  const ownKeys = Reflect.ownKeys(value);
-  if (ownKeys.length !== length + 1) seedFail();
-  let sawLength = false;
-  for (const key of ownKeys) {
-    if (typeof key !== "string") seedFail();
-    if (key === "length") {
-      if (sawLength) seedFail();
-      sawLength = true;
-      continue;
-    }
-    const index = Number(key);
-    if (!Number.isSafeInteger(index) || index < 0 || index >= length ||
-        String(index) !== key) seedFail();
+  // Bounded key-set proof (see the ordering-contract argument above).
+  if (Object.getOwnPropertySymbols(value).length !== 0) seedFail();
+  const keys = Object.keys(value);
+  if (keys.length !== length) seedFail();
+  if (length > 0) {
+    if (keys[0] !== "0" || keys[length - 1] !== String(length - 1)) seedFail();
   }
-  if (!sawLength) seedFail();
   const dense = [];
   for (let index = 0; index < length; index++) {
-    const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
-    if (!descriptor || !("value" in descriptor)) seedFail();
-    const byte = descriptor.value;
+    const byte = value[index];
     if (!Number.isInteger(byte) || byte < 0 || byte > 255) seedFail();
     dense.push(byte);
   }
+  // Bounded post-walk re-check: a getter side effect that moved the prototype
+  // or the length invalidates the proof the walk relied on.
+  if (Object.getPrototypeOf(value) !== Array.prototype) seedFail();
+  const afterDescriptor = Object.getOwnPropertyDescriptor(value, "length");
+  if (!afterDescriptor || !("value" in afterDescriptor) || afterDescriptor.value !== length) seedFail();
   return dense;
 }
 
