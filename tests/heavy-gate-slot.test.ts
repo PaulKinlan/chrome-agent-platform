@@ -83,7 +83,7 @@ const STARTUP_FAILURE_SOURCE = `
 import { launchChrome } from ${JSON.stringify(`${ROOT}scripts/lib/chrome-launch.ts`)};
 try {
   await launchChrome({
-    requireQuiet: { maxLoadPerCore: 100, maxCompilers: 100, maxWaitMs: 1000, sampleMs: 100, sustainedSamples: 1 },
+    requireQuiet: { maxLoadPerCore: 100, maxCompilers: 100, maxStealPct: 100, maxWaitMs: 1000, sampleMs: 100, sustainedSamples: 1 },
     fleetSlot: { gate: "startup-failure-drill", kind: "gate", boundMs: 5000 },
     binary: "/bin/false",
     args: [],
@@ -516,7 +516,7 @@ Deno.test("ryrr: fleetSlot is REFUSED while this process already holds the canon
 import { launchChrome } from ${JSON.stringify(`${ROOT}scripts/lib/chrome-launch.ts`)};
 try {
   await launchChrome({
-    requireQuiet: { maxLoadPerCore: 100, maxCompilers: 100, maxWaitMs: 500, sampleMs: 100, sustainedSamples: 1 },
+    requireQuiet: { maxLoadPerCore: 100, maxCompilers: 100, maxStealPct: 100, maxWaitMs: 500, sampleMs: 100, sustainedSamples: 1 },
     fleetSlot: { gate: "order-drill", boundMs: 1000 },
     binary: "/bin/true", args: [], timeoutMs: 500,
   });

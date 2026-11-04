@@ -2361,3 +2361,633 @@ Deno.test("mr1ak review: a QUIET run's latency breach is NOT hidden behind a loa
   assertStringIncludes(policy.error!, "on uncontended host");
   assertStringIncludes(policy.error!, "composer-ready took 320ms");
 });
+
+Deno.test("fbg7i: host CPU steal above the bound invalidates the run — contended, never a product red", () => {
+  // The fbg7i evidence: load/core 0.05 (quiet by the old signal) with 62% steal
+  // is a contended box — a 92ms "long task" on it is ~34ms of real work.
+  const stolenSample: any = {
+    measurable: true,
+    load1: 0.4,
+    load5: 0.3,
+    cores: 8,
+    loadPerCore: 0.05,
+    activeCompilers: 0,
+    compilerNames: [],
+    stealPct: 62,
+  };
+
+  const run = attributeBootRun(
+    1,
+    {
+      composerReadyEndMs: 40,
+      threadListHydratedEndMs: 90,
+      longTasks: [{ name: "self", duration: 92, startTime: 30 }],
+    },
+    [stolenSample],
+    { stealBoundPct: 25 }, // et2oh: INJECTED bound — an ambient override cannot rewrite this assertion
+  );
+  assertEquals(run.validMeasurement, false, "steal above the bound must invalidate the measurement");
+  assertStringIncludes(run.invalidReason!, "host CPU steal 62% > 25%");
+  assertStringIncludes(run.invalidReason!, "chrome-agent-platform-fbg7i");
+  assertEquals(run.hostWorstStealPct, 62);
+  assertEquals(run.hostLoaded, true);
+});
+
+Deno.test("fbg7i: steal within the bound keeps the run valid; a null reading is no verdict either way", () => {
+  const quietSample: any = {
+    measurable: true,
+    load1: 0.4,
+    load5: 0.3,
+    cores: 8,
+    loadPerCore: 0.05,
+    activeCompilers: 0,
+    compilerNames: [],
+    stealPct: 4,
+  };
+  const run = attributeBootRun(
+    1,
+    { composerReadyEndMs: 40, threadListHydratedEndMs: 90, longTasks: [] },
+    [quietSample],
+    { stealBoundPct: 25 },
+  );
+  assertEquals(run.validMeasurement, true);
+  assertEquals(run.hostWorstStealPct, 4);
+
+  // macOS / failed probe: stealPct null must neither invalidate nor whitewash —
+  // the run's validity comes from the signals that DID answer.
+  const noStealSignal: any = {
+    measurable: true,
+    load1: 0.4,
+    load5: 0.3,
+    cores: 8,
+    loadPerCore: 0.05,
+    activeCompilers: 0,
+    compilerNames: [],
+    stealPct: null,
+  };
+  const run2 = attributeBootRun(
+    2,
+    { composerReadyEndMs: 40, threadListHydratedEndMs: 90, longTasks: [] },
+    [noStealSignal],
+    { stealBoundPct: 25 },
+  );
+  assertEquals(run2.validMeasurement, true);
+  assertEquals(run2.hostWorstStealPct, null);
+});
+
+Deno.test("et2oh: an ambient CAP_QUIET_MAX_STEAL_PCT override changes the UNINJECTED classification, and an injected bound wins over ambient", () => {
+  const key = "CAP_QUIET_MAX_STEAL_PCT";
+  const saved = Deno.env.get(key);
+  try {
+    Deno.env.set(key, "70"); // operator widens the bound to 70%
+    const stolenSample: any = {
+      measurable: true,
+      load1: 0.4,
+      load5: 0.3,
+      cores: 8,
+      loadPerCore: 0.05,
+      activeCompilers: 0,
+      compilerNames: [],
+      stealPct: 62,
+    };
+    const metrics = { composerReadyEndMs: 40, threadListHydratedEndMs: 90, longTasks: [] };
+    // No injection: the ambient spec decides — 62% <= 70% keeps the run valid.
+    const ambientRun = attributeBootRun(1, metrics, [stolenSample]);
+    assertEquals(ambientRun.validMeasurement, true, "the ambient override widened the bound, so 62% steal is within it");
+    // Injected bound wins over ambient: 62% > 25% invalidates even with the env override set.
+    const injectedRun = attributeBootRun(2, metrics, [stolenSample], { stealBoundPct: 25 });
+    assertEquals(injectedRun.validMeasurement, false, "the injected bound must take precedence over the ambient override");
+    assertStringIncludes(injectedRun.invalidReason!, "host CPU steal 62% > 25%");
+  } finally {
+    if (saved === undefined) Deno.env.delete(key);
+    else Deno.env.set(key, saved);
+  }
+});
+
+Deno.test("fbg7i: a boot measured entirely on a stolen host is an environmental refusal, not a contract breach", () => {
+  const stolenSample: any = {
+    measurable: true,
+    load1: 1.2,
+    load5: 1.0,
+    cores: 8,
+    loadPerCore: 0.15,
+    activeCompilers: 0,
+    compilerNames: [],
+    stealPct: 71,
+  };
+  // Five runs, each with the 85-93ms "long tasks" fbg7i measured — all contended
+  // by steal, so the policy must REFUSE (exit 75) rather than red the tree.
+  const runs = [1, 2, 3, 4, 5].map((run) =>
+    attributeBootRun(
+      run,
+      {
+        composerReadyEndMs: 120,
+        threadListHydratedEndMs: 200,
+        longTasks: [{ name: "self", duration: 89, startTime: 100 }],
+      },
+      [stolenSample],
+      { stealBoundPct: 25 },
+    )
+  );
+  const policy = evaluateBootStagingPolicy(runs);
+  assertEquals(policy.ok, false);
+  assertEquals(policy.environmentalRefusal, true, "all-stolen runs refuse environmentally");
+  assertEquals(policy.validRuns.length, 0);
+  assertStringIncludes(policy.error ?? "", "host CPU steal");
+});
+
+Deno.test("r2l8n: a severe stall INSIDE a steal-invalidated run refuses environmentally — it is never a product red", () => {
+  // Live reproduction (fbg7i exit-run, 2026-10-25 04:54Z): the quiet-window acquirer opened at
+  // steal=0%, load/core=0.04, then the host spiked to 89% steal mid-measurement and a
+  // ~200ms-class task ballooned to 1995ms wall. The pre-r2l8n policy reddened the tree with
+  // 'severe long task breach' — a FAIL verdict from a starved box, which the acceptance
+  // forbids: a starved box yields a refusal.
+  const stolenSample: any = {
+    measurable: true,
+    load1: 1.13,
+    load5: 1.89,
+    cores: 8,
+    loadPerCore: 0.14,
+    activeCompilers: 0,
+    compilerNames: [],
+    stealPct: 89,
+    at: 1_700_000_000_000 + 6500, // inside the 1995ms task's own window [T0+5906, T0+7901]
+  };
+  const runs = [1, 2, 3, 4, 5].map((run) =>
+    attributeBootRun(
+      run,
+      {
+        composerReadyEndMs: 120,
+        threadListHydratedEndMs: 200,
+        timeOrigin: 1_700_000_000_000,
+        longTasks: run === 1
+          ? [{ name: "self", duration: 1995, startTime: 5906 }, { name: "self", duration: 100, startTime: 1201 }]
+          : [{ name: "self", duration: 93, startTime: 205 }],
+      },
+      [stolenSample],
+      { stealBoundPct: 10 },
+    )
+  );
+  assertEquals(runs[0].invalidatedBySteal, true);
+  assertEquals(runs[0].severeBreaches.length, 1, "1995ms is severe by duration alone");
+  const policy = evaluateBootStagingPolicy(runs);
+  assertEquals(policy.ok, false);
+  assertEquals(policy.environmentalRefusal, true, "all-stolen runs refuse; the stolen run's severe stall must not red the tree");
+  assertStringIncludes((policy.error ?? ""), "host CPU steal");
+  assert(
+    policy.warnings.some((w) => w.includes("severe stall") && w.includes("steal-invalidated")),
+    "the excluded severe stall must still be warned about, not silently dropped",
+  );
+});
+
+Deno.test("r2l8n: valid runs still decide the verdict when a stolen sibling carried a severe stall", () => {
+  const stolenSample: any = {
+    measurable: true, load1: 1.1, load5: 1.0, cores: 8, loadPerCore: 0.14,
+    activeCompilers: 0, compilerNames: [], stealPct: 72, at: 1_700_000_000_000 + 300,
+  };
+  const quietSample: any = {
+    measurable: true, load1: 0.4, load5: 0.3, cores: 8, loadPerCore: 0.05,
+    activeCompilers: 0, compilerNames: [], stealPct: 2, at: 1_700_000_000_000 + 300,
+  };
+  const stolenRun = attributeBootRun(
+    1,
+    { composerReadyEndMs: 120, threadListHydratedEndMs: 200, timeOrigin: 1_700_000_000_000, longTasks: [{ name: "self", duration: 800, startTime: 100 }] },
+    [stolenSample],
+    { stealBoundPct: 10 },
+  );
+  const cleanRuns = [2, 3].map((n) =>
+    attributeBootRun(
+      n,
+      { composerReadyDurationMs: 40, composerReadyEndMs: 120, threadListHydratedDurationMs: 60, threadListHydratedEndMs: 200, timeOrigin: 1_700_000_000_000, longTasks: [] },
+      [quietSample],
+      { stealBoundPct: 10 },
+    )
+  );
+  const policy = evaluateBootStagingPolicy([stolenRun, ...cleanRuns]);
+  assertEquals(policy.ok, true, "valid quiet runs with 0 long tasks pass; the stolen sibling cannot red them");
+  assertEquals(policy.environmentalRefusal, false);
+  assertEquals(policy.validRuns.length, 2);
+  assert(
+    policy.warnings.some((w) => w.includes("steal-invalidated")),
+    "the severe stall inside the stolen run is warned, not hidden",
+  );
+});
+
+Deno.test("r2l8n: a severe stall on a LOAD-contended run keeps the pre-steal immediate red", () => {
+  const loadedSample: any = {
+    measurable: true, load1: 22.0, load5: 18.0, cores: 14, loadPerCore: 1.57,
+    activeCompilers: 1, compilerNames: ["cargo"],
+  };
+  const run = attributeBootRun(
+    1,
+    { composerReadyEndMs: 40, threadListHydratedEndMs: 80, longTasks: [{ name: "self", duration: 520, startTime: 30 }] },
+    loadedSample,
+    { stealBoundPct: 10 },
+  );
+  assertEquals(run.invalidatedBySteal, false, "load/builder contention is not steal invalidation");
+  const policy = evaluateBootStagingPolicy([run]);
+  assertEquals(policy.ok, false);
+  assertEquals(policy.environmentalRefusal, false);
+  assertStringIncludes(policy.error!, "severe long task breach");
+});
+
+// ---------------------------------------------------------------------------
+// u4zgv: the severe-stall carve-out must be steal-MAGNITUDE-aware. At 11% steal
+// the wall-clock stretch factor is only 1/(1-0.11)=1.12x, so a 600ms reading is
+// ~534ms of real work and a 1995ms reading ~1775ms — steal cannot explain
+// either. Only steal that can account for the duration may suppress the red:
+// duration * (1 - worstSteal/100) must stay at or under the 500ms ceiling.
+// ---------------------------------------------------------------------------
+
+function u4zgvStolenSample(stealPct: number, at: number = U4ZGV_T0 + 300): any {
+  return {
+    measurable: true, load1: 1.1, load5: 1.0, cores: 8, loadPerCore: 0.14,
+    activeCompilers: 0, compilerNames: [], stealPct, at,
+  };
+}
+
+// Synthetic page timeOrigin (epoch ms). u4zgvStolenRun's task starts at
+// startTime 100, so its window is [U4ZGV_T0+100, U4ZGV_T0+100+duration] and the
+// default sample at U4ZGV_T0+300 falls INSIDE it for every duration used here.
+const U4ZGV_T0 = 1_700_000_000_000;
+
+function u4zgvQuietRun(n: number) {
+  return attributeBootRun(
+    n,
+    { composerReadyDurationMs: 40, composerReadyEndMs: 120, threadListHydratedDurationMs: 60, threadListHydratedEndMs: 200, timeOrigin: U4ZGV_T0, longTasks: [] },
+    [{ measurable: true, load1: 0.4, load5: 0.3, cores: 8, loadPerCore: 0.05, activeCompilers: 0, compilerNames: [], stealPct: 2, at: U4ZGV_T0 + 300 } as any],
+    { stealBoundPct: 10 },
+  );
+}
+
+function u4zgvStolenRun(stealPct: number, durationMs: number, run = 1, samples: any[] = [u4zgvStolenSample(stealPct)]) {
+  return attributeBootRun(
+    run,
+    { composerReadyEndMs: 120, threadListHydratedEndMs: 200, timeOrigin: U4ZGV_T0, longTasks: [{ name: "self", duration: durationMs, startTime: 100 }] },
+    samples,
+    { stealBoundPct: 10 },
+  );
+}
+
+Deno.test("u4zgv: a 600ms stall at 11% steal is NOT excusable — 534ms of real work stays a product red even with quiet siblings", () => {
+  const stolen = u4zgvStolenRun(11, 600);
+  assertEquals(stolen.invalidatedBySteal, true, "11% > the 10% admission bound, so the run is steal-invalid");
+  const policy = evaluateBootStagingPolicy([stolen, u4zgvQuietRun(2), u4zgvQuietRun(3), u4zgvQuietRun(4)]);
+  assertEquals(policy.ok, false, "1.12x stretch cannot explain 600ms: this must red, not PASS");
+  assertEquals(policy.environmentalRefusal, false, "an unexplained severe breach is a product red, never a refusal");
+  assertStringIncludes(policy.error!, "severe long task breach");
+});
+
+Deno.test("u4zgv: a 1995ms stall at 11% steal (~1775ms of real work) still reds", () => {
+  const policy = evaluateBootStagingPolicy([u4zgvStolenRun(11, 1995), u4zgvQuietRun(2), u4zgvQuietRun(3)]);
+  assertEquals(policy.ok, false);
+  assertEquals(policy.environmentalRefusal, false);
+  assertStringIncludes(policy.error!, "severe long task breach");
+});
+
+Deno.test("u4zgv: a severe stall on a run ONLY JUST above the steal bound still reds (boundary)", () => {
+  // 10.5% vs a 10% bound: invalidated, but 600ms * 0.895 = 537ms of real work > 500ms ceiling.
+  const policy = evaluateBootStagingPolicy([u4zgvStolenRun(10.5, 600), u4zgvQuietRun(2)]);
+  assertEquals(policy.ok, false);
+  assertEquals(policy.environmentalRefusal, false);
+  assertStringIncludes(policy.error!, "severe long task breach");
+});
+
+Deno.test("u4zgv: the carve-out boundary is pinned from BOTH sides — at 20% steal (1.25x, max 625ms) a 625ms stall is excused and a 626ms stall counts as evidence", () => {
+  // Stretch at 20% steal is exactly 1.25x, so a ceiling-level task can legitimately
+  // read up to 500 * 1.25 = 625ms wall. Just under/at the threshold: skip permitted.
+  const excused = evaluateBootStagingPolicy([u4zgvStolenRun(20, 625), u4zgvQuietRun(2)]);
+  assertEquals(excused.ok, true, "625ms == 500ms * 1.25 stretch prediction: inside the carve-out");
+  assert(
+    excused.warnings.some((w) => w.includes("severe stall") && w.includes("steal-invalidated") && w.includes("1.25x")),
+    "the excused breach is warned about, not silently dropped, and the warning names the stretch",
+  );
+  // Just over the threshold: still counts as evidence.
+  const red = evaluateBootStagingPolicy([u4zgvStolenRun(20, 626), u4zgvQuietRun(2)]);
+  assertEquals(red.ok, false, "626ms exceeds the 625ms stretch prediction by 1ms: evidence, never skipped");
+  assertEquals(red.environmentalRefusal, false);
+  assert(
+    red.warnings.some((w) => w.includes("EXCEEDS") && w.includes("by 1ms")),
+    "the red path names the subtraction: how far past the stretch prediction the stall is",
+  );
+});
+
+Deno.test("u4zgv: the steal-side boundary — at exactly the bound the run is valid (no carve-out, plain red); just above it a stall inside the prediction may skip", () => {
+  // steal == bound (10 <= 10): the run is NOT steal-invalid, so Check 1 applies plain.
+  const atBound = u4zgvStolenRun(10, 600);
+  assertEquals(atBound.invalidatedBySteal, false, "the admission bound is strictly greater-than");
+  const atBoundPolicy = evaluateBootStagingPolicy([atBound, u4zgvQuietRun(2)]);
+  assertEquals(atBoundPolicy.ok, false);
+  assertStringIncludes(atBoundPolicy.error!, "severe long task breach");
+  assert(!atBoundPolicy.warnings.some((w) => w.includes("steal-invalidated")), "no carve-out warning on a valid run");
+  // steal just above the bound (10.5%): invalidated, and 1.117x predicts up to ~558.7ms,
+  // so a 550ms stall fits inside the prediction and may skip.
+  const justAbove = evaluateBootStagingPolicy([u4zgvStolenRun(10.5, 550), u4zgvQuietRun(2)]);
+  assertEquals(justAbove.ok, true, "550ms <= 500 * 1.117 = 558.7ms: the measured stretch can account for it");
+  assert(justAbove.warnings.some((w) => w.includes("steal-invalidated")));
+});
+
+Deno.test("u4zgv: an unexplained severe breach with NO valid sibling is a red, never an environmental refusal", () => {
+  // Reviewer case E: 11% steal, 1995ms stall, every run stolen. Before u4zgv this
+  // returned a refusal, hiding a genuine catastrophic stall; a red beats a refusal.
+  const runs = [1, 2, 3].map((n) => u4zgvStolenRun(11, n === 1 ? 1995 : 60, n));
+  const policy = evaluateBootStagingPolicy(runs);
+  assertEquals(policy.ok, false);
+  assertEquals(policy.environmentalRefusal, false, "the unexplained severe breach must red, not refuse");
+  assertStringIncludes(policy.error!, "severe long task breach");
+});
+
+Deno.test("u4zgv: the intended 89%-steal carve-out survives — 1995ms at 89% (~219ms real) is excused and quiet siblings decide", () => {
+  const policy = evaluateBootStagingPolicy([u4zgvStolenRun(89, 1995), u4zgvQuietRun(2), u4zgvQuietRun(3)]);
+  assertEquals(policy.ok, true, "1995 * 0.11 = 219.45 <= 500: contention, not product signal");
+  assertEquals(policy.environmentalRefusal, false);
+  assert(
+    policy.warnings.some((w) => w.includes("severe stall") && w.includes("steal-invalidated")),
+    "the excused breach is still warned about",
+  );
+});
+
+Deno.test("pl6yz: the production harness resolves the steal bound ONCE from the spec and injects it into every attributeBootRun call", async () => {
+  const src = await Deno.readTextFile(new URL("./ntp-boot-staging-timing.test.ts", import.meta.url));
+  assertStringIncludes(
+    src,
+    "const SPEC_STEAL_BOUND_PCT = resolveSpec().maxStealPct;",
+    "the harness must resolve the bound once from the spec, as the et2oh comment claims",
+  );
+  assertStringIncludes(
+    src,
+    "attributeBootRun(run, rawMetrics, intervalSamples, { stealBoundPct: SPEC_STEAL_BOUND_PCT })",
+    "the sole production caller must inject the resolved bound",
+  );
+  assert(
+    !/attributeBootRun\(\s*run,\s*rawMetrics,\s*intervalSamples\s*\)/.test(src),
+    "no production caller may rely on the ambient resolveSpec() fallback per run",
+  );
+});
+
+Deno.test("u4zgv: the carve-out is DETERMINISTIC — the same stall under the same steal classifies identically on consecutive runs, and unrelated samples or their order cannot flip it", () => {
+  // (a) Two consecutive evaluations of identical inputs agree on every verdict field.
+  const once = evaluateBootStagingPolicy([u4zgvStolenRun(11, 600), u4zgvQuietRun(2)]);
+  const twice = evaluateBootStagingPolicy([u4zgvStolenRun(11, 600), u4zgvQuietRun(2)]);
+  assertEquals(once.ok, twice.ok);
+  assertEquals(once.environmentalRefusal, twice.environmentalRefusal);
+  assertEquals(once.error, twice.error);
+  assertEquals(once.warnings.length, twice.warnings.length);
+  const excusedOnce = evaluateBootStagingPolicy([u4zgvStolenRun(89, 1995), u4zgvQuietRun(2)]);
+  const excusedTwice = evaluateBootStagingPolicy([u4zgvStolenRun(89, 1995), u4zgvQuietRun(2)]);
+  assertEquals(excusedOnce.ok, excusedTwice.ok);
+  assertEquals(excusedOnce.error, excusedTwice.error);
+  // (b) An unrelated QUIETER sample inside the same interval cannot flip the
+  // classification: the carve-out reads the WORST measured steal of the interval.
+  const metrics = { composerReadyEndMs: 120, threadListHydratedEndMs: 200, timeOrigin: U4ZGV_T0, longTasks: [{ name: "self", duration: 600, startTime: 100 }] };
+  const quiet: any = { measurable: true, load1: 0.4, load5: 0.3, cores: 8, loadPerCore: 0.05, activeCompilers: 0, compilerNames: [], stealPct: 1, at: U4ZGV_T0 + 400 };
+  const withExtraQuiet = attributeBootRun(1, metrics, [u4zgvStolenSample(11), quiet, u4zgvStolenSample(11, U4ZGV_T0 + 500)], { stealBoundPct: 10 });
+  const mixed = evaluateBootStagingPolicy([withExtraQuiet, u4zgvQuietRun(2)]);
+  assertEquals(mixed.ok, once.ok, "an added quiet sample does not dilute the worst-steal reading");
+  assertEquals(mixed.environmentalRefusal, once.environmentalRefusal);
+  // (c) Sample ORDER cannot flip the verdict either (worst-steal is a max, not a first-match).
+  const reversed = attributeBootRun(1, metrics, [quiet, u4zgvStolenSample(11)], { stealBoundPct: 10 });
+  const reversedPolicy = evaluateBootStagingPolicy([reversed, u4zgvQuietRun(2)]);
+  assertEquals(reversedPolicy.ok, once.ok);
+  assertEquals(reversedPolicy.environmentalRefusal, once.environmentalRefusal);
+  assertEquals(reversedPolicy.ok, false, "600ms at 11% steal reds regardless of sample order");
+});
+
+Deno.test("u4zgv: a MISSING or MALFORMED steal sample excuses nothing — 'we could not measure the stretch' is never 'the stretch explains the stall'", () => {
+  const metrics = { composerReadyEndMs: 120, threadListHydratedEndMs: 200, longTasks: [{ name: "self", duration: 600, startTime: 100 }] };
+  // (a) No steal signal at all (macOS-style null): no carve-out, the breach is evidence.
+  const noSignal: any = { measurable: true, load1: 0.4, load5: 0.3, cores: 8, loadPerCore: 0.05, activeCompilers: 0, compilerNames: [], stealPct: null };
+  const nullRun = attributeBootRun(1, metrics, [noSignal], { stealBoundPct: 10 });
+  assertEquals(nullRun.invalidatedBySteal, false, "a null steal reading cannot invalidate by steal");
+  const nullPolicy = evaluateBootStagingPolicy([nullRun]);
+  assertEquals(nullPolicy.ok, false);
+  assertEquals(nullPolicy.environmentalRefusal, false, "evidence (red), never a silent skip or a refusal");
+  assertStringIncludes(nullPolicy.error!, "severe long task breach");
+  assert(!nullPolicy.warnings.some((w) => w.includes("steal-invalidated")), "no carve-out was applied");
+  // (b) Malformed steal (NaN): typeof 'number' but not a usable measurement — fail-closed.
+  const nanSample: any = { ...noSignal, stealPct: NaN };
+  const nanRun = attributeBootRun(1, metrics, [nanSample], { stealBoundPct: 10 });
+  assertEquals(nanRun.invalidatedBySteal, false, "NaN > bound is false, so no steal invalidation");
+  const nanPolicy = evaluateBootStagingPolicy([nanRun]);
+  assertEquals(nanPolicy.ok, false);
+  assertEquals(nanPolicy.environmentalRefusal, false);
+  assertStringIncludes(nanPolicy.error!, "severe long task breach");
+  // (c) Unmeasurable sample in the interval: the run is invalid (refusal-track), but the
+  // severe breach STILL reds — Check 1 has no unmeasurable-host skip.
+  const unmeasurable: any = { measurable: false, error: "/proc/stat unreadable" };
+  const unmeasRun = attributeBootRun(1, metrics, [unmeasurable], { stealBoundPct: 10 });
+  assertEquals(unmeasRun.validMeasurement, false);
+  assertEquals(unmeasRun.invalidatedBySteal, false);
+  const unmeasPolicy = evaluateBootStagingPolicy([unmeasRun]);
+  assertEquals(unmeasPolicy.ok, false);
+  assertEquals(unmeasPolicy.environmentalRefusal, false, "a severe breach on an unmeasured host is evidence, not a refusal");
+  assertStringIncludes(unmeasPolicy.error!, "severe long task breach");
+  // (d) A malformed sibling sample cannot DILUTE a real steal reading either: the
+  // excuse uses the worst NUMERIC in-window steal, so 89% still explains 1995ms.
+  const bigStall = { composerReadyEndMs: 120, threadListHydratedEndMs: 200, timeOrigin: U4ZGV_T0, longTasks: [{ name: "self", duration: 1995, startTime: 100 }] };
+  const mixedRun = attributeBootRun(1, bigStall, [u4zgvStolenSample(89), nanSample], { stealBoundPct: 10 });
+  assertEquals(mixedRun.invalidatedBySteal, true);
+  assertEquals(mixedRun.hostWorstStealPct, 89, "the malformed NaN sample is excluded from the worst-steal reading");
+  const mixedPolicy = evaluateBootStagingPolicy([mixedRun, u4zgvQuietRun(2)]);
+  assertEquals(mixedPolicy.ok, true, "89% stretch (9.09x, max 4545ms) still explains the 1995ms stall");
+});
+
+// ---------------------------------------------------------------------------
+// h5wbd: the excuse must come from the steal IN FORCE ACROSS THE TASK'S OWN
+// WINDOW, never from the run's max. A spike elsewhere in the interval used to
+// retroactively excuse an unexplained catastrophe (600ms bracketed by 11%
+// flipped to PASS once ANY sibling sample read >=16.7%) - a false GREEN.
+// Coord ruling 2026-11-04 adds the saturation edge: at >= 99.9% steal the
+// stretch goes unbounded ('Infinityx' at 100%), so a non-finite or saturated
+// stretch must fail closed - evidence-or-red - like a missing/malformed sample.
+// ---------------------------------------------------------------------------
+
+Deno.test("h5wbd: a loud steal spike OUTSIDE the stall's window excuses nothing - [11 in-window, 89 far] reds in both orders and at every magnitude", () => {
+  const inWindow = u4zgvStolenSample(11, U4ZGV_T0 + 300); // task window is [T0+100, T0+700]
+  for (const farSteal of [16.7, 20, 89, 99]) {
+    const far = u4zgvStolenSample(farSteal, U4ZGV_T0 + 60_000); // a minute away: beyond any bracketing reach
+    const forward = evaluateBootStagingPolicy([u4zgvStolenRun(11, 600, 1, [inWindow, far]), u4zgvQuietRun(2)]);
+    assertEquals(forward.ok, false, `far ${farSteal}% sibling must not excuse the 600ms stall (forward order)`);
+    assertEquals(forward.environmentalRefusal, false);
+    assertStringIncludes(forward.error!, "severe long task breach");
+    const backward = evaluateBootStagingPolicy([u4zgvStolenRun(11, 600, 1, [far, inWindow]), u4zgvQuietRun(2)]);
+    assertEquals(backward.ok, false, `far ${farSteal}% sibling must not excuse the 600ms stall (reverse order)`);
+  }
+});
+
+Deno.test("h5wbd: steal IN FORCE inside the window still excuses - the reviewer's sweep values, now justified by bracketed samples only", () => {
+  // 600ms needs stretch >= 1.2, i.e. in-window steal >= 16.67%: 16.7 excuses, 16.6 reds.
+  const excuseSide = evaluateBootStagingPolicy([
+    u4zgvStolenRun(11, 600, 1, [u4zgvStolenSample(11, U4ZGV_T0 + 200), u4zgvStolenSample(16.7, U4ZGV_T0 + 400)]),
+    u4zgvQuietRun(2),
+  ]);
+  assertEquals(excuseSide.ok, true, "16.7% IN FORCE across the window legitimately explains 600ms (500 * 1.2005 = 600.2ms)");
+  const redSide = evaluateBootStagingPolicy([
+    u4zgvStolenRun(11, 600, 1, [u4zgvStolenSample(11, U4ZGV_T0 + 200), u4zgvStolenSample(16.6, U4ZGV_T0 + 400)]),
+    u4zgvQuietRun(2),
+  ]);
+  assertEquals(redSide.ok, false, "16.6% in-window stretch (1.199x, max 599.5ms) cannot explain 600ms");
+  assertStringIncludes(redSide.error!, "severe long task breach");
+  // the live 1995ms-at-89% class stays excused when the 89% sample is IN the window
+  const live = evaluateBootStagingPolicy([
+    u4zgvStolenRun(11, 1995, 1, [u4zgvStolenSample(11, U4ZGV_T0 + 200), u4zgvStolenSample(89, U4ZGV_T0 + 900)]),
+    u4zgvQuietRun(2),
+  ]);
+  assertEquals(live.ok, true, "89% in force across the 1995ms window: contention, not product");
+  assert(live.warnings.some((w) => w.includes("IN FORCE ACROSS THE STALL WINDOW")));
+});
+
+Deno.test("h5wbd/gl59n: the before-side fallback honours its reach - a sample just before the window proxies, one far away does not", () => {
+  // No sample INSIDE [T0+100, T0+700]: only the nearest BEFORE-side sample within
+  // STEAL_BRACKET_REACH_MS may proxy the steal in force across the stall.
+  const nearBefore = evaluateBootStagingPolicy([
+    u4zgvStolenRun(89, 600, 1, [u4zgvStolenSample(89, U4ZGV_T0 + 50)]), // 50ms before the window, inside the 1000ms reach
+    u4zgvQuietRun(2),
+  ]);
+  assertEquals(nearBefore.ok, true, "a before-side sample 50ms ahead of the stall measures the steal leading into it");
+  const farBefore = evaluateBootStagingPolicy([
+    u4zgvStolenRun(11, 600, 1, [u4zgvStolenSample(89, U4ZGV_T0 - 5000), u4zgvStolenSample(11, U4ZGV_T0 + 300)]),
+    u4zgvQuietRun(2),
+  ]);
+  // the 11% sample IS in-window, so the in-window set decides alone: red
+  assertEquals(farBefore.ok, false);
+  const onlyFar = evaluateBootStagingPolicy([
+    u4zgvStolenRun(11, 600, 1, [u4zgvStolenSample(89, U4ZGV_T0 - 5000)]),
+    u4zgvQuietRun(2),
+  ]);
+  assertEquals(onlyFar.ok, false, "a sample 5s before the window is beyond the reach: fail-closed red");
+  assertEquals(onlyFar.environmentalRefusal, false);
+});
+
+Deno.test("gl59n: an AFTER-side sample cannot causally excuse a stall that already ended - the reviewer's table, replayed", () => {
+  // Stall window [T0+100, T0+700]; reach is 1000ms on the before side only.
+  // (1) AFTER-only loud sample within the old two-sided reach: the spike began
+  // once the stall was over - it measured conditions that cannot explain it.
+  const afterOnly = evaluateBootStagingPolicy([
+    u4zgvStolenRun(11, 600, 1, [u4zgvStolenSample(89, U4ZGV_T0 + 1400)]), // t1+700, inside the old reach
+    u4zgvQuietRun(2),
+  ]);
+  assertEquals(afterOnly.ok, false, "an after-side 89% sample must not excuse the 600ms stall");
+  assertEquals(afterOnly.environmentalRefusal, false);
+  assertStringIncludes(afterOnly.error!, "severe long task breach");
+  // (2) quiet before + loud after: the transition happened AFTER the stall.
+  const quietBeforeLoudAfter = evaluateBootStagingPolicy([
+    u4zgvStolenRun(11, 600, 1, [
+      u4zgvStolenSample(11, U4ZGV_T0 + 50),
+      u4zgvStolenSample(89, U4ZGV_T0 + 1400),
+    ]),
+    u4zgvQuietRun(2),
+  ]);
+  assertEquals(quietBeforeLoudAfter.ok, false, "the before side (11%) decides: 1.12x cannot carry 600ms");
+  // (3) loud before + quiet after: the spike was in force LEADING INTO the stall
+  // and decayed afterwards - the before side legitimately explains it.
+  const loudBeforeQuietAfter = evaluateBootStagingPolicy([
+    u4zgvStolenRun(89, 600, 1, [
+      u4zgvStolenSample(89, U4ZGV_T0 + 50),
+      u4zgvStolenSample(11, U4ZGV_T0 + 1400),
+    ]),
+    u4zgvQuietRun(2),
+  ]);
+  assertEquals(loudBeforeQuietAfter.ok, true, "89% in force leading into the window explains 600ms (9.09x -> 4545ms)");
+  assert(
+    loudBeforeQuietAfter.warnings.some((w) => w.includes("before-side proxy")),
+    "the excuse warning names the before-side proxy",
+  );
+});
+
+Deno.test("coord 2026-11-04: saturated steal (>= 99.9%) and the Infinity stretch fail closed - a 30-SECOND stall is never excused and no diagnostic says Infinity", () => {
+  for (const saturated of [99.9, 99.95, 100, 120]) {
+    const policy = evaluateBootStagingPolicy([
+      u4zgvStolenRun(saturated, 30_000, 1, [u4zgvStolenSample(saturated, U4ZGV_T0 + 300)]),
+      u4zgvQuietRun(2),
+    ]);
+    assertEquals(policy.ok, false, `${saturated}% steal: the stretch is saturated/non-finite - fail closed, evidence-or-red`);
+    assertEquals(policy.environmentalRefusal, false);
+    assertStringIncludes(policy.error!, "severe long task breach");
+    for (const w of policy.warnings) {
+      assert(!w.includes("Infinity"), `no diagnostic may print Infinity (got: ${w})`);
+    }
+    assert(
+      policy.warnings.some((w) => w.includes("NO usable steal measurement") && w.includes("saturated")),
+      "the fail-closed warning names the saturation",
+    );
+  }
+  // 1gro1: the saturation threshold alone was a KNIFE-EDGE - at 99.8% the stretch
+  // is a finite 500x and a 30-SECOND stall was excused into a green PASS with a
+  // warning reading 'worst 100%' beside '500.00x'. The excusable stretch is now
+  // CAPPED (STEAL_EXCUSE_MAX_STRETCH = 10x): 99.8% fails closed like saturation.
+  const knifeEdge = evaluateBootStagingPolicy([
+    u4zgvStolenRun(99.8, 30_000, 1, [u4zgvStolenSample(99.8, U4ZGV_T0 + 300)]),
+    u4zgvQuietRun(2),
+  ]);
+  assertEquals(knifeEdge.ok, false, "99.8% -> 500x stretch exceeds the 10x cap: a 30s stall is evidence, never excused");
+  assertEquals(knifeEdge.environmentalRefusal, false);
+  assert(
+    knifeEdge.warnings.some((w) => w.includes("excusable-stretch cap")),
+    "the fail-closed warning names the stretch cap, not just saturation",
+  );
+  assert(!knifeEdge.warnings.some((w) => w.includes("500.00x")), "no diagnostic may present the 500x stretch as an excuse");
+  // The cap boundary itself (1gro1): 89.9% -> 9.90x (max ~4950ms) is under the
+  // cap and may excuse; 91% -> 11.1x may not. (Exactly 90% lands on the cap
+  // through float representation - 1/(1-0.9) reads 10.000000000000002 - and
+  // fails closed; the direction is right but the float artifact is not pinned.)
+  const underCap = evaluateBootStagingPolicy([
+    u4zgvStolenRun(89.9, 4900, 1, [u4zgvStolenSample(89.9, U4ZGV_T0 + 300)]),
+    u4zgvQuietRun(2),
+  ]);
+  assertEquals(underCap.ok, true, "89.9% -> 9.90x, max ~4950ms: a 4900ms stall fits inside the prediction");
+  assert(
+    underCap.warnings.some((w) => w.includes("worst 89.9%")),
+    "the excuse warning renders the steal at 0.1% precision - 'worst 89.9%', never a rounded '90%' lie",
+  );
+  const pastCap = evaluateBootStagingPolicy([
+    u4zgvStolenRun(91, 4900, 1, [u4zgvStolenSample(91, U4ZGV_T0 + 300)]),
+    u4zgvQuietRun(2),
+  ]);
+  assertEquals(pastCap.ok, false, "91% -> 11.1x is past the cap: fail closed even though the stall would 'fit'");
+  // Under the cap the proportional rule still reds an exceeding stall.
+  const exceedsUnderCap = evaluateBootStagingPolicy([
+    u4zgvStolenRun(80, 2600, 1, [u4zgvStolenSample(80, U4ZGV_T0 + 300)]),
+    u4zgvQuietRun(2),
+  ]);
+  assertEquals(exceedsUnderCap.ok, false, "a 2600ms stall exceeds the 2500ms the 5x stretch (80% steal) predicts by 100ms");
+  assert(
+    exceedsUnderCap.warnings.some((w) => w.includes("predicts by 100ms")),
+    "the excess is named in ms",
+  );
+  // The live motivating class stays inside the cap: 89% -> 9.09x -> 4545ms.
+  const liveClass = evaluateBootStagingPolicy([
+    u4zgvStolenRun(89, 1995, 1, [u4zgvStolenSample(89, U4ZGV_T0 + 300)]),
+    u4zgvQuietRun(2),
+  ]);
+  assertEquals(liveClass.ok, true, "89% -> 9.09x (max 4545ms) still explains the 1995ms live-evidence stall");
+});
+
+Deno.test("h5wbd: an unplaceable task window fails closed - missing timeOrigin or untimed samples leave the breach as evidence", () => {
+  // (a) samples timed, but the page metrics carry no timeOrigin: the window cannot
+  // be placed on the samples' clock, so nothing may excuse the breach.
+  const noOrigin = attributeBootRun(
+    1,
+    { composerReadyEndMs: 120, threadListHydratedEndMs: 200, longTasks: [{ name: "self", duration: 1995, startTime: 100 }] },
+    [u4zgvStolenSample(89)],
+    { stealBoundPct: 10 },
+  );
+  assertEquals(noOrigin.invalidatedBySteal, true);
+  assertEquals(noOrigin.severeBreaches[0].stealExcuse, null, "no timeOrigin -> no excuse object");
+  const noOriginPolicy = evaluateBootStagingPolicy([noOrigin, u4zgvQuietRun(2)]);
+  assertEquals(noOriginPolicy.ok, false, "'we could not place the steal' is never 'the stretch explains the stall'");
+  assertEquals(noOriginPolicy.environmentalRefusal, false);
+  // (b) timeOrigin present but the samples carry no timestamps (pre-h5wbd shapes).
+  const untimed: any = { measurable: true, load1: 1.1, load5: 1.0, cores: 8, loadPerCore: 0.14, activeCompilers: 0, compilerNames: [], stealPct: 89 };
+  const noTimestamps = attributeBootRun(
+    1,
+    { composerReadyEndMs: 120, threadListHydratedEndMs: 200, timeOrigin: U4ZGV_T0, longTasks: [{ name: "self", duration: 1995, startTime: 100 }] },
+    [untimed],
+    { stealBoundPct: 10 },
+  );
+  assertEquals(noTimestamps.severeBreaches[0].stealExcuse, null);
+  const untimedPolicy = evaluateBootStagingPolicy([noTimestamps, u4zgvQuietRun(2)]);
+  assertEquals(untimedPolicy.ok, false);
+  assertEquals(untimedPolicy.environmentalRefusal, false);
+  assertStringIncludes(untimedPolicy.error!, "severe long task breach");
+});

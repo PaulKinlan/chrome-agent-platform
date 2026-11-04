@@ -59,6 +59,16 @@
 //     the quiet still has to SUSTAIN across consecutive samples, so a run can
 //     only start after several seconds in which the build consumed no CPU at
 //     all, which is not a build starving a CDP run.
+//     chrome-agent-platform-fbg7i: the measurement now ALSO reads host CPU steal
+//     (the /proc/stat aggregate `steal` tick delta across a short window). Steal
+//     is the one contention source loadavg is BLIND to: a hypervisor that takes
+//     the vCPU mid-task stretches every task's wall clock on every process at
+//     once (measured on the exe.dev VM: 77-105 ms stalls with ~0 ms of traced
+//     work inside, on the renderer, the browser process AND the GPU process
+//     simultaneously; 40-88% instantaneous steal on an otherwise idle box) while
+//     load/core reads a quiet 0.15. A wall-clock budget measured on a stolen box
+//     is a red that says nothing about the tree — so steal above
+//     CAP_QUIET_MAX_STEAL_PCT is "not quiet", exactly like load.
 //   - WAIT: bounded (CAP_QUIET_WAIT_MS), sampled (CAP_QUIET_SAMPLE_MS), and the
 //     quiet has to be SUSTAINED (CAP_QUIET_SUSTAINED consecutive samples) — a
 //     one-sample dip must not start a ten-minute run that then starves.
@@ -78,6 +88,8 @@
 //   CAP_QUIET_WAIT_MS            default 600000
 //   CAP_QUIET_SAMPLE_MS          default 2000
 //   CAP_QUIET_SUSTAINED          default 3
+//   CAP_QUIET_MAX_STEAL_PCT      default 10    (host steal% above which wall-clock budgets are uncertifiable — fbg7i)
+//   CAP_QUIET_STEAL_WINDOW_MS    default 120   (the /proc/stat delta window each sample pays)
 
 /** Process names that mean "somebody is compiling or imaging right now".
  *  Deliberately conservative: a browser, a deno/node test worker or an editor
@@ -152,6 +164,15 @@ export interface LoadSample {
   load15: number;
   cores: number;
   loadPerCore: number;
+  /** Host CPU steal percentage measured across a short /proc/stat delta window
+   *  inside this sample (fbg7i): the fraction of wall time the hypervisor gave
+   *  to someone else while this VM wanted to run. On a /proc host (Linux) a
+   *  probe that cannot answer does NOT produce a null sample field — it makes
+   *  the whole sample unmeasurable (fail closed, review P1-1). `null` is the
+   *  documented no-signal shape of the no-/proc branch (macOS has no steal
+   *  counter in this form); `undefined` marks hand-built samples. Neither null
+   *  nor undefined is treated as evidence of quiet OR of steal. */
+  stealPct?: number | null;
   /** Count of HEAVY_PROCESS_NAMES processes (excluding this process's pid) —
    *  the NAME MATCH. Evidence, and the conservative superset of the builders
    *  below: it includes parked services that are not compiling anything. */
@@ -207,6 +228,86 @@ export interface ProcCpu {
  *  ppid 1, utime 11, stime 12 and starttime 19. Exported for the unit tests — a
  *  misparse here would silently classify every build as idle, which is the dnop bug again
  *  with the arithmetic instead of the name. */
+/** Host-wide CPU tick snapshot from the aggregate `cpu` line of /proc/stat (fbg7i). */
+export interface HostCpuTicks {
+  total: number;
+  steal: number;
+}
+
+/** Parse the aggregate `cpu ` line of /proc/stat into total + steal ticks.
+ *  Field order: user nice system idle iowait irq softirq steal [guest guest_nice].
+ *  The denominator is fields 0..7 ONLY: guest and guest_nice are already
+ *  accounted inside user and nice by the kernel, so adding them double-counts
+ *  guest work and understates steal (fbg7i review P1-3, falsified by a
+ *  nonzero-guest fixture).
+ *  Returns null on a malformed or missing line: on a /proc host the caller
+ *  turns that into an unmeasurable sample (a refusal), never a quiet verdict. */
+export function parseHostCpuTicks(procStat: string): HostCpuTicks | null {
+  const line = procStat.split("\n").find((l) => l.startsWith("cpu "));
+  if (!line) return null;
+  const fields = line.trim().split(/\s+/u).slice(1).map(Number);
+  if (fields.length < 8 || fields.slice(0, 8).some((n) => !Number.isFinite(n) || n < 0)) return null;
+  const steal = fields[7];
+  const total = fields.slice(0, 8).reduce((a, b) => a + b, 0);
+  return { total, steal };
+}
+
+/** Steal percentage between two host snapshots: 100 * Δsteal / Δtotal.
+ *  Null when either side is missing, the counters went backwards (reset), or
+ *  no time elapsed — an unanswerable window, never a verdict. */
+export function stealPctBetween(prev: HostCpuTicks | null, curr: HostCpuTicks | null): number | null {
+  if (!prev || !curr) return null;
+  const dTotal = curr.total - prev.total;
+  const dSteal = curr.steal - prev.steal;
+  if (dTotal <= 0 || dSteal < 0) return null;
+  return Math.max(0, Math.min(100, (100 * dSteal) / dTotal));
+}
+
+export interface StealProbeDeps {
+  /** The delta window, instead of CAP_QUIET_STEAL_WINDOW_MS (default 120 ms). */
+  windowMs?: number;
+  /** Stands in for the /proc/stat read. */
+  readProcStat?: () => Promise<string>;
+  /** Stands in for the window sleep. */
+  sleep?: (ms: number) => Promise<void>;
+}
+
+/**
+ * The default steal probe (chrome-agent-platform-fbg7i): two /proc/stat reads
+ * bracketing a short window, `stealPctBetween` on the aggregate line. Why a
+ * self-contained window rather than the caller's previous sample: the sample
+ * contract passes only the per-pid CPU map between reads, and a module-level
+ * "last host ticks" would be hidden cross-test state. The window is small
+ * (default 120 ms) because steal that matters to a 50 ms wall-clock budget is
+ * not subtle — measured 40-88% on the exe.dev VM that produced fbg7i, versus
+ * ~0% on a healthy host. Null means unmeasurable, and null is NOT a quiet
+ * verdict input either way (see LoadSample.stealPct).
+ */
+export async function defaultProbeStealPct(deps: StealProbeDeps = {}): Promise<number | null> {
+  const read = deps.readProcStat ?? (() => Deno.readTextFile("/proc/stat"));
+  const sleep = deps.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)));
+  // fbg7i review P2: the window is CLAMPED, not just defaulted. The floor keeps
+  // the delta meaningful; the 1000 ms ceiling is applied to the resolved value
+  // itself, so CAP_QUIET_STEAL_WINDOW_MS can narrow the probe but can never
+  // widen it past the point where a probe could outlast the wait it serves.
+  const windowMs = Math.min(
+    1000,
+    Math.max(
+      20,
+      num(deps.windowMs?.toString() ?? Deno.env.get("CAP_QUIET_STEAL_WINDOW_MS") ?? undefined, 120),
+    ),
+  );
+  try {
+    const first = parseHostCpuTicks(await read());
+    if (!first) return null;
+    await sleep(windowMs);
+    const second = parseHostCpuTicks(await read());
+    return stealPctBetween(first, second);
+  } catch {
+    return null;
+  }
+}
+
 export function parseProcStatCpu(stat: string, name = ""): ProcCpu | null {
   const close = stat.lastIndexOf(")");
   if (close < 0) return null;
@@ -275,6 +376,7 @@ export function countBuilderJobs(activePids: string[], cpu: ProcCpuMap | null | 
 export interface QuietSpec {
   maxLoadPerCore?: number;
   maxCompilers?: number;
+  maxStealPct?: number;
   maxWaitMs?: number;
   sampleMs?: number;
   sustainedSamples?: number;
@@ -297,6 +399,7 @@ export type QuietVerdict =
 export interface ResolvedSpec {
   maxLoadPerCore: number;
   maxCompilers: number;
+  maxStealPct: number;
   maxWaitMs: number;
   sampleMs: number;
   sustainedSamples: number;
@@ -343,6 +446,10 @@ export function resolveSpec(spec: QuietSpec = {}): ResolvedSpec {
       spec.maxCompilers?.toString() ?? Deno.env.get("CAP_QUIET_MAX_COMPILERS") ?? undefined,
       1,
     ),
+    maxStealPct: num(
+      spec.maxStealPct?.toString() ?? Deno.env.get("CAP_QUIET_MAX_STEAL_PCT") ?? undefined,
+      10,
+    ),
     maxWaitMs: num(
       spec.maxWaitMs?.toString() ?? Deno.env.get("CAP_QUIET_WAIT_MS") ?? undefined,
       600_000,
@@ -360,6 +467,7 @@ export function resolveSpec(spec: QuietSpec = {}): ResolvedSpec {
 
 export function formatSpec(spec: ResolvedSpec): string {
   return `load1/core<=${spec.maxLoadPerCore}, heavy-builders<=${spec.maxCompilers}, ` +
+    `steal<=${spec.maxStealPct}%, ` +
     `sustained=${spec.sustainedSamples}x${spec.sampleMs}ms, bound=${spec.maxWaitMs}ms`;
 }
 
@@ -369,6 +477,7 @@ export function environmentLine(sample: LoadSample | null, spec?: ResolvedSpec):
   if (!sample.measurable) return `environment: unmeasurable (${sample.error ?? "unknown"})`;
   const base = `load1=${sample.load1.toFixed(2)} load5=${sample.load5.toFixed(2)} ` +
     `cores=${sample.cores} load/core=${sample.loadPerCore.toFixed(2)} ` +
+    (typeof sample.stealPct === "number" ? `steal=${sample.stealPct.toFixed(0)}% ` : "") +
     `heavy-builders=${sample.compilers}` +
     (sample.activeCompilers !== undefined ? ` active=${sample.activeCompilers}` : "") +
     (sample.activeBuilderJobs !== undefined ? ` jobs=${sample.activeBuilderJobs}` : "") +
@@ -444,6 +553,14 @@ export interface LoadSampleDeps {
    *  boundary between "truncated" and "measured" can be pinned with a frozen clock instead of a
    *  timing race. Default: the real clock. The sample's `at` timestamp still uses the real clock. */
   now?: () => number;
+  /** Stands in for the host-steal probe (fbg7i), honoured on BOTH branches —
+   *  it is the platform-capability seam. Defaults: `defaultProbeStealPct` on a
+   *  /proc host (two /proc/stat reads over a clamped 120 ms window), an
+   *  always-null probe on the no-/proc branch (macOS has no steal counter).
+   *  On a /proc host a null answer refuses the sample outright (fail closed,
+   *  review P1-1); on the no-/proc branch null is the documented no-signal
+   *  shape and the sample proceeds. */
+  probeStealPct?: () => Promise<number | null>;
 }
 
 /** The environment `ps` runs under on the no-/proc branch (chrome-agent-platform-jjsz F6).
@@ -512,6 +629,39 @@ async function readLoadSampleOnce(
   const now = deps.now ?? (() => Date.now());
   const at = Date.now();
   const cores = Math.max(1, navigator.hardwareConcurrency || 1);
+  // fbg7i: host CPU steal — the contention signal loadavg cannot see. The probe
+  // runs FIRST, before loadavg or the walk, so that its fail-closed refusal
+  // (below) is reachable without touching anything real — that ordering is what
+  // makes the refusal path hermetically testable (review P1-2).
+  //
+  // Fail CLOSED on a /proc host (review P1-1): null from the probe means
+  // /proc/stat was missing, malformed or unreadable ON LINUX — a box whose
+  // steal cannot be measured is not a quiet verdict, it is an unmeasurable
+  // sample (the module's standing contract: unmeasurable ⇒ refusal). The
+  // no-/proc (macOS) branch has no steal counter at all: its default probe is
+  // the null probe, the sample proceeds exactly as before, and stealPct null
+  // there is the documented no-signal shape, not a failure. An injected
+  // probeStealPct is honoured on BOTH branches — it is the capability seam.
+  let stealPct: number | null = null;
+  {
+    const probe = deps.probeStealPct ??
+      (hasProc ? defaultProbeStealPct : () => Promise.resolve(null));
+    try {
+      stealPct = await probe();
+    } catch {
+      stealPct = null;
+    }
+  }
+  if (hasProc && stealPct === null) {
+    return {
+      at, load1: 0, load5: 0, load15: 0, cores, loadPerCore: Infinity,
+      compilers: 0, compilerNames: [], measurable: false,
+      unbaselined: prev == null,
+      stealPct: null,
+      error: "host CPU steal unmeasurable on a /proc host (/proc/stat missing, malformed or unreadable) — " +
+        "a Linux box whose steal cannot be measured is NOT a quiet verdict (chrome-agent-platform-fbg7i review P1-1)",
+    };
+  }
   let load1 = NaN, load5 = NaN, load15 = NaN;
   try {
     if (!hasProc) {
@@ -691,7 +841,7 @@ async function readLoadSampleOnce(
   const activePids = classifyActiveBuilders(prev ?? null, cpu);
   const activeNames = [...new Set(activePids.map((pid) => cpu.get(pid)?.name ?? "").filter(Boolean))];
   return {
-    at, load1, load5, load15, cores, loadPerCore: load1 / cores,
+    at, load1, load5, load15, cores, loadPerCore: load1 / cores, stealPct,
     compilers, compilerNames: [...names], measurable: true,
     activeCompilers: activePids.length,
     activeCompilerNames: activeNames.slice(0, 8),
@@ -710,6 +860,15 @@ export function quietReasons(sample: LoadSample, spec: ResolvedSpec): string[] {
   const reasons: string[] = [];
   if (sample.loadPerCore > spec.maxLoadPerCore) {
     reasons.push(`load/core ${sample.loadPerCore.toFixed(2)} > ${spec.maxLoadPerCore}`);
+  }
+  // fbg7i: a stolen vCPU stretches every task's wall clock without moving load
+  // average — a wall-clock budget measured above the steal bound certifies
+  // nothing, so it reads as contention, never as a product red.
+  if (typeof sample.stealPct === "number" && sample.stealPct > spec.maxStealPct) {
+    reasons.push(
+      `host CPU steal ${sample.stealPct.toFixed(0)}% > ${spec.maxStealPct}% ` +
+        `(hypervisor-stolen CPU is invisible to load average and stretches every task's wall clock — chrome-agent-platform-fbg7i)`,
+    );
   }
   // dnop: the threshold counts COMPILING processes. A sample that carries no
   // activity information (hand-built, or an older caller) is read fail-closed

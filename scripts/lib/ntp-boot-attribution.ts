@@ -94,6 +94,11 @@ export interface RawBootPageMetrics {
   longTasks: RawLongTaskEntry[];
   loafEntries?: RawLoafEntry[];
   measureNames?: string[];
+  /** Epoch ms of the page's timeOrigin (performance.timeOrigin), so long-task
+   *  startTime values (page-timeline-relative) can be placed on the same clock
+   *  as the load samples' `at` (Date.now epoch). Required for the h5wbd
+   *  time-bracketed steal excuse; absent/null fails closed. */
+  timeOrigin?: number | null;
 }
 
 export interface AttributedLongTask {
@@ -109,6 +114,11 @@ export interface AttributedLongTask {
   invokerType?: string;
   charPosition?: number;
   forcedStyleAndLayoutMs?: number;
+  /** h5wbd: for a severe breach inside a steal-invalidated run, the excuse the
+   *  steal IN FORCE ACROSS THIS TASK'S OWN WINDOW can justify — or null when no
+   *  usable bracketed measurement exists (fail-closed: the breach stays
+   *  evidence). Only set on steal-invalidated runs' severe breaches. */
+  stealExcuse?: StealExcuse | null;
 }
 
 export interface BootStagingRunResult {
@@ -126,6 +136,24 @@ export interface BootStagingRunResult {
   hostAboveQuietBound: boolean;
   /** The worst (highest) load/core observed during the run, or null when unmeasurable. (mr1ak) */
   hostWorstLoadPerCore: number | null;
+  /** The worst (highest) host CPU steal% observed during the run, or null when no
+   *  sample could measure it (fbg7i). Steal is the contention loadavg cannot see:
+   *  it stretches every task's wall clock on every process at once. */
+  hostWorstStealPct: number | null;
+  /** True when THIS run's invalidation came from the host CPU steal bound (fbg7i/r2l8n).
+   *  A steal-invalidated run's severe breaches are excused from Check 1 only IN
+   *  PROPORTION to the steal IN FORCE ACROSS EACH TASK'S OWN WINDOW (u4zgv,
+   *  time-bracketed by h5wbd): computeStealExcuse derives the stretch factor
+   *  1/(1 - steal/100) from the samples covering/bracketing the task, and the
+   *  breach is skipped only when it fits inside what that stretch predicts for a
+   *  ceiling-level task (duration <= 500ms * stretch). 1995ms under in-window 89%
+   *  fits (9.09x predicts up to 4545ms — contention); 600ms under in-window 11%
+   *  does not (1.12x predicts up to 561ms — ~534ms of real work, product signal),
+   *  and a loud spike ELSEWHERE in the interval excuses nothing. Missing or
+   *  malformed readings, unplaceable task windows, and saturated stretch
+   *  (>= 99.9%) give no excuse at all (fail-closed): 'unmeasured stretch' is
+   *  never 'explained'. */
+  invalidatedBySteal: boolean;
   /** The bound that decision used, so a reader can see what "loaded" meant. (mr1ak) */
   hostQuietBound: number;
   validMeasurement: boolean;
@@ -251,6 +279,7 @@ export function getBootMetricsExtractionSource(): string {
       longTasks: allLongTasks,
       loafEntries: loafEntries,
       measureNames: measures.map(m => m.name),
+      timeOrigin: (typeof performance !== 'undefined' && Number.isFinite(performance.timeOrigin)) ? performance.timeOrigin : null,
     };
   })()`;
 }
@@ -354,6 +383,7 @@ export function failedSample(err: any): LoadSample {
     compilerNames: [],
     activeCompilers: 0,
     activeCompilerNames: [],
+    stealPct: null,
   };
 }
 
@@ -525,6 +555,124 @@ export function formatActiveBuilders(sample: LoadSample): string {
   return `${sample.activeCompilers ?? sample.compilers ?? 1} compilers`;
 }
 
+/** Catastrophic-stall ceiling (ms), strictly greater-than on any host (mujlt Check 1).
+ *  Exported so the proportional steal carve-out (u4zgv) and its tests share one number. */
+export const SEVERE_STALL_CEILING_MS = 500.0;
+
+/** h5wbd/coord 2026-11-04: at or above this steal the stretch factor saturates
+ *  (>=1000x at 99.9%, unbounded at 100%) and would excuse ANY stall up to half
+ *  a second times a thousand — a 30-second catastrophe included. A saturated
+ *  stretch is treated as unmeasurable and fails closed (evidence-or-red), the
+ *  same family as a missing or malformed sample: the comparison is screened for
+ *  non-finite AND saturated inputs at the arithmetic boundary, not only at the
+ *  sample filter. */
+export const STEAL_SATURATION_PCT = 99.9;
+
+/** 1gro1 (review round 2 on fcfcad9cd): the saturation threshold alone is a
+ *  KNIFE-EDGE - at 99.8% (just under it) the stretch is a finite 500x and a
+ *  30-SECOND stall was excused into a green PASS. Proportionality only means
+ *  something while the prediction stays a bound a ceiling-level task could
+ *  plausibly show: past 10x (90% steal, a 5s wall for a 500ms task) the
+ *  'excuse' explains any catastrophe and the measurement says nothing. A
+ *  stretch beyond this cap fails closed exactly like saturation: evidence-or-
+ *  red. The live motivating class stays inside it (89% -> 9.09x -> 4545ms). */
+export const STEAL_EXCUSE_MAX_STRETCH = 10;
+
+/** h5wbd: how far BEFORE a stall's own window a timestamped sample may sit and
+ *  still proxy the steal in force across it when NO sample falls inside the
+ *  window. The harness samples every ~200ms and the steal probe measures the
+ *  ~120ms before `at`, so a 1s reach covers the sampler period with margin; a
+ *  sample further away did not measure the steal in force across the stall and
+ *  must not excuse it (that distance is exactly the h5wbd defect). gl59n: only
+ *  the BEFORE side proxies - a sample taken after the window measured steal
+ *  that began once the stall was over and cannot causally explain it. */
+export const STEAL_BRACKET_REACH_MS = 1000;
+
+/** The excuse a task's bracketed steal measurements can justify (h5wbd). */
+export interface StealExcuse {
+  /** Worst (max) finite steal among the samples covering/bracketing the task window. */
+  effStealPct: number;
+  /** 1/(1 - effStealPct/100): finite, < saturation (guarded). */
+  stretchFactor: number;
+  /** SEVERE_STALL_CEILING_MS * stretchFactor: the longest wall a ceiling-level
+   *  task could show under the steal in force across THIS task's window. */
+  maxExcusableWallMs: number;
+  /** How many samples the effective steal was computed from. */
+  sampleCount: number;
+  /** True when at least one sample fell inside the task window itself; false
+   *  when the effective steal comes from the before-side proxy (gl59n). */
+  bracketed: boolean;
+}
+
+/**
+ * h5wbd: compute the excuse the steal IN FORCE ACROSS A TASK'S OWN WINDOW can
+ * justify — never the run's max. The old rule excused a severe breach from
+ * Math.max over ALL interval samples, so a spike anywhere in the run
+ * retroactively explained a stall that happened under calm steal: a 600ms
+ * catastrophe bracketed by 11% samples flipped to PASS once ANY sibling sample
+ * read >=16.7% (false GREEN — worse than the refusal this policy exists to
+ * prefer). The excuse is now time-bracketed:
+ *   1. the task window [timeOrigin+startTimeMs, +durationMs] is placed on the
+ *      samples' epoch clock (`at` = Date.now; timeOrigin = performance.timeOrigin);
+ *   2. samples INSIDE the window decide; only when none fall inside may the
+ *      nearest BEFORE-side sample within STEAL_BRACKET_REACH_MS proxy them -
+ *      gl59n: an AFTER-side sample measured steal that began once the stall
+ *      was over, so it can never set or raise the effective steal (a spike
+ *      starting after the stall ended used to excuse it retroactively: 11%
+ *      before + 89% after read as 89 and turned a real 600ms stall green);
+ *   3. the effective steal is the max finite reading of that set (a quieter
+ *      sample elsewhere in the interval cannot dilute it - coord's determinism
+ *      amendment; a louder sample outside it cannot inflate it - h5wbd);
+ *   4. EVERY fail-closed edge returns null (no excuse, the breach stays
+ *      evidence): no timeOrigin, no timestamped samples, no sample inside or
+ *      before within reach, no finite steal reading among them, a negative
+ *      reading, a reading at/above STEAL_SATURATION_PCT, or a stretch beyond
+ *      STEAL_EXCUSE_MAX_STRETCH (1gro1: a saturated, non-finite OR merely
+ *      enormous stretch excuses nothing - 'Infinityx' and '500.00x' must never
+ *      appear in a diagnostic or a decision).
+ */
+export function computeStealExcuse(
+  task: { startTimeMs: number; durationMs: number },
+  samples: LoadSample[],
+  timeOrigin: number | null,
+): StealExcuse | null {
+  if (timeOrigin == null || !Number.isFinite(timeOrigin)) return null;
+  if (!Number.isFinite(task.startTimeMs) || !Number.isFinite(task.durationMs)) return null;
+  const t0 = timeOrigin + task.startTimeMs;
+  const t1 = t0 + task.durationMs;
+  const timed = samples.filter((s) => s && Number.isFinite(s.at));
+  if (timed.length === 0) return null;
+  let window = timed.filter((s) => s.at >= t0 && s.at <= t1);
+  let bracketed = true;
+  if (window.length === 0) {
+    bracketed = false;
+    // gl59n: the BEFORE-side sample only. Steal measured after the window began
+    // once the stall was over - it cannot causally explain the stall, and
+    // letting it set the effective steal turned [11% before, 89% after] into a
+    // green excuse for a real 600ms catastrophe.
+    let before: LoadSample | null = null;
+    for (const s of timed) {
+      if (s.at < t0 && s.at >= t0 - STEAL_BRACKET_REACH_MS && (!before || s.at > before.at)) before = s;
+    }
+    window = before ? [before] : [];
+  }
+  if (window.length === 0) return null;
+  const steals = window
+    .map((s) => s.stealPct)
+    .filter((v): v is number => Number.isFinite(v));
+  if (steals.length === 0) return null;
+  const effStealPct = Math.max(...steals);
+  if (effStealPct < 0 || effStealPct >= STEAL_SATURATION_PCT) return null;
+  const stretchFactor = 1 / (1 - effStealPct / 100);
+  const maxExcusableWallMs = SEVERE_STALL_CEILING_MS * stretchFactor;
+  if (!Number.isFinite(stretchFactor) || !Number.isFinite(maxExcusableWallMs)) return null;
+  // 1gro1: a merely FINITE stretch is not yet a bound - past 10x the prediction
+  // explains any catastrophe (99.8% -> 500x -> a 30-second stall 'fit inside'),
+  // so the excuse dies at the cap, exactly like saturation.
+  if (stretchFactor > STEAL_EXCUSE_MAX_STRETCH) return null;
+  return { effStealPct, stretchFactor, maxExcusableWallMs, sampleCount: window.length, bracketed };
+}
+
 /**
  * Attributes all long tasks in a boot staging run, classifying marginal vs severe breaches.
  * Unrounded durations are checked against 50.0 ms strictly.
@@ -534,6 +682,7 @@ export function attributeBootRun(
   run: number,
   rawMetrics: RawBootPageMetrics,
   sample: BootStagingSampleInput = null,
+  bounds: { stealBoundPct?: number } = {},
 ): BootStagingRunResult {
   const samples: LoadSample[] = [];
   if (Array.isArray(sample)) {
@@ -558,6 +707,7 @@ export function attributeBootRun(
   //    a run. Contention requires positive evidence of an external compiling process.
   let validMeasurement = true;
   let invalidReason: string | undefined;
+  let invalidatedBySteal = false;
 
   if (samples.length === 0 || samples.some((s) => !s || !s.measurable)) {
     validMeasurement = false;
@@ -576,6 +726,31 @@ export function attributeBootRun(
       validMeasurement = false;
       const comps = formatActiveBuilders(activeSample);
       invalidReason = `concurrent heavy builder detected during boot: [${comps}] (${hostEnvironment})`;
+    } else {
+      // chrome-agent-platform-fbg7i: host CPU steal invalidates the run too. The
+      // FIRST heavy-tier producer run reddened on 6-11 "long tasks" of 85-93 ms
+      // per boot at load/core 0.22-0.32 — a CDP trace showed 77-105 ms RunTasks
+      // with ~0 ms of traced work inside on the renderer, the browser process
+      // AND the GPU compositor simultaneously, and /proc/stat measured 40-88%
+      // steal during the boot. A stolen vCPU stretches a 25-45 ms task past the
+      // 50 ms ceiling without a single extra millisecond of page work, and load
+      // average never sees it. That is a contended measurement, not a boot
+      // defect, and it must refuse rather than red.
+      // et2oh: the steal bound is INJECTED by the caller (tests pin it; the
+      // harness resolves it once from the spec); only an omitted bound falls
+      // back to the ambient resolveSpec() so an operator override can never
+      // silently rewrite a pinned assertion.
+      const stealBound = bounds.stealBoundPct ?? resolveSpec().maxStealPct;
+      // u4zgv: only a FINITE numeric steal reading is a measurement. A malformed
+      // sample (NaN/±Infinity) is 'we could not measure the stretch' — it can
+      // neither invalidate the run nor dilute a real reading (Math.max(89, NaN)
+      // is NaN, which would poison hostWorstStealPct below).
+      const stolenSample = samples.find((s) => Number.isFinite(s.stealPct) && (s.stealPct as number) > stealBound);
+      if (stolenSample) {
+        validMeasurement = false;
+        invalidatedBySteal = true;
+        invalidReason = `host CPU steal ${(stolenSample.stealPct as number).toFixed(0)}% > ${stealBound}% during the boot interval — hypervisor-stolen vCPU time stretches every task's wall clock without touching load average (chrome-agent-platform-fbg7i) [${hostEnvironment}]`;
+      }
     }
   }
 
@@ -593,6 +768,12 @@ export function attributeBootRun(
     ? Math.max(...measuredSamples.map((s) => s.loadPerCore))
     : null;
   const hostAboveQuietBound = worstLoadPerCore != null && worstLoadPerCore > quietBound;
+  const stealReadings = measuredSamples
+    .map((s) => s.stealPct)
+    // u4zgv: exclude malformed (non-finite) readings so one NaN sibling cannot
+    // poison the worst-steal max — a real 89% reading must survive it.
+    .filter((v): v is number => Number.isFinite(v));
+  const worstStealPct = stealReadings.length > 0 ? Math.max(...stealReadings) : null;
 
   const loafEntries = rawMetrics.loafEntries || [];
   // Unrounded 50.0 ms threshold — no weak rounding bypass
@@ -604,10 +785,20 @@ export function attributeBootRun(
 
   // Classification:
   // Catastrophic stall is strictly > 500.0ms on any host.
-  const severeCeilingMs = 500.0;
+  const severeCeilingMs = SEVERE_STALL_CEILING_MS;
 
   const severeBreaches = attributedTasks.filter((t) => t.durationMs > severeCeilingMs);
   const marginalBreaches = attributedTasks.filter((t) => t.durationMs <= severeCeilingMs);
+
+  // h5wbd: attach the time-bracketed excuse (or null = fail-closed) to every
+  // severe breach of a steal-invalidated run, so Check 1 decides per TASK from
+  // the steal in force across that task's own window — never from the run's max.
+  if (invalidatedBySteal) {
+    const timeOrigin = Number.isFinite(rawMetrics.timeOrigin ?? NaN) ? (rawMetrics.timeOrigin as number) : null;
+    for (const t of severeBreaches) {
+      t.stealExcuse = computeStealExcuse(t, measuredSamples, timeOrigin);
+    }
+  }
 
   const composerReadyDuration = rawMetrics.composerReadyDurationMs ??
     (rawMetrics.composerReadyEndMs != null && rawMetrics.composerReadyStartMs != null
@@ -631,6 +822,8 @@ export function attributeBootRun(
     hostLoaded,
     hostAboveQuietBound,
     hostWorstLoadPerCore: worstLoadPerCore,
+    hostWorstStealPct: worstStealPct,
+    invalidatedBySteal,
     hostQuietBound: quietBound,
     validMeasurement,
     invalidReason,
@@ -676,7 +869,15 @@ export interface BootStagingPolicyEvaluation {
  * - Over VALID runs: median-0 contract is strictly enforced; persistent regressions (median > 0)
  *   fail as contract breaches with full attribution, while isolated cold-start tasks absorbed
  *   by median-0 pass with recorded warnings.
- * - Catastrophic stalls (> 500.0ms) fail immediately on any run.
+ * - Catastrophic stalls (> 500.0ms) fail immediately on any run. A steal-invalidated run's
+ *   breach is excused only within what the stretch IN FORCE ACROSS THE TASK'S OWN WINDOW
+ *   predicts (r2l8n -> u4zgv -> h5wbd): the bracketing samples' worst steal s implies
+ *   stretch 1/(1-s/100), and a breach is skipped only when duration <= 500ms * stretch
+ *   (1995ms under in-window 89% ≈ 219ms real — contention); the excess past the prediction
+ *   still reds (600ms under in-window 11% ≈ 534ms real — product signal), a loud spike
+ *   elsewhere in the interval excuses nothing, a saturated (>= 99.9%) or unmeasurable
+ *   stretch excuses nothing, and a red beats an environmental refusal. Load-contended runs
+ *   keep the pre-steal immediate-red behaviour.
  * - On valid runs, strictly enforces composer-ready < 150ms and thread-list-hydrated <= 250ms.
  */
 export function evaluateBootStagingPolicy(
@@ -697,10 +898,48 @@ export function evaluateBootStagingPolicy(
     );
   }
 
-  // 2. Check 1: Catastrophic stalls (> 500ms) fail immediately even if the host was loaded
+  // 2. Check 1: Catastrophic stalls (> 500ms) fail immediately even if the host was loaded.
+  // A steal-invalidated run's breach gets a PROPORTIONAL, TIME-BRACKETED carve-out
+  // (r2l8n -> u4zgv -> h5wbd): the excuse is computed per task by computeStealExcuse
+  // from the samples covering/bracketing THAT task's own window, never from the run's
+  // max — a spike elsewhere in the interval must not retroactively explain a stall
+  // that happened under calm steal (600ms bracketed by 11% flipped to PASS once any
+  // sibling read >=16.7%: a false GREEN, worse than the refusal this policy exists to
+  // prefer), and never from an AFTER-side proxy either (gl59n: a spike that BEGINS
+  // once the stall is over cannot causally explain it). And never from a saturated,
+  // non-finite, or merely enormous stretch: at >= 99.9% steal the factor goes unbounded
+  // (a 30-second stall 'explained'), and past STEAL_EXCUSE_MAX_STRETCH (10x) the
+  // prediction explains any catastrophe, so both excuse NOTHING and the diagnostic can
+  // never print 'Infinityx' (coord ruling 2026-11-04 — the same
+  // u4zgv family one order of magnitude out: screen the comparison for non-finite
+  // inputs at the arithmetic boundary, not only at the sample filter). Excused only
+  // when the observed wall fits inside 500ms * the in-force stretch; the excess past
+  // the prediction is named in ms and keeps the immediate red — even with no valid
+  // sibling (a red beats an environmental refusal). No usable bracketed measurement
+  // (no timeOrigin, no timestamps, nothing within reach) also stays red: 'we could
+  // not place the steal' is never 'the stretch explains the stall'.
   for (const r of runs) {
-    if (r.severeBreaches.length > 0) {
-      const details = r.severeBreaches.map(formatTaskAttribution).join("; ");
+    if (r.severeBreaches.length === 0) continue;
+    let breaches = r.severeBreaches;
+    if (r.invalidatedBySteal) {
+      const excused = breaches.filter((t) => t.stealExcuse != null && t.durationMs <= t.stealExcuse.maxExcusableWallMs);
+      breaches = breaches.filter((t) => t.stealExcuse == null || t.durationMs > t.stealExcuse.maxExcusableWallMs);
+      for (const t of excused) {
+        const e = t.stealExcuse!;
+        warnings.push(
+          `[ntp-boot-staging] Run ${r.run}: severe stall (>${SEVERE_STALL_CEILING_MS}ms, ${Math.round(t.durationMs)}ms observed) inside a steal-invalidated run — the steal IN FORCE ACROSS THE STALL WINDOW (${e.sampleCount} ${e.bracketed ? "in-window" : "before-side proxy"} sample(s), worst ${e.effStealPct.toFixed(1)}%) implies a ${e.stretchFactor.toFixed(2)}x stretch, which can carry a ceiling-level task to ${Math.round(e.maxExcusableWallMs)}ms wall; the observed stall fits inside that prediction (real work <= ${SEVERE_STALL_CEILING_MS}ms), so it is excluded from the severe check (chrome-agent-platform-r2l8n/u4zgv/h5wbd)`,
+        );
+      }
+      for (const t of breaches) {
+        warnings.push(
+          t.stealExcuse == null
+            ? `[ntp-boot-staging] Run ${r.run}: severe stall of ${Math.round(t.durationMs)}ms inside a steal-invalidated run has NO usable steal measurement across its own window (no timestamps, no finite before-side reading within ${STEAL_BRACKET_REACH_MS}ms reach, the stretch is saturated at >= ${STEAL_SATURATION_PCT}% steal, or it exceeds the ${STEAL_EXCUSE_MAX_STRETCH}x excusable-stretch cap) — fail-closed: the breach stays evidence (chrome-agent-platform-h5wbd/gl59n/1gro1)`
+            : `[ntp-boot-staging] Run ${r.run}: severe stall of ${Math.round(t.durationMs)}ms EXCEEDS the ${Math.round(t.stealExcuse.maxExcusableWallMs)}ms wall that the stretch in force across its window (${t.stealExcuse.stretchFactor.toFixed(2)}x from ${t.stealExcuse.effStealPct.toFixed(1)}% worst ${t.stealExcuse.bracketed ? "in-window" : "before-side"} steal, ${t.stealExcuse.sampleCount} sample(s)) predicts by ${Math.round(t.durationMs - t.stealExcuse.maxExcusableWallMs)}ms — the steal cannot account for the excess, so it stays a severe red (chrome-agent-platform-u4zgv)`,
+        );
+      }
+    }
+    if (breaches.length > 0) {
+      const details = breaches.map(formatTaskAttribution).join("; ");
       return {
         ok: false,
         environmentalRefusal: false,
