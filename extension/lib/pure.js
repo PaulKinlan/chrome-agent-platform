@@ -20,8 +20,14 @@ export const SCHEMA_BOUNDS = {
   // payload can require — FOR A PAYLOAD THAT RESPECTS THE DECLARED ELEMENT
   // CAPS (chrome-agent-platform-jzz9z: zod's .max() runs AFTER the per-element
   // loop, so a 1M-element payload against a 100-cap array is REJECTED but
-  // costs a linear scan first; practical inputs are bounded elsewhere — 8 KiB
-  // page-attached args, provider output limits for model-produced args). A
+  // costs a linear scan first. chrome-agent-platform-gtcha: the 8 KiB
+  // attached-args cap does NOT bound that scan — attached-webmcp-authority.js
+  // runs safeParse FIRST and measures the PARSED data's JSON after, so the cap
+  // bounds what is DISPATCHED, not what was SCANNED; and the args on that path
+  // are MODEL-produced — the page declares the TOOL, the model supplies the
+  // ARGS — so the practical bound on the residual scan is the provider's
+  // output limit: linear in the model's output size. A pre-parse length guard
+  // is the escalation if that residual ever matters). A
   // realistic tool (a list of 100 records with a handful of fields each, or an
   // array of arrays) sits in the hundreds to low thousands; the smallest
   // useful multiplicative bomb is 100^3 = 1,000,000.

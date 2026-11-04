@@ -22,9 +22,14 @@
 // runs AFTER the per-element loop, so a payload violating the caps (1M
 // elements against a 100-cap array) is REJECTED but costs a linear scan
 // first — the schema-side product bound does not bound PAYLOAD-side work.
-// Practical inputs are bounded elsewhere (8 KiB page-attached args,
-// provider output limits for model-produced args); a pre-parse length guard
-// is the escalation if that residual ever matters.
+// Practical bound on the residual (chrome-agent-platform-gtcha): NOT the
+// 8 KiB attached-args cap — attached-webmcp-authority runs safeParse FIRST
+// and measures the PARSED data's JSON after, so that cap bounds what is
+// DISPATCHED, not what was SCANNED (and the args on that path are
+// model-produced: the page declares the TOOL, the model supplies the ARGS).
+// The residual scan is therefore linear in the model's output size, bounded
+// by the provider's output limit; a pre-parse length guard is the escalation
+// if it ever matters.
 
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { z } from "npm:zod@3";
@@ -202,8 +207,12 @@ Deno.test("mfu4a: a CYCLIC object graph terminates instead of recursing forever"
 
 // chrome-agent-platform-jzz9z precision pin: the budget bounds the SCHEMA-side
 // product; PAYLOAD-side work is rejected but linear (zod's .max() runs after
-// the element loop). Pinned so the enforced-vs-documented relationship cannot
-// drift in either direction without a test noticing.
+// the element loop). What this pin holds: an over-cap payload is REJECTED and
+// the schema-side estimate stays 101 — the budget counts the schema, never
+// the payload. chrome-agent-platform-gtcha: it deliberately does NOT pin the
+// residual's existence — if a pre-parse length guard (shape b) lands, this
+// pin stays green and the SCOPE header above must be widened in the same
+// change.
 Deno.test("mfu4a: a payload violating the declared caps is still rejected — but the scan is linear, not budgeted", () => {
   const schema = { type: "array", maxItems: 100, items: { type: "integer" } };
   const compiled = compileSchemaToZod(z, schema);
