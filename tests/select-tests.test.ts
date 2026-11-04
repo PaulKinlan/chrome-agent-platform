@@ -13,9 +13,14 @@ import {
   OMITTED_QUIET_BOX_REASON,
   ROOT,
   buildReverseGraph,
+  collectChangedFiles,
+  fileMappingContextForPlan,
   isBuildResidue,
   omittedInventory,
+  planSelection,
+  referrersFor,
   selectTestFiles,
+  selectionFanInNotice,
 } from "../scripts/select-tests.mjs";
 
 // A real seam with a known importer: schedule-parser.js is imported by
@@ -152,4 +157,73 @@ Deno.test("zwpp9: the gate ledger names the quiet-box omission, not the generic 
   const entries = inventory.omitted.filter((e) => FAST_SUBSET_EXCLUDED.has(e.file));
   assert(entries.length > 0, "the excluded suite is disclosed in the omission inventory");
   for (const entry of entries) assertEquals(entry.reason, OMITTED_QUIET_BOX_REASON);
+});
+// ---- chrome-agent-platform-fhh50: the changed set is COLLECTED, not filtered by dot-ness ----
+
+// Built by join() on purpose: referrersFor() maps a changed file to every suite whose TEXT names its
+// path, so a literal path in this file would make the test itself the coverage for the file it is
+// asserting has none. The fragments keep this suite out of its own fixture.
+const TOOLING_REFERENCED = [".agents", "skills", "impeccable", "scripts", "context.mjs"].join("/");
+const TOOLING_UNREFERENCED = [".agents", "skills", "impeccable", "scripts", "live-wrap.mjs"].join("/");
+
+Deno.test("fhh50: dot-prefixed paths reach the ledger instead of vanishing from the changed set", () => {
+  // RED before the fix: the impeccable tooling path was dropped by a blanket `!f.startsWith(".")`,
+  // so the gate printed "no files changed vs origin/main" and reported nothing at all.
+  const collected = collectChangedFiles([
+    TOOLING_UNREFERENCED,
+    ".beads/issues.jsonl",
+    ".gitignore",
+    "extension/lib/acp-run-config.js",
+  ]);
+  for (const path of [TOOLING_UNREFERENCED, ".beads/issues.jsonl", ".gitignore", "extension/lib/acp-run-config.js"]) {
+    assert(collected.includes(path), `${path} must be collected so it can be classified`);
+  }
+  // The filter still drops what it dropped for a reason (build scratch is a separate predicate).
+  assert(!collected.includes("docs/index.html"), "docs/ stays out of the executable changed set");
+  assert(!collected.includes("CHANGELOG.md"), "the changelog is never a test-selection input");
+  assertEquals(collectChangedFiles(["a.js", "a.js"]), ["a.js"], "the changed set stays de-duplicated");
+});
+
+Deno.test("fhh50: a plan that cannot map the delta says so (selection_covers_delta)", () => {
+  // Two injected plans, no git and no suite run: the boolean is the plan's verdict, not the rc's.
+  const mapped = planSelection({ changedFiles: () => ["extension/shared/schedule-parser.js"], reverseGraph: () => buildReverseGraph() });
+  assertEquals(mapped.kind, "subset");
+  assertEquals(fileMappingContextForPlan(mapped).selectionCoversDelta, true);
+
+  // The tooling file a suite DOES name maps to that suite (the mechanism, stated in one line).
+  const referenced = planSelection({ changedFiles: () => [TOOLING_REFERENCED], reverseGraph: () => buildReverseGraph() });
+  assertEquals(referenced.kind, "subset");
+  assertEquals(fileMappingContextForPlan(referenced).selectionCoversDelta, true);
+  assert(
+    referenced.mapped.some((row: { tests: string[] }) => row.tests.includes("tests/impeccable-design-context.test.ts")),
+    `the suite that executes the launcher must be selected; got ${JSON.stringify(referenced.mapped)}`,
+  );
+
+  // Nothing names this one, so nothing may claim it: fail closed, with the file named.
+  assertEquals(referrersFor(TOOLING_UNREFERENCED), [], "fixture precondition: no suite names this file");
+  const refused = planSelection({ changedFiles: () => [TOOLING_UNREFERENCED], reverseGraph: () => buildReverseGraph() });
+  assertEquals(refused.kind, "full", "unreferenced agent tooling must fail closed, not warn and proceed");
+  assertEquals(fileMappingContextForPlan(refused).selectionCoversDelta, false);
+  assertEquals(refused.unmappable.map((row: { file: string }) => row.file), [TOOLING_UNREFERENCED]);
+});
+
+// ---- chrome-agent-platform-nn5eq: a hot module's fan-in is stated, not discovered ----
+
+Deno.test("nn5eq: a large selection announces its fan-in cost without refusing to run", () => {
+  const ordinary = selectionFanInNotice({ selected: 134, population: 803 });
+  assertEquals(ordinary, null, "a normal subset must not nag");
+
+  const hot = selectionFanInNotice({ selected: 537, population: 803 });
+  assert(hot, "537/803 is a hot-module delta and must be named");
+  assert(/IMPORT FAN-IN, not a failure/.test(hot), hot);
+  assert(/537 of 803 suites \(67%\)/.test(hot), hot);
+  assert(/union FULL gate remains the landing verdict/.test(hot), hot);
+
+  // The boundary is a third of the population, and it must not drift silently.
+  assertEquals(selectionFanInNotice({ selected: 267, population: 803 }), null, "just under a third stays quiet");
+  assert(selectionFanInNotice({ selected: 268, population: 803 }), "a third or more is announced");
+
+  // No population, no claim.
+  assertEquals(selectionFanInNotice({ selected: 10, population: 0 }), null);
+  assertEquals(selectionFanInNotice({ selected: Number.NaN, population: 803 }), null);
 });

@@ -15,6 +15,7 @@ import {
   HEAVY_GATE_DEFERRAL_SUFFIX,
   deferredTierEntries,
   emitGateLedger,
+  explainChangedFileMapping,
   formatGateManifest,
   formatGateUnmapped,
   formatGateUnknown,
@@ -460,4 +461,86 @@ Deno.test("5xg1w: formatGateManifest validates the outcome vocabulary", () => {
   const legacy = parse(formatGateManifest({ ...base, incomplete: "x unrun" }));
   assert(!("outcome" in legacy), "outcome is opt-in for producers that do not compute it");
   assert(!("skipped" in legacy), "skipped is opt-in for producers that do not compute it");
+});
+// ---- chrome-agent-platform-fhh50: "proved by mapping" vs "could not map, ran everything" ----
+
+Deno.test("fhh50 manifest: selection_covers_delta is a FIELD, and absent means unknown", () => {
+  const proved = parse(formatGateManifest({
+    tier: "fast",
+    executed: 3,
+    executedSuites: ["tests/a.test.ts"],
+    selected: ["tests/a.test.ts"],
+    selectionCoversDelta: true,
+  }));
+  assertEquals(proved.selection_covers_delta, true);
+
+  const refused = parse(formatGateManifest({
+    tier: "full",
+    executed: 711,
+    executedSuites: ["tests/a.test.ts"],
+    certifiable: true,
+    selectionCoversDelta: false,
+  }));
+  assertEquals(
+    refused.selection_covers_delta,
+    false,
+    "a green full run that exists because the plan could NOT map the delta must say so",
+  );
+
+  // The dangerous default: a producer that does not compute the field must not publish `true`.
+  const legacy = parse(formatGateManifest({ tier: "fast", executed: 1, executedSuites: ["tests/a.test.ts"] }));
+  assertEquals(legacy.selection_covers_delta, undefined, "an absent verdict is not a proof");
+  const explicitNull = parse(formatGateManifest({
+    tier: "fast", executed: 1, executedSuites: ["tests/a.test.ts"], selectionCoversDelta: null,
+  }));
+  assertEquals(explicitNull.selection_covers_delta, undefined);
+});
+
+Deno.test("fhh50 manifest: the FULL tier carries the fast plan's verdict across the handoff", () => {
+  const context = {
+    changed: ["extension/shared/schedule-parser.js"],
+    candidates: { "extension/shared/schedule-parser.js": ["tests/schedule-parser.test.ts"] },
+    unmappable: [],
+    selectionCoversDelta: true,
+  };
+  const passing = fullTierManifestFields({
+    serialFiles: [], parallelFiles: ["tests/schedule-parser.test.ts"], rc: 0, fileMappingContext: context,
+  });
+  assertEquals(passing.selectionCoversDelta, true);
+  assertEquals(parse(formatGateManifest(passing)).selection_covers_delta, true);
+
+  // No context at all (a CLI file list, or an older caller): no field, no claim.
+  const bare = fullTierManifestFields({ parallelFiles: ["tests/a.test.ts"], rc: 0 });
+  assertEquals(bare.selectionCoversDelta, undefined);
+});
+
+Deno.test("fhh50 ledger: repo metadata is not-applicable, agent tooling is unmapped by name", () => {
+  const rows = explainChangedFileMapping({
+    changed: [".beads/issues.jsonl", ".agents/skills/impeccable/scripts/detect-csp.mjs", "extension/shared/schedule-parser.js"],
+    candidates: { "extension/shared/schedule-parser.js": ["tests/schedule-parser.test.ts"] },
+    unmappable: [{
+      file: ".agents/skills/impeccable/scripts/detect-csp.mjs",
+      mechanism: "agent-skill tooling under .agents/ that no test names — no suite in this repo executes it",
+    }],
+    executedSuites: ["tests/schedule-parser.test.ts"],
+  });
+  const byFile = Object.fromEntries(rows.map((row: { file: string; status: string }) => [row.file, row.status]));
+  assertEquals(byFile[".beads/issues.jsonl"], "not-applicable", ".beads/ metadata needs no suite");
+  assertEquals(byFile["extension/shared/schedule-parser.js"], "mapped");
+  assertEquals(byFile[".agents/skills/impeccable/scripts/detect-csp.mjs"], "unmapped");
+
+  const written: string[] = [];
+  emitGateLedger({ fileMapping: rows, log: (line: string) => written.push(line) });
+  assert(
+    written.includes(`${GATE_UNMAPPED_PREFIX}.agents/skills/impeccable/scripts/detect-csp.mjs`),
+    `the unmapped marker must name the tooling file; got ${JSON.stringify(written)}`,
+  );
+  assert(
+    written.some((line) => line.startsWith("fast-gate: unmapped-reason: ") && line.includes("no suite in this repo executes it")),
+    "the reason must name why it could not be covered",
+  );
+  assert(
+    !written.some((line) => line.includes(".beads/issues.jsonl")),
+    "declared metadata is exempt, so it must not be reported as unmapped",
+  );
 });

@@ -47,7 +47,7 @@ import { constants as osConstants } from "node:os";
 import { tokenizer } from "acorn";
 import { partition } from "./test-partition.mjs";
 import { announce, runSerialFiles } from "./lib/serial-phase.mjs";
-import { HTML_EXPORT_ENTRY_GUARDS, isSelectorInfrastructure, mapUncovered } from "./lib/changed-file-mapping.mjs";
+import { HTML_EXPORT_ENTRY_GUARDS, isRepoMetadata, isSelectorInfrastructure, mapUncovered } from "./lib/changed-file-mapping.mjs";
 import {
   LOCKFILE_CLASS_FILES,
   classifyLockfileDelta,
@@ -375,17 +375,32 @@ export function mergeBaseOf(base, runGit = git) {
   }
 }
 
-function changedFiles(base) {
-  const tracked = git(["diff", "--name-only", mergeBaseOf(base)]).split("\n").filter(Boolean);
-  const untracked = git(["ls-files", "--others", "--exclude-standard"]).split("\n").filter(Boolean);
-  return [...new Set([...tracked, ...untracked])]
-    .map((f) => normalize(f))
+/**
+ * The selector's changed-file filter (chrome-agent-platform-fhh50). Pure so the
+ * collection rule is unit-tested rather than trusted.
+ *
+ * DOT-PREFIXED PATHS ARE COLLECTED, not dropped. `.beads/`, `.codex/` and the git
+ * metadata files are classified `not-applicable` with a reason; `.agents/`
+ * tooling is mapped to the tests that name it or refused by name. The old blanket
+ * `!f.startsWith(".")` made a change to `.agents/skills/impeccable/scripts/*.mjs`
+ * report "no files changed vs origin/main — running always-on core": no unmapped
+ * row, no warning, nothing to notice. A file the ledger never sees reads exactly
+ * like a file the selector proved covered, which is the defect this bead is about.
+ */
+export function collectChangedFiles(files) {
+  return [...new Set(files.map((f) => normalize(f)))]
     .filter((f) =>
       !isBuildResidue(f) &&
-      !f.startsWith(".") && !f.startsWith("docs") && !f.startsWith("dist") &&
+      !f.startsWith("docs") && !f.startsWith("dist") &&
       !f.startsWith("test-artifacts") && !f.startsWith("evidence") && !f.startsWith("reports") &&
       !f.includes("CHANGELOG")
     );
+}
+
+function changedFiles(base) {
+  const tracked = git(["diff", "--name-only", mergeBaseOf(base)]).split("\n").filter(Boolean);
+  const untracked = git(["ls-files", "--others", "--exclude-standard"]).split("\n").filter(Boolean);
+  return collectChangedFiles([...tracked, ...untracked]);
 }
 
 // ---- static import graph ----
@@ -845,6 +860,7 @@ export function changedWithoutCoverage(changed, reverse) {
   for (const c of changed) {
     if (isChangedTest(c)) continue; // runs itself (or was deleted = nothing to do)
     if (isPassiveContentFile(c)) continue; // docs/assets: no executable effect
+    if (isRepoMetadata(c)) continue; // .beads/.git metadata: reported not-applicable, never unmapped
     const abs = resolve(ROOT, c);
     if (!existsSync(abs)) {
       if (Object.hasOwn(HTML_EXPORT_ENTRY_GUARDS, c)) uncovered.push(c);
@@ -938,6 +954,29 @@ export const OMITTED_CORE_ONLY_REASON = "not run: --core executes only the alway
 // knob (CAP_GATE_LEDGER_MAX_OMITTED) for a log-size tradeoff. It is never a SILENT cap — the total and
 // the dropped count are always reported, and a bound that would erase every named entry is refused.
 export const MAX_OMITTED_ENTRIES = 5000;
+
+// chrome-agent-platform-nn5eq: a module with a very large importer fan-in (pure.js is imported by
+// nearly every suite) makes a small edit select most of the suite. That is not a defect in the
+// selector — the import edges are real — but it IS a budget statement the lane should hear while the
+// run is happening, rather than discovering it in an INTERRUPTED record. The threshold is a third of
+// the population: below it, the run is comfortably a subset; at or above it, the change is effectively
+// union-scale and the reader should know the FAST tier is only an accounting record.
+export const FAN_IN_NOTICE_FRACTION = 1 / 3;
+
+/**
+ * The fan-in notice for a large selection, or null when the selection is an ordinary subset.
+ * Pure so the threshold is pinned without running a suite (nn5eq).
+ * @param {{ selected: number, population: number }} args
+ * @returns {string | null}
+ */
+export function selectionFanInNotice({ selected, population }) {
+  if (!Number.isInteger(selected) || !Number.isInteger(population) || population <= 0) return null;
+  if (selected < population * FAN_IN_NOTICE_FRACTION) return null;
+  const pct = Math.round((selected / population) * 100);
+  return `select-tests: NOTE (nn5eq) — this delta selects ${selected} of ${population} suites (${pct}%): that is an IMPORT FAN-IN, not a failure. ` +
+    `A hot module (extension/lib/pure.js selects most of the tree) costs the whole subset budget, so a new helper belongs in its own small module. ` +
+    `The run continues inside the FAST bound; the union FULL gate remains the landing verdict.`;
+}
 
 /** The disclosure bound; a missing or nonsensical value falls back to complete. 0 is refused. */
 export function omittedLimit(raw = process.env.CAP_GATE_LEDGER_MAX_OMITTED) {
@@ -1102,6 +1141,7 @@ async function runDeno(files, { build = null, omittedReason = null, fileMappingC
       executedSuites: rc === 0 ? files : [],
       selected: files,
       certifiable: rc === 0,
+      selectionCoversDelta: fileMappingContext?.selectionCoversDelta ?? null,
       omitted: inventory.omitted,
       omittedTotal: inventory.omittedTotal,
       omittedTruncated: inventory.omittedTruncated,
@@ -1305,7 +1345,10 @@ export function reachableModulesFrom(reverse) {
   };
 }
 
-function fileMappingContextForPlan(plan) {
+/** Exported as a testable seam: this is the ONLY place the plan's verdict becomes the manifest's
+ *  `selection_covers_delta`, and the two directions (mapped subset vs fail-closed full) must not
+ *  drift apart (chrome-agent-platform-fhh50). */
+export function fileMappingContextForPlan(plan) {
   const candidates = Object.fromEntries(plan.changed.map((file) => [
     file,
     testCandidatesForChanged([file], plan.reverse, plan.mapped.filter((entry) => entry.file === file)),
@@ -1315,6 +1358,11 @@ function fileMappingContextForPlan(plan) {
     candidates,
     unmappable: plan.unmappable,
     lockfileDelta: plan.lockfileDelta ?? [],
+    // chrome-agent-platform-fhh50: the merger's requested field. FALSE means the
+    // plan could not map every changed file, so this run's green came from running
+    // everything rather than from a selection that proved coverage. A consumer
+    // (merger, reviewer, dashboard) can then tell the two apart without parsing prose.
+    selectionCoversDelta: plan.kind === "subset",
   };
 }
 
@@ -1379,12 +1427,17 @@ async function main() {
         unmappable: plan.unmappable.map((u) => ({ file: u.file, mechanism: u.mechanism })),
         mapped: plan.mapped.map((m) => ({ file: m.file, tests: m.tests })),
         lockfileDelta: plan.lockfileDelta ?? [],
+        selectionCoversDelta: plan.kind === "subset",
         reason: plan.reason,
       }),
     );
     return;
   }
   for (const notice of plan.notices) console.error(notice);
+  if (plan.kind === "subset") {
+    const fanIn = selectionFanInNotice({ selected: plan.files?.length ?? 0, population: allTestFiles().length });
+    if (fanIn) console.error(fanIn);
+  }
   // The lockfile closure (package -> importers -> suites) is NOT printed here: the ledger emits it
   // immediately before the manifest line, which is where a reader (and the fleet's tail-window log
   // reader) actually looks. Printing it in both places put the same trail in the log twice.
