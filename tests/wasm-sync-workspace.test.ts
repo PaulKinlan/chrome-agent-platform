@@ -32,7 +32,9 @@ const row = (path, bytes) => ({ path, bytes });
 const dense = (length, value = 1) => new Array(length).fill(value);
 
 // chrome-agent-platform-ifu81: this file used to hold FOUR cases whose cost was a 10 MiB byte walk
-// (~133s each; exactDenseByteArray() does two reflective passes per byte). Those four are now four files
+// (~133s each at the time - exactDenseByteArray() THEN did two reflective passes per byte; fixed by
+// chrome-agent-platform-j7k25 with a bounded key-set proof + one Get walk, ~100x faster). Those four
+// are now four files
 // — -seed-total-limit, -seed-file-limit, -seed-maxima and -transaction-growth — so each runs in its own
 // worker and no single unit holds the pool for 2-7 minutes. Every assertion they made moved with them
 // unchanged; nothing was dropped and nothing was weakened. Measured here (2026-10-24): the heaviest

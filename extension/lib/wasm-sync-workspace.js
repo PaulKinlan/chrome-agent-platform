@@ -229,10 +229,32 @@ function classForPath(path) {
 
 // Validate a trusted workspace seed. The schema is EXACTLY
 // `workspaceSeed: { files: [{ path, bytes }] }`. Every layer must be a plain
-// ordinary object/array with only the exact OWN DATA properties: no getters,
-// sparse indexes, extra string/symbol keys, or custom/null prototypes. Proxy
-// traps are caught and normalized to the stable job-seed failure (transparent
-// non-trapping proxies are not distinguishable in JavaScript). Paths are
+// ordinary object/array with only own properties: no sparse indexes and no
+// custom/null prototypes. Proxy traps are caught and normalized to the stable
+// job-seed failure (transparent non-trapping proxies are not distinguishable
+// in JavaScript).
+//
+// GETTERS AND EXTRA KEYS, PER LAYER (chrome-agent-platform-puykr: this
+// contract used to promise "no getters / no extra string or symbol keys"
+// outright, which the j7k25 bytes rewrite made false in one direction while
+// tightening another - the honest guarantee is per layer):
+// - The outer/files/row layers (exactOwnDataValues) keep the strict promise:
+//   only the exact OWN DATA properties, any accessor or extra key fails.
+// - The BYTES layer (exactDenseByteArray, j7k25: bounded key-set proof + one
+//   Get walk instead of two reflective passes per byte) accepts exactly two
+//   bounded residuals, documented at the function and repeated here because
+//   they are part of THIS exported contract: (1) an own ENUMERABLE index
+//   accessor whose getter returns valid bytes is snapshotted once - the getter
+//   runs exactly once, its value is byte-checked and frozen into the fresh
+//   dense output, and the input is never read again; (2) an extra
+//   NONENUMERABLE own string key is inert - it can never enter the dense
+//   output. Every other accessor shape still fails (nonenumerable index:
+//   count; getter-less setter or invalid return: byte check), every extra
+//   ENUMERABLE string key fails, extra own symbols fail the bounded symbol
+//   check, and nonenumerable index DATA now fails - a deliberate tightening
+//   of the pre-j7k25 ownKeys shape, not a relaxation.
+//
+// Paths are
 // unique relative `inputs/<file>` OR `scratch/<file>` rows (mixed classes are
 // fine; the class is derived from the FIRST segment — never a carried field)
 // and bytes are dense integers 0..255. Returns a deep-frozen canonical clone.

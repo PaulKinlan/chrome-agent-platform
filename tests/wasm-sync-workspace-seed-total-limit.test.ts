@@ -17,10 +17,11 @@
 // AT the limit. Nothing is weakened, and nothing moves to a "no assertion" fast path — a split that
 // turned one slow assertion into two vacuous ones would be worse than the slow case.
 //
-// (The 133s itself is a PRODUCT finding, not a test-shape one: exactDenseByteArray() in
-// extension/lib/wasm-sync-workspace.js calls Object.getOwnPropertyDescriptor(value, String(index)) once
-// per byte plus Reflect.ownKeys(value) over the whole array, i.e. ~21M reflective calls for 10 MiB. It is
-// filed separately; fixing the validator would make this file fast and is not this bead's scope.)
+// (The 133s itself WAS a PRODUCT finding, not a test-shape one: exactDenseByteArray() in
+// extension/lib/wasm-sync-workspace.js then called Object.getOwnPropertyDescriptor(value, String(index))
+// once per byte plus Reflect.ownKeys(value) over the whole array - ~21M reflective calls for 10 MiB.
+// Fixed by chrome-agent-platform-j7k25 (bounded key-set proof + one Get walk): a 10 MiB validation now
+// costs ~1.3s instead of ~133s, so this file is fast. The measurement record stays as history.)
 import { assertEquals } from "jsr:@std/assert@1";
 import { SCRATCH_FILE_LIMITS, validateWorkspaceSeed } from "../extension/lib/wasm-sync-workspace.js";
 
