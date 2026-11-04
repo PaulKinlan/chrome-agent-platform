@@ -6,9 +6,10 @@
 // process-supervision suites sharing the pool — see the sibling files for the full measurement.
 //
 // The case text is unchanged: it still asserts that exactDenseByteArray() makes ONE indexed walk and
-// never routes the values through the helper, which is exactly the property whose COST (two reflective
-// passes per byte — Object.getOwnPropertyDescriptor per index plus Reflect.ownKeys) is filed separately
-// as a product finding.
+// never routes the values through the helper. That walk THEN cost two reflective passes per byte
+// (Object.getOwnPropertyDescriptor per index plus Reflect.ownKeys, ~13 s/MiB) - the product finding
+// fixed by chrome-agent-platform-j7k25 (bounded key-set proof + one Get walk, ~100x faster); the
+// j7k25 pins lower in this file hold the rewritten shape, residuals included.
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { SCRATCH_FILE_LIMITS, createSyncWorkspace, validateWorkspaceSeed } from "../extension/lib/wasm-sync-workspace.js";
 
