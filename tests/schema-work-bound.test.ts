@@ -144,6 +144,41 @@ Deno.test("mfu4a: a schema-valued additionalProperties is counted (insurance, no
   assertEquals(compileSchemaToZod(z, boolAddProps).fatal, null, "a boolean additionalProperties costs nothing");
 });
 
+// ── chrome-agent-platform-4vzgv: the builder's REQUIRED-refine loop ────────
+// sanitizeSchemaNode keeps a well-formed `required` string array VERBATIM with
+// no length cap (maxProperties caps properties KEYS, not required), and
+// buildBaseZod defines one z.any().refine presence constraint PER required
+// name ABSENT from properties. The accounting counted none of them: a ~3MB
+// schema with 200k required names compiled 200k refines — measured 25.7s
+// compile and 7.3s per safeParse inside the service worker while work
+// reported 1 — reachable from any remote MCP tools/list or page WebMCP
+// schema (chrome-agent-platform-4vzgv).
+Deno.test("mfu4a: required-driven presence refines are counted — the accounting is at least as wide as the builder", () => {
+  const required = Array.from({ length: 200_000 }, (_, i) => `k${i}`);
+  const hostile = { type: "object", properties: {}, required };
+  // The estimate must saturate on the 200k presence constraints the builder
+  // would create, not just the (empty) properties.
+  assertEquals(schemaValidationWork(hostile), BUDGET + 1, "200k absent-required refines must be counted as work");
+  const compiled = compileSchemaToZod(z, hostile);
+  assertEquals(compiled.fatal, "schema-work-exceeded", "refused with a named fatal BEFORE any refine is built");
+  assertEquals(compiled.zodSchema.safeParse({}).success, false, "nothing validates against a refused schema");
+});
+
+Deno.test("mfu4a: required names covered by declared properties are not double-counted into a refusal", () => {
+  // buildBaseZod adds no refine for a required name that HAS a declared
+  // property (the property's own validator enforces presence), so the budget
+  // must not charge for it either — mirroring the builder exactly, both ways.
+  const legit = {
+    type: "object",
+    properties: { a: { type: "string" }, b: { type: "integer" } },
+    required: ["a", "b"],
+  };
+  const compiled = compileSchemaToZod(z, legit);
+  assertEquals(compiled.fatal, null, "required-present-in-properties stays free");
+  assert(compiled.work <= 5, `work ${compiled.work} should reflect two leaf properties, not the required array`);
+  assert(compiled.zodSchema.safeParse({ a: "x", b: 1 }).success, "and it still validates a conforming payload");
+});
+
 Deno.test("mfu4a: a CYCLIC object graph terminates instead of recursing forever", () => {
   // A cycle cannot arrive as parsed JSON, but the accounting must not depend on
   // that: it walks BEFORE the builder, so a caller passing a hand-built graph

@@ -10,6 +10,17 @@ export const SCHEMA_BOUNDS = {
   maxUnionBranches: 5,
   maxEnumValues: 256,
   maxLiteralDepth: 8,
+  // chrome-agent-platform-mfu4a: the caps above bound each DIMENSION, and a
+  // hostile schema multiplies them. maxArrayItems=100 and maxDepth=8 permit an
+  // array-of-array-of-array… schema whose payload costs 100^n element
+  // validations, and tool arguments have NO byte ceiling on purpose
+  // (extension/lib/tool-argument-contract.js:4-9), so nothing else bounds the
+  // work a remote MCP server can ask this service worker to do. This is the
+  // budget on the PRODUCT: the worst-case number of leaf validations one
+  // payload can require. A realistic tool (a list of 100 records with a handful
+  // of fields each, or an array of arrays) sits in the hundreds to low
+  // thousands; the smallest useful multiplicative bomb is 100^3 = 1,000,000.
+  maxValidationWork: 100_000,
 };
 
 /**
@@ -386,13 +397,124 @@ export function schemaToZod(z, schema, depth = 0, report = undefined) {
  * named reason when the schema could not be compiled at all (zodSchema is
  * z.never()); dropped lists the keywords ignored under the fail-open policy.
  */
+/**
+ * Worst-case number of leaf validations ONE payload can force this schema to
+ * perform — the quantity the per-dimension caps do not bound, because they
+ * multiply: an array contributes its element cap × its items' work, a union the
+ * sum of its branches, an object the sum of its properties.
+ *
+ * Deliberately computed from the RAW schema over the SAME caps the builder
+ * applies, and it saturates at `budget + 1` so no multiplication can overflow
+ * into Infinity or wrap. It is an upper bound: where the builder drops a child
+ * this pass may still count it, which can only make it MORE conservative (a
+ * schema it refuses is one whose real work is at most what is counted).
+ * @param {any} schema
+ * @param {number} budget
+ * @returns {number} saturated work estimate (budget+1 means "over budget")
+ */
+export function schemaValidationWork(schema, budget = SCHEMA_BOUNDS.maxValidationWork) {
+  const cap = budget + 1;
+  const mul = (a, b) => {
+    if (!a || !b) return 0;
+    const v = a * b;
+    return v > cap || !Number.isFinite(v) ? cap : v;
+  };
+  const add = (a, b) => {
+    const v = a + b;
+    return v > cap || !Number.isFinite(v) ? cap : v;
+  };
+  const isNode = (v) => v && typeof v === "object" && !Array.isArray(v);
+  const walk = (node, depth) => {
+    if (!isNode(node) || depth > SCHEMA_BOUNDS.maxDepth) return 1;
+    // A union COMPOSES with whatever else the node declares (buildFromClean
+    // intersects the base with each branch), so its branches are added whatever
+    // `type` says — chrome-agent-platform-26g5y: an early return per type threw
+    // away exactly that, so `{type:"object", anyOf:[bomb]}` accounted as 1 and
+    // then validated 100^4 leaves.
+    let total = 1; // the node itself
+    for (const key of ["anyOf", "oneOf", "allOf"]) {
+      const branches = Array.isArray(node[key]) ? node[key].slice(0, SCHEMA_BOUNDS.maxUnionBranches) : [];
+      for (const b of branches) total = add(total, walk(b, depth + 1));
+    }
+    // CONTAINERS ARE DETECTED BY THEIR KEYWORDS, NOT BY `type`: the builder
+    // treats `{properties:{…}}` (no type) as an object and validates every
+    // property, so `type` alone let an untyped bomb through (measured: 105k
+    // leaves validated in ~99ms while the budget reported work 1).
+    if (node.type === "array" || node.items !== undefined) {
+      const pageMax = node.maxItems !== undefined ? node.maxItems : SCHEMA_BOUNDS.maxArrayItems;
+      const elements = Math.max(0, Math.min(pageMax, SCHEMA_BOUNDS.maxArrayItems));
+      // An array with no items schema validates `unknown` per element (work 1);
+      // an array that admits NO elements still costs one validation of itself.
+      const perElement = node.items !== undefined ? walk(node.items, depth + 1) : 1;
+      total = add(total, elements > 0 ? mul(elements, perElement) : 1);
+    }
+    const declaresObject = node.type === "object" ||
+      (isNode(node.properties)) ||
+      isNode(node.additionalProperties) ||
+      isNode(node.patternProperties);
+    if (declaresObject) {
+      if (isNode(node.properties)) {
+        for (const child of Object.values(node.properties)) total = add(total, walk(child, depth + 1));
+      }
+      // `additionalProperties`/`patternProperties` are NOT enforced by this
+      // converter today (they are dropped with a record), so these two are
+      // insurance rather than a live path: a schema-valued one is counted, so
+      // the day either keyword is supported the budget already covers it. A
+      // boolean `additionalProperties` costs nothing and adds nothing.
+      if (isNode(node.additionalProperties)) total = add(total, walk(node.additionalProperties, depth + 1));
+      if (isNode(node.patternProperties)) {
+        for (const child of Object.values(node.patternProperties)) total = add(total, walk(child, depth + 1));
+      }
+    }
+    // chrome-agent-platform-4vzgv: each required name ABSENT from properties
+    // is one z.any().refine presence constraint in buildBaseZod — work 1 each
+    // — and `required` is kept VERBATIM by the sanitizer with no length cap
+    // (maxProperties caps properties KEYS, not required), so a 200k-name
+    // required array compiled 200k refines while this budget reported 1.
+    // Counting only the ABSENT names mirrors the builder exactly: a required
+    // name WITH a declared property adds no refine (the property's own
+    // validator enforces presence), and non-string entries are dropped by the
+    // sanitizer, so they add nothing here either. The early break saturates
+    // the estimate so a hostile array cannot make the estimator itself the
+    // expensive part.
+    if (Array.isArray(node.required)) {
+      const propKeys = isNode(node.properties) ? new Set(Object.keys(node.properties)) : null;
+      let absent = 0;
+      for (const k of node.required) {
+        if (typeof k !== "string" || (propKeys && propKeys.has(k))) continue;
+        if (++absent > cap) break;
+      }
+      total = add(total, absent);
+    }
+    return total;
+  };
+  return Math.min(walk(schema, 0), cap);
+}
+
 export function compileSchemaToZod(z, schema) {
   const report = { dropped: [], fatal: null };
+  // The work bound is checked BEFORE the tree is compiled, because compiling a
+  // bomb is itself the expensive part once a payload arrives: with no fatal
+  // flag the caller installs the validator and every later safeParse pays the
+  // multiplication.
+  const work = schemaValidationWork(schema);
+  if (work > SCHEMA_BOUNDS.maxValidationWork) {
+    report.fatal = "schema-work-exceeded";
+    return Object.freeze({
+      zodSchema: z.never(),
+      dropped: Object.freeze([]),
+      fatal: report.fatal,
+      work,
+    });
+  }
   const zodSchema = schemaToZod(z, schema, 0, report);
   return Object.freeze({
     zodSchema,
     dropped: Object.freeze(report.dropped.slice(0, 32)),
     fatal: report.fatal,
+    // Reported on BOTH paths so a caller (or a test) can see how much work the
+    // schema it just compiled may force — the number the budget is about.
+    work,
   });
 }
 
