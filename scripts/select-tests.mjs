@@ -47,7 +47,7 @@ import { constants as osConstants } from "node:os";
 import { tokenizer } from "acorn";
 import { partition } from "./test-partition.mjs";
 import { announce, runSerialFiles } from "./lib/serial-phase.mjs";
-import { HTML_EXPORT_ENTRY_GUARDS, isSelectorInfrastructure, mapUncovered } from "./lib/changed-file-mapping.mjs";
+import { HTML_EXPORT_ENTRY_GUARDS, isRepoMetadata, isSelectorInfrastructure, mapUncovered } from "./lib/changed-file-mapping.mjs";
 import {
   LOCKFILE_CLASS_FILES,
   classifyLockfileDelta,
@@ -375,17 +375,32 @@ export function mergeBaseOf(base, runGit = git) {
   }
 }
 
-function changedFiles(base) {
-  const tracked = git(["diff", "--name-only", mergeBaseOf(base)]).split("\n").filter(Boolean);
-  const untracked = git(["ls-files", "--others", "--exclude-standard"]).split("\n").filter(Boolean);
-  return [...new Set([...tracked, ...untracked])]
-    .map((f) => normalize(f))
+/**
+ * The selector's changed-file filter (chrome-agent-platform-fhh50). Pure so the
+ * collection rule is unit-tested rather than trusted.
+ *
+ * DOT-PREFIXED PATHS ARE COLLECTED, not dropped. `.beads/`, `.codex/` and the git
+ * metadata files are classified `not-applicable` with a reason; `.agents/`
+ * tooling is mapped to the tests that name it or refused by name. The old blanket
+ * `!f.startsWith(".")` made a change to `.agents/skills/impeccable/scripts/*.mjs`
+ * report "no files changed vs origin/main — running always-on core": no unmapped
+ * row, no warning, nothing to notice. A file the ledger never sees reads exactly
+ * like a file the selector proved covered, which is the defect this bead is about.
+ */
+export function collectChangedFiles(files) {
+  return [...new Set(files.map((f) => normalize(f)))]
     .filter((f) =>
       !isBuildResidue(f) &&
-      !f.startsWith(".") && !f.startsWith("docs") && !f.startsWith("dist") &&
+      !f.startsWith("docs") && !f.startsWith("dist") &&
       !f.startsWith("test-artifacts") && !f.startsWith("evidence") && !f.startsWith("reports") &&
       !f.includes("CHANGELOG")
     );
+}
+
+function changedFiles(base) {
+  const tracked = git(["diff", "--name-only", mergeBaseOf(base)]).split("\n").filter(Boolean);
+  const untracked = git(["ls-files", "--others", "--exclude-standard"]).split("\n").filter(Boolean);
+  return collectChangedFiles([...tracked, ...untracked]);
 }
 
 // ---- static import graph ----
@@ -845,6 +860,7 @@ export function changedWithoutCoverage(changed, reverse) {
   for (const c of changed) {
     if (isChangedTest(c)) continue; // runs itself (or was deleted = nothing to do)
     if (isPassiveContentFile(c)) continue; // docs/assets: no executable effect
+    if (isRepoMetadata(c)) continue; // .beads/.git metadata: reported not-applicable, never unmapped
     const abs = resolve(ROOT, c);
     if (!existsSync(abs)) {
       if (Object.hasOwn(HTML_EXPORT_ENTRY_GUARDS, c)) uncovered.push(c);
@@ -1102,6 +1118,7 @@ async function runDeno(files, { build = null, omittedReason = null, fileMappingC
       executedSuites: rc === 0 ? files : [],
       selected: files,
       certifiable: rc === 0,
+      selectionCoversDelta: fileMappingContext?.selectionCoversDelta ?? null,
       omitted: inventory.omitted,
       omittedTotal: inventory.omittedTotal,
       omittedTruncated: inventory.omittedTruncated,
@@ -1305,7 +1322,10 @@ export function reachableModulesFrom(reverse) {
   };
 }
 
-function fileMappingContextForPlan(plan) {
+/** Exported as a testable seam: this is the ONLY place the plan's verdict becomes the manifest's
+ *  `selection_covers_delta`, and the two directions (mapped subset vs fail-closed full) must not
+ *  drift apart (chrome-agent-platform-fhh50). */
+export function fileMappingContextForPlan(plan) {
   const candidates = Object.fromEntries(plan.changed.map((file) => [
     file,
     testCandidatesForChanged([file], plan.reverse, plan.mapped.filter((entry) => entry.file === file)),
@@ -1315,6 +1335,11 @@ function fileMappingContextForPlan(plan) {
     candidates,
     unmappable: plan.unmappable,
     lockfileDelta: plan.lockfileDelta ?? [],
+    // chrome-agent-platform-fhh50: the merger's requested field. FALSE means the
+    // plan could not map every changed file, so this run's green came from running
+    // everything rather than from a selection that proved coverage. A consumer
+    // (merger, reviewer, dashboard) can then tell the two apart without parsing prose.
+    selectionCoversDelta: plan.kind === "subset",
   };
 }
 
@@ -1379,6 +1404,7 @@ async function main() {
         unmappable: plan.unmappable.map((u) => ({ file: u.file, mechanism: u.mechanism })),
         mapped: plan.mapped.map((m) => ({ file: m.file, tests: m.tests })),
         lockfileDelta: plan.lockfileDelta ?? [],
+        selectionCoversDelta: plan.kind === "subset",
         reason: plan.reason,
       }),
     );

@@ -110,6 +110,33 @@ export const BOOKKEEPING_FILES = Object.freeze([
   "extension/manifest.json",
 ]);
 
+/**
+ * Repo metadata: a change here that no suite in this repo can execute.
+ *
+ * chrome-agent-platform-fhh50. These paths are COLLECTED by the selector and
+ * reported as `not-applicable` with a reason, never filtered out of the changed
+ * set. Dropping them made a beads-sync or .gitignore change indistinguishable
+ * from "nothing changed" in the gate log, which is the same silent-accounting
+ * shape as an unmapped changed file: the ledger said nothing, and a reader
+ * could not tell that from "coverage proved".
+ */
+export function isRepoMetadata(rel) {
+  const path = rel.replace(/\\/g, "/");
+  return /^\.beads\//.test(path) || /^\.codex\//.test(path) || /^\.gitignore$/.test(path) ||
+    /^\.gitattributes$/.test(path) || /^\.gitmodules$/.test(path);
+}
+
+/**
+ * Agent-skill tooling under `.agents/` (the impeccable design launchers, the
+ * beads-flow helpers). It ships with no code the extension bundle contains, and
+ * nothing in `tests/` imports it statically — but tests DO execute some of it by
+ * path, so a changed file here maps to the tests that name it and fails closed
+ * when none does (chrome-agent-platform-fhh50).
+ */
+export function isAgentTooling(rel) {
+  return /^\.agents[\\/]/.test(rel.replace(/\\/g, "/"));
+}
+
 /** A harness under scripts/ that no test imports. */
 export function isScriptsHarness(rel) {
   return /^scripts[\\/].+\.(ts|mjs|js)$/.test(rel.replace(/\\/g, "/"));
@@ -252,6 +279,22 @@ export function classifyUncovered(rel, { referrers = [] } = {}) {
         "extension/wasm/licenses/ license notice validated by bundled-tool-packages " +
         "guard (plus referring tests)",
       tests,
+    };
+  }
+  if (isAgentTooling(path)) {
+    if (referrers.length) {
+      return {
+        mechanism:
+          "agent-skill tooling under .agents/ named by tests (executed by path, so it has no static " +
+          "import edge; selects the suites that name it)",
+        tests: [...referrers],
+      };
+    }
+    return {
+      mechanism:
+        "agent-skill tooling under .agents/ that no test names — no suite in this repo executes it, so a " +
+        "selection cannot certify it; fails closed to the full suite",
+      tests: [],
     };
   }
   if (isScriptsHarness(path)) {

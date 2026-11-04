@@ -19,6 +19,7 @@ import {
   HARNESS_TREE_GUARDS,
   HTML_EXPORT_ENTRY_GUARDS,
   isGuardEnumeratedScript,
+  isRepoMetadata,
   isScriptsHarness,
   isSelectorInfrastructure,
   isTestsFixture,
@@ -534,3 +535,56 @@ Deno.test("zbge2: wasm license notice text files are not skipped as passive cont
 });
 
 
+// ---- chrome-agent-platform-fhh50: dot-prefixed paths are classified, never dropped ----
+
+Deno.test("fhh50: repo metadata is a DECLARED exemption, not a silent drop", () => {
+  for (const path of [".beads/issues.jsonl", ".codex/config.toml", ".gitignore", ".gitattributes"]) {
+    assertEquals(isRepoMetadata(path), true, `${path} is repo metadata`);
+  }
+  for (const path of ["extension/lib/acp-run-config.js", ".agents/skills/impeccable/scripts/context.mjs", "tests/a.test.ts"]) {
+    assertEquals(isRepoMetadata(path), false, `${path} is NOT repo metadata — it must stay classified`);
+  }
+  // changedWithoutCoverage must not report metadata as an uncovered executable file:
+  // a beads-only commit would then fail closed to the full suite.
+  assertEquals(changedWithoutCoverage([".beads/issues.jsonl", ".gitignore"]), []);
+});
+
+Deno.test("fhh50: agent-skill tooling maps to the suites that EXECUTE it by path", () => {
+  // .agents/skills/impeccable/scripts/context.mjs has no static import edge; three suites run it
+  // by path (impeccable-design-context launches it). Those are what actually cover it.
+  const referrers = [
+    "tests/impeccable-context-path.test.ts",
+    "tests/impeccable-design-context.test.ts",
+    "tests/impeccable-launcher-visibility.test.ts",
+  ];
+  const mapped = classifyUncovered(".agents/skills/impeccable/scripts/context.mjs", { referrers });
+  assertEquals(mapped.tests, referrers, "the tests that name the file are its coverage");
+  assert(/agent-skill tooling under \.agents\/ named by tests/.test(mapped.mechanism), mapped.mechanism);
+
+  const result = mapUncovered(
+    [".agents/skills/impeccable/scripts/context.mjs"],
+    declaredGuardExists,
+    () => true,
+    () => referrers,
+  );
+  assertEquals(result.unmappable, [], "a named-by-tests tooling file is not a refusal");
+  assertEquals(result.mapped.length, 1);
+});
+
+Deno.test("fhh50: unreferenced agent-skill tooling fails closed AND names the mechanism", () => {
+  const refused = classifyUncovered(".agents/skills/impeccable/scripts/detect-csp.mjs", { referrers: [] });
+  assertEquals(refused.tests, [], "no suite executes it, so no suite may be claimed");
+  assert(/no suite in this repo executes it/.test(refused.mechanism), refused.mechanism);
+  assert(/fails closed to the full suite/.test(refused.mechanism), refused.mechanism);
+
+  const result = mapUncovered(
+    [".agents/skills/impeccable/scripts/detect-csp.mjs"],
+    declaredGuardExists,
+    () => true,
+    () => [],
+  );
+  assertEquals(result.mapped, []);
+  assertEquals(result.unmappable.map((row: { file: string }) => row.file), [
+    ".agents/skills/impeccable/scripts/detect-csp.mjs",
+  ]);
+});

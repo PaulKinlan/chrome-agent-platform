@@ -8,16 +8,22 @@
 // (coord, 2026-10-14: producer-first sequencing).
 //
 // THE WIRE CONTRACT (must not drift from check-coverage.py):
-//   fast-gate: manifest: {"tier":..,"executed":N,"executed_suites":[..],"selected":[..],"certifiable":true,..}
+//   fast-gate: manifest: {"tier":..,"executed":N,"executed_suites":[..],"selected":[..],"certifiable":true,"selection_covers_delta":true,..}
 //   fast-gate: unmapped: <space-separated paths>
 //   fast-gate: unknown: <reason the run cannot certify coverage>
 // The extractor takes the LAST manifest line in a log, so a tier must emit exactly one, after its run.
 // `executed` must be a COUNT of suites that positively ran: absent or <= 0 places nothing, and
 // `certifiable: false` forces coverage PARTIAL (never KNOWN) at the consumer.
 //
-// This module is pure and shares only the selector's pure content policy, so both tier emitters
-// (scripts/select-tests.mjs and scripts/run-tests.mjs) use one formatter without a dependency cycle.
+// This module is pure and shares only the selector's pure policy modules (which changed files are
+// exempt content, which are repo metadata), so both tier emitters (scripts/select-tests.mjs and
+// scripts/run-tests.mjs) use one formatter without a dependency cycle.
+//
+// fhh50 adds one OPTIONAL verdict field, `selection_covers_delta`: true when the plan mapped every
+// changed file to a candidate suite, false when it could not and therefore ran everything. Absent
+// means the producer did not compute it, and an absent field is never read as a proof.
 import { isPassiveContentFile } from "./content-exemptions.mjs";
+import { isRepoMetadata } from "./changed-file-mapping.mjs";
 import { suiteDurationsObject } from "./parallel-durations.mjs";
 import { ENVIRONMENTAL_REFUSAL_EXIT } from "./environmental-verdict.mjs";
 
@@ -50,8 +56,8 @@ export function explainChangedFileMapping({ changed = [], candidates = {}, execu
   const omittedByFile = new Map(omitted.map(({ file, reason }) => [file, reason]));
   const unmappableByFile = new Map(unmappable.map(({ file, mechanism }) => [file, mechanism]));
   return normalizeSuiteList(changed).map((file) => {
-    if (file.startsWith(".beads/") || isPassiveContentFile(file)) {
-      return { file, status: "not-applicable", executed_suites: [], reason: "content or Beads metadata; no executable suite required" };
+    if (isRepoMetadata(file) || isPassiveContentFile(file)) {
+      return { file, status: "not-applicable", executed_suites: [], reason: "repo metadata or passive content; no executable suite required" };
     }
     // An explicitly fail-closed path cannot certify its own subset, even if a
     // suite happens to import it. Full execution is not selector authority.
@@ -105,6 +111,7 @@ export function explainChangedFileMapping({ changed = [], candidates = {}, execu
  *   executedSuites?: string[],
  *   selected?: string[],
  *   certifiable?: boolean,
+ *   selectionCoversDelta?: boolean | null,
  *   omitted?: Array<{ file: string, reason: string }>,
  *   omittedTotal?: number,
  *   omittedTruncated?: number,
@@ -124,6 +131,7 @@ export function formatGateManifest({
   executedSuites = [],
   selected = [],
   certifiable = true,
+  selectionCoversDelta = null,
   omitted = [],
   omittedTotal = 0,
   omittedTruncated = 0,
@@ -158,6 +166,13 @@ export function formatGateManifest({
     selected: normalizeSuiteList(selected),
     certifiable: certifiable === true,
   };
+  // chrome-agent-platform-fhh50: "this green came from a selection that PROVED it covers the delta"
+  // vs "the plan could not map the delta, so everything ran". Omitted (not defaulted to true) when a
+  // producer does not compute it — an absent field must never read as a proof. Additive to the wire
+  // contract: the fleet extractor reads named keys out of the last manifest line and ignores extras.
+  if (selectionCoversDelta === true || selectionCoversDelta === false) {
+    payload.selection_covers_delta = selectionCoversDelta;
+  }
   if (build) {
     payload.build = {
       disposition: build.disposition,
@@ -383,6 +398,12 @@ export function fullTierManifestFields({
     executedSuites: rc === 0 ? executedSuites : [],
     selected: executedSuites,
     certifiable: rc === 0,
+    // fhh50: carried across from the FAST plan that fail-closed into this FULL run
+    // (CAP_GATE_FILE_MAPPING_JSON), so the full-tier record says whether a selection
+    // proved the delta or whether everything ran because nothing could map it.
+    ...(typeof fileMappingContext?.selectionCoversDelta === "boolean"
+      ? { selectionCoversDelta: fileMappingContext.selectionCoversDelta }
+      : {}),
     build,
     // Durations are measurements, not coverage claims: a red run's timings
     // are still the honest input for re-weighting, so they ride along
