@@ -877,9 +877,19 @@ export class LazyToolProtocol {
    * every listing the model sees (search summaries + list descriptions). */
   #fenceWebMcpListing(entry, context, field) {
     if (!String(ownData(entry, "sourceKind") ?? "").startsWith("webmcp")) return entry;
-    const text = ownData(entry, field);
-    if (typeof text !== "string" || !text.length) return entry;
-    return Object.freeze({ ...entry, [field]: fenceUntrustedText(text, this.#untrustedToken(context)) });
+    // chrome-agent-platform-y25vb: the page authors not only the description
+    // but the SCHEMA the summaries are printed from — canonicalJson reproduces
+    // property names and enum values verbatim, so an unfenced schemaSummary
+    // let hostile schema text read as platform-voice listing content. Every
+    // page-authored text field the listing carries is fenced.
+    const fields = Array.isArray(field) ? field : [field];
+    let out = entry;
+    for (const f of fields) {
+      const text = ownData(out, f);
+      if (typeof text !== "string" || !text.length) continue;
+      out = Object.freeze({ ...out, [f]: fenceUntrustedText(text, this.#untrustedToken(context)) });
+    }
+    return out;
   }
 
   async search(request = {}, context = {}) {
@@ -960,7 +970,7 @@ export class LazyToolProtocol {
         sourceKind: desc.sourceKind ?? "extension-builtin",
         schemaSummary: String(desc.schemaSummary ?? ""),
         outputSchemaSummary: String(desc.outputSchemaSummary ?? ""),
-      }, context, "description");
+      }, context, ["description", "schemaSummary", "outputSchemaSummary"]);
 
       bySource[group].push(entry);
     }
