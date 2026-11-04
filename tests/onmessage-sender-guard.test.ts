@@ -396,8 +396,8 @@ const ALLOWLISTED_SITES = new Map<string, string>([
     "central dispatcher: accepts page/content-script senders BY DESIGN; sender classified by authorizeToolReport (lib/pure.js:912) and route authority enforced per-route (Layers 1-3)",
   ],
   [
-    "extension/content/content-script.js:376",
-    "content script receiving SW pushes: inline !sender || sender.id !== runtime.id || sender.tab != null rejects foreign and tab senders; pinned by the behavioral content-script test below",
+    "extension/content/content-script.js:399",
+    "content script receiving SW pushes: isTrustedServiceWorkerSenderPort — faithful port of pure.js isTrustedServiceWorkerSender (KEEP IN SYNC), id + tab/documentId absence + url pins the compiled SW bundle; pinned by the behavioral content-script test below",
   ],
   [
     "extension/content/webmcp-detect-relay.js:97",
@@ -1125,33 +1125,55 @@ Deno.test("behavioral: provider-gate onPermissionSettled ignores untrusted broad
 
 Deno.test("behavioral: content-script onRuntimeMessage filters foreign sender and tab senders", async () => {
   const csSource = await Deno.readTextFile(path.join(ROOT, "extension/content/content-script.js"));
-  // Extract onRuntimeMessage implementation
+  // Extract the ported predicate + onRuntimeMessage implementation
+  const portMatch = csSource.match(/function isTrustedServiceWorkerSenderPort\([\s\S]*?\n\}/);
   const fnMatch = csSource.match(/function onRuntimeMessage\([\s\S]*?\n\}/);
+  assert(portMatch, "must find isTrustedServiceWorkerSenderPort in content-script.js (chrome-agent-platform-yl0wn: the faithful port of pure.js isTrustedServiceWorkerSender)");
   assert(fnMatch, "must find onRuntimeMessage in content-script.js");
+  const swUrl = "chrome-extension://cap-extension-id/dist/background/service-worker.js";
   const onRuntimeMessage = new Function(
     "chrome",
     `let syncCalled = false;
      function syncEnrollmentAtStartup() { syncCalled = true; return Promise.resolve(); }
+     ${portMatch[0]};
      ${fnMatch[0]};
      return { onRuntimeMessage, getSyncCalled: () => syncCalled };`,
-  )({ runtime: { id: "cap-extension-id" } });
+  )({ runtime: { id: "cap-extension-id", getURL: (p) => `chrome-extension://cap-extension-id/${p}` } });
 
   // Foreign sender: must return false and not invoke sync
-  const foreignSender = { id: "foreign-id" };
+  const foreignSender = { id: "foreign-id", url: swUrl };
   const ret1 = onRuntimeMessage.onRuntimeMessage({ type: "enrollment.poke" }, foreignSender, () => {});
   assertEquals(ret1, false, "foreign sender must be rejected");
   assertEquals(onRuntimeMessage.getSyncCalled(), false, "sync must not be called on foreign sender");
 
   // Tab sender: must return false
-  const tabSender = { id: "cap-extension-id", tab: { id: 10 } };
+  const tabSender = { id: "cap-extension-id", tab: { id: 10 }, url: swUrl };
   const ret2 = onRuntimeMessage.onRuntimeMessage({ type: "enrollment.poke" }, tabSender, () => {});
   assertEquals(ret2, false, "sender from tab must be rejected");
 
-  // Extension SW sender: must be accepted
-  const swSender = { id: "cap-extension-id" };
+  // Extension DOCUMENT sender — the chrome-agent-platform-yl0wn gap: the old
+  // inline check (id + tab-absence only) accepted ANY same-extension principal
+  // (ntp hub, options, side panel), so an extension page could drive page-tool
+  // execution. Only the compiled SW bundle may speak here.
+  const documentSender = {
+    id: "cap-extension-id",
+    url: "chrome-extension://cap-extension-id/ntp/ntp.html",
+  };
+  const ret2b = onRuntimeMessage.onRuntimeMessage({ type: "invoke-tool", gen: 1 }, documentSender, () => {});
+  assertEquals(ret2b, false, "a same-extension document (ntp/options/sidepanel) must be REJECTED — only the compiled SW bundle passes");
+
+  // Extension SW sender: must be accepted — sender.url pins the compiled
+  // bundle, exactly what pure.js isTrustedServiceWorkerSender enforces.
+  const swSender = { id: "cap-extension-id", url: swUrl };
   const ret3 = onRuntimeMessage.onRuntimeMessage({ type: "enrollment.poke" }, swSender, () => {});
-  assertEquals(ret3, true, "valid extension SW sender must be accepted");
+  assertEquals(ret3, true, "the compiled SW sender must be accepted");
   assertEquals(onRuntimeMessage.getSyncCalled(), true, "sync must be called on valid sender");
+
+  // A sender with NO url (the old test accepted this) must now be rejected:
+  // only the pinned bundle URL is the SW.
+  const urllessSender = { id: "cap-extension-id" };
+  const ret3b = onRuntimeMessage.onRuntimeMessage({ type: "enrollment.poke" }, urllessSender, () => {});
+  assertEquals(ret3b, false, "a url-less sender is not the SW bundle and must be rejected");
 
   // Missing sender: must be rejected fail-closed per docs/SW-DISPATCH-AUTHORITY-CENSUS.md
   const ret4 = onRuntimeMessage.onRuntimeMessage({ type: "enrollment.poke" }, undefined, () => {});
