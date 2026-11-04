@@ -24,11 +24,36 @@
       return el && (el.id?.startsWith(prefix) || el.closest?.('[id^="' + prefix + '"]'));
     }
 
+    // chrome-agent-platform-hheu4: pickable() forced layout on EVERY
+    // pointermove — getBoundingClientRect per element per event, several
+    // elements per event burst. Cache each element's rect and invalidate on
+    // scroll, resize, DOM mutation, and explicit apply-completion so the
+    // measurements are reused across the burst while never outliving a
+    // layout change.
+    let elementRectCache = new WeakMap();
+    function invalidateElementRects() {
+      // WeakMap has no clear(); a fresh map drops every entry.
+      elementRectCache = new WeakMap();
+    }
+    // Per-instance listeners: each instance's invalidator clears only its own
+    // cache, so parallel instances stay correct (the cost is one listener set
+    // per live session — created once per live-mode start).
+    const invalidate = () => invalidateElementRects();
+    root.addEventListener('scroll', invalidate, { capture: true, passive: true });
+    root.addEventListener('resize', invalidate, { passive: true });
+    if (typeof MutationObserver === 'function') {
+      new MutationObserver(invalidate).observe(doc, { childList: true, subtree: true, attributes: true });
+    }
+
     function pickable(el) {
       if (!el || el.nodeType !== 1) return false;
       if (tagsToSkip.has(String(el.tagName || '').toLowerCase())) return false;
       if (own(el)) return false;
-      const r = el.getBoundingClientRect();
+      let r = elementRectCache.get(el);
+      if (!r) {
+        r = el.getBoundingClientRect();
+        elementRectCache.set(el, r);
+      }
       return r.width >= 20 && r.height >= 20;
     }
 
@@ -125,6 +150,7 @@
     return {
       own,
       pickable,
+      invalidateElementRects,
       desc,
       rectIsUsableAnchor,
       makeFrozenAnchor,
