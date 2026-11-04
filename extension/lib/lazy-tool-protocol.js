@@ -877,9 +877,19 @@ export class LazyToolProtocol {
    * every listing the model sees (search summaries + list descriptions). */
   #fenceWebMcpListing(entry, context, field) {
     if (!String(ownData(entry, "sourceKind") ?? "").startsWith("webmcp")) return entry;
-    const text = ownData(entry, field);
-    if (typeof text !== "string" || !text.length) return entry;
-    return Object.freeze({ ...entry, [field]: fenceUntrustedText(text, this.#untrustedToken(context)) });
+    // chrome-agent-platform-y25vb: the page authors not only the description
+    // but the SCHEMA the summaries are printed from — canonicalJson reproduces
+    // property names and enum values verbatim, so an unfenced schemaSummary
+    // let hostile schema text read as platform-voice listing content. Every
+    // page-authored text field the listing carries is fenced.
+    const fields = Array.isArray(field) ? field : [field];
+    let out = entry;
+    for (const f of fields) {
+      const text = ownData(out, f);
+      if (typeof text !== "string" || !text.length) continue;
+      out = Object.freeze({ ...out, [f]: fenceUntrustedText(text, this.#untrustedToken(context)) });
+    }
+    return out;
   }
 
   async search(request = {}, context = {}) {
@@ -906,7 +916,13 @@ export class LazyToolProtocol {
     if (!issued?.ok || !Array.isArray(issued.results)) return issued;
     return Object.freeze({
       ...issued,
-      results: Object.freeze(issued.results.map((entry) => this.#fenceWebMcpListing(entry, context, "summary"))),
+      // chrome-agent-platform-svdvm: the search result carries the same
+      // page-authored schema text the LIST fence delimits — fence all of it
+      // here too (this is the path list_tools' own summary points the model
+      // to).
+      results: Object.freeze(issued.results.map((entry) =>
+        this.#fenceWebMcpListing(entry, context, ["summary", "schemaSummary", "outputSchemaSummary"])
+      )),
     });
   }
 
@@ -960,7 +976,7 @@ export class LazyToolProtocol {
         sourceKind: desc.sourceKind ?? "extension-builtin",
         schemaSummary: String(desc.schemaSummary ?? ""),
         outputSchemaSummary: String(desc.outputSchemaSummary ?? ""),
-      }, context, "description");
+      }, context, ["description", "schemaSummary", "outputSchemaSummary"]);
 
       bySource[group].push(entry);
     }
@@ -1224,8 +1240,14 @@ export class LazyToolProtocol {
       selectedTool: afterResolved.descriptor.name,
       result: projected.result,
       // Renderer-only metadata: the UI consumes this bounded selected-tool
-      // contract and does not display it as part of the result tree.
-      schemaSummary: afterResolved.descriptor.outputSchemaSummary,
+      // contract and does not display it as part of the result tree. The text
+      // is still the page-authored output schema (svdvm) — fenced for webmcp
+      // descriptors, raw for first-party ones.
+      schemaSummary: this.#fenceWebMcpListing(
+        { sourceKind: afterResolved.descriptor.sourceKind, v: afterResolved.descriptor.outputSchemaSummary },
+        context,
+        "v",
+      ).v,
       selectionRef,
       authorizes: false,
       requiresLiveAuthorization: true,
