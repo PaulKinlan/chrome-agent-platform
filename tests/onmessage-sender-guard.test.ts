@@ -790,6 +790,25 @@ Deno.test("guard falsification: detects un-gated, ignored, or missing sender lis
   assertEquals(sites27.length, 1);
   assertEquals(sites27[0].checksSender, false, "a renamed vetted import must NOT be credited - the exact imported name must be called directly");
 
+  // chrome-agent-platform-viiaq completion pin: a hoisted local FUNCTION
+  // shadowing the recognised name in an ENCLOSING function scope (valid JS even
+  // with the import present, ID-only body) must not be credited either - the
+  // helper is not the vetted import binding, however the name reads.
+  const probeHoistedFunctionShadow = `
+    import { isTrustedServiceWorkerSender } from "./lib/pure.js";
+    function wrapper() {
+      function isTrustedServiceWorkerSender(sender) { return sender.id === chrome.runtime.id; }
+      chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+        if (!isTrustedServiceWorkerSender(sender)) return false;
+        sendResponse({ ok: true });
+        return true;
+      });
+    }
+  `;
+  const sites28 = analyzeOnMessageListeners(probeHoistedFunctionShadow, "extension/test-probe28.js");
+  assertEquals(sites28.length, 1);
+  assertEquals(sites28[0].checksSender, false, "a hoisted same-named function in an enclosing scope is not the vetted import (viiaq)");
+
   // The shadow-then-alias chain the round-5 reviewer constructed.
   const probeShadowedAliasChain = `
     import { isTrustedServiceWorkerSender } from "./lib/pure.js";
