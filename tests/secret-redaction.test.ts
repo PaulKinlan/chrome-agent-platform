@@ -385,7 +385,10 @@ Deno.test("redaction: every SECRET_KEY_RE locator is pinned to a live call-site 
     { locator: "password", key: "password", where: "page tool result (tool-summary redactSecrets)" },
     { locator: "authorization", key: "authorization", where: "HTTP headers object in a page tool result" },
     { locator: "credential", key: "credential", where: "page tool args (hook/journal payload)" },
-    { locator: "bearer", key: "bearer_token", where: "page tool result" },
+    // key 'bearer' alone: ONLY the bearer alternative matches it (a compound
+    // like 'bearer_token' is satisfied by the token alternative even when the
+    // bearer alternative is dropped — chrome-agent-platform-2o235).
+    { locator: "bearer", key: "bearer", where: "page tool result" },
     { locator: "access[_-]?key", key: "access_key", where: "cloud storage tool result" },
   ];
   for (const c of CASES) {
@@ -396,8 +399,27 @@ Deno.test("redaction: every SECRET_KEY_RE locator is pinned to a live call-site 
     const out = redactSecrets({ [c.key]: "value-must-not-survive-4471" });
     assertEquals(out[c.key], "[REDACTED]", `${c.locator} (${c.key}, ${c.where}) must be redacted`);
   }
-  // Staleness gate: the table above is the locator contract. When the regex
-  // grows an alternative, add its live-shaped case AND bump this count; a
-  // locator removed without removing its case fails the match assert above.
-  assertEquals(CASES.length, 8, "SECRET_KEY_RE declares 8 alternatives — keep one live-shaped case each");
+  // Staleness gate, BOTH directions (chrome-agent-platform-2o235): the
+  // declared locator set is DERIVED from the regex source, not restated.
+  // (1) dropping an alternative fails its row's match assert above; (2) adding
+  // an alternative without a live-shaped case fails the declared-direction
+  // assert here; (3) a stale row (locator no longer in the regex) fails the
+  // case-direction assert.
+  const src = SECRET_KEY_RE.source;
+  // The capture group is the SECOND parenthesised region (after the lookbehind)
+  // and contains no nested parens — plain keyword alternatives separated by '|'.
+  const groupOpen = src.indexOf("(", src.indexOf("(") + 1);
+  const groupClose = src.indexOf(")", groupOpen);
+  assert(groupOpen > 0 && groupClose > groupOpen, "SECRET_KEY_RE.source must keep its single capture group");
+  const declared = src.slice(groupOpen + 1, groupClose).split("|").map((s) => s.trim()).filter(Boolean);
+  const declaredSet = new Set(declared);
+  const caseLocators = new Set(CASES.map((c) => c.locator));
+  assertEquals(declared.length, declaredSet.size, "no duplicate alternatives in the regex");
+  for (const d of declared) {
+    assert(caseLocators.has(d), `alternative "${d}" has no live-shaped case — add a row to CASES`);
+  }
+  for (const c of CASES) {
+    assert(declaredSet.has(c.locator), `case "${c.locator}" is no longer in the regex — stale row, remove or re-key it`);
+  }
+  assertEquals(CASES.length, declared.length, "one live-shaped case per declared locator");
 });
