@@ -241,6 +241,14 @@ function normalizeApostrophes(s) {
   return s.replace(/[\u2018\u2019]/g, "'");
 }
 
+// chrome-agent-platform-wdfe2: the keyword regexes used to be rebuilt per
+// canonical section PER HEADING. Precompute them once — CANONICAL_SECTIONS is
+// a module constant, so the matchers are too.
+const CANONICAL_SECTION_MATCHERS = CANONICAL_SECTIONS.map((c) => {
+  const key = normalizeApostrophes(c).toLowerCase();
+  return { canonical: c, re: new RegExp(`\\b${key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`) };
+});
+
 function matchCanonicalSection(name) {
   const normalized = normalizeApostrophes(name).toLowerCase();
   // Exact match first
@@ -249,10 +257,8 @@ function matchCanonicalSection(name) {
   }
   // Keyword-contained match: "Overview & Creative North Star" -> "Overview",
   // "Elevation & Depth" -> "Elevation", etc.
-  for (const c of CANONICAL_SECTIONS) {
-    const key = normalizeApostrophes(c).toLowerCase();
-    const pattern = new RegExp(`\\b${key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`);
-    if (pattern.test(normalized)) return c;
+  for (const m of CANONICAL_SECTION_MATCHERS) {
+    if (m.re.test(normalized)) return m.canonical;
   }
   return null;
 }
