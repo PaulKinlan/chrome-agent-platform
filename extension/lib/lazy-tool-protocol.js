@@ -916,7 +916,13 @@ export class LazyToolProtocol {
     if (!issued?.ok || !Array.isArray(issued.results)) return issued;
     return Object.freeze({
       ...issued,
-      results: Object.freeze(issued.results.map((entry) => this.#fenceWebMcpListing(entry, context, "summary"))),
+      // chrome-agent-platform-svdvm: the search result carries the same
+      // page-authored schema text the LIST fence delimits — fence all of it
+      // here too (this is the path list_tools' own summary points the model
+      // to).
+      results: Object.freeze(issued.results.map((entry) =>
+        this.#fenceWebMcpListing(entry, context, ["summary", "schemaSummary", "outputSchemaSummary"])
+      )),
     });
   }
 
@@ -1234,8 +1240,14 @@ export class LazyToolProtocol {
       selectedTool: afterResolved.descriptor.name,
       result: projected.result,
       // Renderer-only metadata: the UI consumes this bounded selected-tool
-      // contract and does not display it as part of the result tree.
-      schemaSummary: afterResolved.descriptor.outputSchemaSummary,
+      // contract and does not display it as part of the result tree. The text
+      // is still the page-authored output schema (svdvm) — fenced for webmcp
+      // descriptors, raw for first-party ones.
+      schemaSummary: this.#fenceWebMcpListing(
+        { sourceKind: afterResolved.descriptor.sourceKind, v: afterResolved.descriptor.outputSchemaSummary },
+        context,
+        "v",
+      ).v,
       selectionRef,
       authorizes: false,
       requiresLiveAuthorization: true,
