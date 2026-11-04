@@ -568,12 +568,24 @@ export const SEVERE_STALL_CEILING_MS = 500.0;
  *  sample filter. */
 export const STEAL_SATURATION_PCT = 99.9;
 
-/** h5wbd: how far outside a stall's own window a timestamped sample may sit and
- *  still count as bracketing it when NO sample falls inside the window. The
- *  harness samples every ~200ms and the steal probe measures the ~120ms before
- *  `at`, so a 1s reach covers the sampler period with margin; a sample further
- *  away did not measure the steal in force across the stall and must not excuse
- *  it (that distance is exactly the h5wbd defect). */
+/** 1gro1 (review round 2 on fcfcad9cd): the saturation threshold alone is a
+ *  KNIFE-EDGE - at 99.8% (just under it) the stretch is a finite 500x and a
+ *  30-SECOND stall was excused into a green PASS. Proportionality only means
+ *  something while the prediction stays a bound a ceiling-level task could
+ *  plausibly show: past 10x (90% steal, a 5s wall for a 500ms task) the
+ *  'excuse' explains any catastrophe and the measurement says nothing. A
+ *  stretch beyond this cap fails closed exactly like saturation: evidence-or-
+ *  red. The live motivating class stays inside it (89% -> 9.09x -> 4545ms). */
+export const STEAL_EXCUSE_MAX_STRETCH = 10;
+
+/** h5wbd: how far BEFORE a stall's own window a timestamped sample may sit and
+ *  still proxy the steal in force across it when NO sample falls inside the
+ *  window. The harness samples every ~200ms and the steal probe measures the
+ *  ~120ms before `at`, so a 1s reach covers the sampler period with margin; a
+ *  sample further away did not measure the steal in force across the stall and
+ *  must not excuse it (that distance is exactly the h5wbd defect). gl59n: only
+ *  the BEFORE side proxies - a sample taken after the window measured steal
+ *  that began once the stall was over and cannot causally explain it. */
 export const STEAL_BRACKET_REACH_MS = 1000;
 
 /** The excuse a task's bracketed steal measurements can justify (h5wbd). */
@@ -587,7 +599,8 @@ export interface StealExcuse {
   maxExcusableWallMs: number;
   /** How many samples the effective steal was computed from. */
   sampleCount: number;
-  /** True when at least one sample fell inside the task window itself. */
+  /** True when at least one sample fell inside the task window itself; false
+   *  when the effective steal comes from the before-side proxy (gl59n). */
   bracketed: boolean;
 }
 
@@ -602,16 +615,21 @@ export interface StealExcuse {
  *   1. the task window [timeOrigin+startTimeMs, +durationMs] is placed on the
  *      samples' epoch clock (`at` = Date.now; timeOrigin = performance.timeOrigin);
  *   2. samples INSIDE the window decide; only when none fall inside may the
- *      nearest sample on each side within STEAL_BRACKET_REACH_MS bracket it;
+ *      nearest BEFORE-side sample within STEAL_BRACKET_REACH_MS proxy them -
+ *      gl59n: an AFTER-side sample measured steal that began once the stall
+ *      was over, so it can never set or raise the effective steal (a spike
+ *      starting after the stall ended used to excuse it retroactively: 11%
+ *      before + 89% after read as 89 and turned a real 600ms stall green);
  *   3. the effective steal is the max finite reading of that set (a quieter
- *      sample elsewhere in the interval cannot dilute it — coord's determinism
- *      amendment; a louder sample outside it cannot inflate it — h5wbd);
+ *      sample elsewhere in the interval cannot dilute it - coord's determinism
+ *      amendment; a louder sample outside it cannot inflate it - h5wbd);
  *   4. EVERY fail-closed edge returns null (no excuse, the breach stays
  *      evidence): no timeOrigin, no timestamped samples, no sample inside or
- *      within reach, no finite steal reading among them, a negative reading, or
- *      a reading at/above STEAL_SATURATION_PCT (a saturated or non-finite
- *      stretch excuses nothing — coord ruling 2026-11-04: 'Infinityx' must
- *      never appear in a diagnostic or a decision).
+ *      before within reach, no finite steal reading among them, a negative
+ *      reading, a reading at/above STEAL_SATURATION_PCT, or a stretch beyond
+ *      STEAL_EXCUSE_MAX_STRETCH (1gro1: a saturated, non-finite OR merely
+ *      enormous stretch excuses nothing - 'Infinityx' and '500.00x' must never
+ *      appear in a diagnostic or a decision).
  */
 export function computeStealExcuse(
   task: { startTimeMs: number; durationMs: number },
@@ -628,13 +646,15 @@ export function computeStealExcuse(
   let bracketed = true;
   if (window.length === 0) {
     bracketed = false;
+    // gl59n: the BEFORE-side sample only. Steal measured after the window began
+    // once the stall was over - it cannot causally explain the stall, and
+    // letting it set the effective steal turned [11% before, 89% after] into a
+    // green excuse for a real 600ms catastrophe.
     let before: LoadSample | null = null;
-    let after: LoadSample | null = null;
     for (const s of timed) {
       if (s.at < t0 && s.at >= t0 - STEAL_BRACKET_REACH_MS && (!before || s.at > before.at)) before = s;
-      if (s.at > t1 && s.at <= t1 + STEAL_BRACKET_REACH_MS && (!after || s.at < after.at)) after = s;
     }
-    window = [before, after].filter((s): s is LoadSample => s != null);
+    window = before ? [before] : [];
   }
   if (window.length === 0) return null;
   const steals = window
@@ -646,6 +666,10 @@ export function computeStealExcuse(
   const stretchFactor = 1 / (1 - effStealPct / 100);
   const maxExcusableWallMs = SEVERE_STALL_CEILING_MS * stretchFactor;
   if (!Number.isFinite(stretchFactor) || !Number.isFinite(maxExcusableWallMs)) return null;
+  // 1gro1: a merely FINITE stretch is not yet a bound - past 10x the prediction
+  // explains any catastrophe (99.8% -> 500x -> a 30-second stall 'fit inside'),
+  // so the excuse dies at the cap, exactly like saturation.
+  if (stretchFactor > STEAL_EXCUSE_MAX_STRETCH) return null;
   return { effStealPct, stretchFactor, maxExcusableWallMs, sampleCount: window.length, bracketed };
 }
 
@@ -881,9 +905,12 @@ export function evaluateBootStagingPolicy(
   // max — a spike elsewhere in the interval must not retroactively explain a stall
   // that happened under calm steal (600ms bracketed by 11% flipped to PASS once any
   // sibling read >=16.7%: a false GREEN, worse than the refusal this policy exists to
-  // prefer). And never from a saturated or non-finite stretch: at >= 99.9% steal the
-  // factor goes unbounded (a 30-second stall 'explained'), so it excuses NOTHING and
-  // the diagnostic can never print 'Infinityx' (coord ruling 2026-11-04 — the same
+  // prefer), and never from an AFTER-side proxy either (gl59n: a spike that BEGINS
+  // once the stall is over cannot causally explain it). And never from a saturated,
+  // non-finite, or merely enormous stretch: at >= 99.9% steal the factor goes unbounded
+  // (a 30-second stall 'explained'), and past STEAL_EXCUSE_MAX_STRETCH (10x) the
+  // prediction explains any catastrophe, so both excuse NOTHING and the diagnostic can
+  // never print 'Infinityx' (coord ruling 2026-11-04 — the same
   // u4zgv family one order of magnitude out: screen the comparison for non-finite
   // inputs at the arithmetic boundary, not only at the sample filter). Excused only
   // when the observed wall fits inside 500ms * the in-force stretch; the excess past
@@ -900,14 +927,14 @@ export function evaluateBootStagingPolicy(
       for (const t of excused) {
         const e = t.stealExcuse!;
         warnings.push(
-          `[ntp-boot-staging] Run ${r.run}: severe stall (>${SEVERE_STALL_CEILING_MS}ms, ${Math.round(t.durationMs)}ms observed) inside a steal-invalidated run — the steal IN FORCE ACROSS THE STALL WINDOW (${e.sampleCount} ${e.bracketed ? "in-window" : "bracketing"} sample(s), worst ${e.effStealPct.toFixed(0)}%) implies a ${e.stretchFactor.toFixed(2)}x stretch, which can carry a ceiling-level task to ${Math.round(e.maxExcusableWallMs)}ms wall; the observed stall fits inside that prediction (real work <= ${SEVERE_STALL_CEILING_MS}ms), so it is excluded from the severe check (chrome-agent-platform-r2l8n/u4zgv/h5wbd)`,
+          `[ntp-boot-staging] Run ${r.run}: severe stall (>${SEVERE_STALL_CEILING_MS}ms, ${Math.round(t.durationMs)}ms observed) inside a steal-invalidated run — the steal IN FORCE ACROSS THE STALL WINDOW (${e.sampleCount} ${e.bracketed ? "in-window" : "before-side proxy"} sample(s), worst ${e.effStealPct.toFixed(1)}%) implies a ${e.stretchFactor.toFixed(2)}x stretch, which can carry a ceiling-level task to ${Math.round(e.maxExcusableWallMs)}ms wall; the observed stall fits inside that prediction (real work <= ${SEVERE_STALL_CEILING_MS}ms), so it is excluded from the severe check (chrome-agent-platform-r2l8n/u4zgv/h5wbd)`,
         );
       }
       for (const t of breaches) {
         warnings.push(
           t.stealExcuse == null
-            ? `[ntp-boot-staging] Run ${r.run}: severe stall of ${Math.round(t.durationMs)}ms inside a steal-invalidated run has NO usable steal measurement across its own window (no timestamps, no finite reading within ${STEAL_BRACKET_REACH_MS}ms reach, or the stretch is saturated at >= ${STEAL_SATURATION_PCT}% steal) — fail-closed: the breach stays evidence (chrome-agent-platform-h5wbd)`
-            : `[ntp-boot-staging] Run ${r.run}: severe stall of ${Math.round(t.durationMs)}ms EXCEEDS the ${Math.round(t.stealExcuse.maxExcusableWallMs)}ms wall that the stretch in force across its window (${t.stealExcuse.stretchFactor.toFixed(2)}x from ${t.stealExcuse.effStealPct.toFixed(0)}% worst bracketed steal, ${t.stealExcuse.sampleCount} sample(s)) predicts by ${Math.round(t.durationMs - t.stealExcuse.maxExcusableWallMs)}ms — the steal cannot account for the excess, so it stays a severe red (chrome-agent-platform-u4zgv)`,
+            ? `[ntp-boot-staging] Run ${r.run}: severe stall of ${Math.round(t.durationMs)}ms inside a steal-invalidated run has NO usable steal measurement across its own window (no timestamps, no finite before-side reading within ${STEAL_BRACKET_REACH_MS}ms reach, the stretch is saturated at >= ${STEAL_SATURATION_PCT}% steal, or it exceeds the ${STEAL_EXCUSE_MAX_STRETCH}x excusable-stretch cap) — fail-closed: the breach stays evidence (chrome-agent-platform-h5wbd/gl59n/1gro1)`
+            : `[ntp-boot-staging] Run ${r.run}: severe stall of ${Math.round(t.durationMs)}ms EXCEEDS the ${Math.round(t.stealExcuse.maxExcusableWallMs)}ms wall that the stretch in force across its window (${t.stealExcuse.stretchFactor.toFixed(2)}x from ${t.stealExcuse.effStealPct.toFixed(1)}% worst ${t.stealExcuse.bracketed ? "in-window" : "before-side"} steal, ${t.stealExcuse.sampleCount} sample(s)) predicts by ${Math.round(t.durationMs - t.stealExcuse.maxExcusableWallMs)}ms — the steal cannot account for the excess, so it stays a severe red (chrome-agent-platform-u4zgv)`,
         );
       }
     }

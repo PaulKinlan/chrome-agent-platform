@@ -2837,13 +2837,14 @@ Deno.test("h5wbd: steal IN FORCE inside the window still excuses - the reviewer'
   assert(live.warnings.some((w) => w.includes("IN FORCE ACROSS THE STALL WINDOW")));
 });
 
-Deno.test("h5wbd: the bracketing-pair fallback honours its reach - a sample just outside the window brackets, one far away does not", () => {
-  // No sample INSIDE [T0+100, T0+700]: the nearest pair within STEAL_BRACKET_REACH_MS decides.
+Deno.test("h5wbd/gl59n: the before-side fallback honours its reach - a sample just before the window proxies, one far away does not", () => {
+  // No sample INSIDE [T0+100, T0+700]: only the nearest BEFORE-side sample within
+  // STEAL_BRACKET_REACH_MS may proxy the steal in force across the stall.
   const nearBefore = evaluateBootStagingPolicy([
     u4zgvStolenRun(89, 600, 1, [u4zgvStolenSample(89, U4ZGV_T0 + 50)]), // 50ms before the window, inside the 1000ms reach
     u4zgvQuietRun(2),
   ]);
-  assertEquals(nearBefore.ok, true, "a bracketing sample 50ms before the stall measures the steal in force around it");
+  assertEquals(nearBefore.ok, true, "a before-side sample 50ms ahead of the stall measures the steal leading into it");
   const farBefore = evaluateBootStagingPolicy([
     u4zgvStolenRun(11, 600, 1, [u4zgvStolenSample(89, U4ZGV_T0 - 5000), u4zgvStolenSample(11, U4ZGV_T0 + 300)]),
     u4zgvQuietRun(2),
@@ -2854,8 +2855,44 @@ Deno.test("h5wbd: the bracketing-pair fallback honours its reach - a sample just
     u4zgvStolenRun(11, 600, 1, [u4zgvStolenSample(89, U4ZGV_T0 - 5000)]),
     u4zgvQuietRun(2),
   ]);
-  assertEquals(onlyFar.ok, false, "a sample 5s before the window is beyond the bracketing reach: fail-closed red");
+  assertEquals(onlyFar.ok, false, "a sample 5s before the window is beyond the reach: fail-closed red");
   assertEquals(onlyFar.environmentalRefusal, false);
+});
+
+Deno.test("gl59n: an AFTER-side sample cannot causally excuse a stall that already ended - the reviewer's table, replayed", () => {
+  // Stall window [T0+100, T0+700]; reach is 1000ms on the before side only.
+  // (1) AFTER-only loud sample within the old two-sided reach: the spike began
+  // once the stall was over - it measured conditions that cannot explain it.
+  const afterOnly = evaluateBootStagingPolicy([
+    u4zgvStolenRun(11, 600, 1, [u4zgvStolenSample(89, U4ZGV_T0 + 1400)]), // t1+700, inside the old reach
+    u4zgvQuietRun(2),
+  ]);
+  assertEquals(afterOnly.ok, false, "an after-side 89% sample must not excuse the 600ms stall");
+  assertEquals(afterOnly.environmentalRefusal, false);
+  assertStringIncludes(afterOnly.error!, "severe long task breach");
+  // (2) quiet before + loud after: the transition happened AFTER the stall.
+  const quietBeforeLoudAfter = evaluateBootStagingPolicy([
+    u4zgvStolenRun(11, 600, 1, [
+      u4zgvStolenSample(11, U4ZGV_T0 + 50),
+      u4zgvStolenSample(89, U4ZGV_T0 + 1400),
+    ]),
+    u4zgvQuietRun(2),
+  ]);
+  assertEquals(quietBeforeLoudAfter.ok, false, "the before side (11%) decides: 1.12x cannot carry 600ms");
+  // (3) loud before + quiet after: the spike was in force LEADING INTO the stall
+  // and decayed afterwards - the before side legitimately explains it.
+  const loudBeforeQuietAfter = evaluateBootStagingPolicy([
+    u4zgvStolenRun(89, 600, 1, [
+      u4zgvStolenSample(89, U4ZGV_T0 + 50),
+      u4zgvStolenSample(11, U4ZGV_T0 + 1400),
+    ]),
+    u4zgvQuietRun(2),
+  ]);
+  assertEquals(loudBeforeQuietAfter.ok, true, "89% in force leading into the window explains 600ms (9.09x -> 4545ms)");
+  assert(
+    loudBeforeQuietAfter.warnings.some((w) => w.includes("before-side proxy")),
+    "the excuse warning names the before-side proxy",
+  );
 });
 
 Deno.test("coord 2026-11-04: saturated steal (>= 99.9%) and the Infinity stretch fail closed - a 30-SECOND stall is never excused and no diagnostic says Infinity", () => {
@@ -2875,13 +2912,55 @@ Deno.test("coord 2026-11-04: saturated steal (>= 99.9%) and the Infinity stretch
       "the fail-closed warning names the saturation",
     );
   }
-  // just under saturation the stretch is finite and the rule works as designed
-  const finite = evaluateBootStagingPolicy([
+  // 1gro1: the saturation threshold alone was a KNIFE-EDGE - at 99.8% the stretch
+  // is a finite 500x and a 30-SECOND stall was excused into a green PASS with a
+  // warning reading 'worst 100%' beside '500.00x'. The excusable stretch is now
+  // CAPPED (STEAL_EXCUSE_MAX_STRETCH = 10x): 99.8% fails closed like saturation.
+  const knifeEdge = evaluateBootStagingPolicy([
     u4zgvStolenRun(99.8, 30_000, 1, [u4zgvStolenSample(99.8, U4ZGV_T0 + 300)]),
     u4zgvQuietRun(2),
   ]);
-  assertEquals(finite.ok, true, "99.8% -> finite 500x stretch, max 250000ms: a 30s stall is inside the prediction");
-  assert(!finite.warnings.some((w) => w.includes("Infinity")));
+  assertEquals(knifeEdge.ok, false, "99.8% -> 500x stretch exceeds the 10x cap: a 30s stall is evidence, never excused");
+  assertEquals(knifeEdge.environmentalRefusal, false);
+  assert(
+    knifeEdge.warnings.some((w) => w.includes("excusable-stretch cap")),
+    "the fail-closed warning names the stretch cap, not just saturation",
+  );
+  assert(!knifeEdge.warnings.some((w) => w.includes("500.00x")), "no diagnostic may present the 500x stretch as an excuse");
+  // The cap boundary itself (1gro1): 89.9% -> 9.90x (max ~4950ms) is under the
+  // cap and may excuse; 91% -> 11.1x may not. (Exactly 90% lands on the cap
+  // through float representation - 1/(1-0.9) reads 10.000000000000002 - and
+  // fails closed; the direction is right but the float artifact is not pinned.)
+  const underCap = evaluateBootStagingPolicy([
+    u4zgvStolenRun(89.9, 4900, 1, [u4zgvStolenSample(89.9, U4ZGV_T0 + 300)]),
+    u4zgvQuietRun(2),
+  ]);
+  assertEquals(underCap.ok, true, "89.9% -> 9.90x, max ~4950ms: a 4900ms stall fits inside the prediction");
+  assert(
+    underCap.warnings.some((w) => w.includes("worst 89.9%")),
+    "the excuse warning renders the steal at 0.1% precision - 'worst 89.9%', never a rounded '90%' lie",
+  );
+  const pastCap = evaluateBootStagingPolicy([
+    u4zgvStolenRun(91, 4900, 1, [u4zgvStolenSample(91, U4ZGV_T0 + 300)]),
+    u4zgvQuietRun(2),
+  ]);
+  assertEquals(pastCap.ok, false, "91% -> 11.1x is past the cap: fail closed even though the stall would 'fit'");
+  // Under the cap the proportional rule still reds an exceeding stall.
+  const exceedsUnderCap = evaluateBootStagingPolicy([
+    u4zgvStolenRun(80, 2600, 1, [u4zgvStolenSample(80, U4ZGV_T0 + 300)]),
+    u4zgvQuietRun(2),
+  ]);
+  assertEquals(exceedsUnderCap.ok, false, "a 2600ms stall exceeds the 2500ms the 5x stretch (80% steal) predicts by 100ms");
+  assert(
+    exceedsUnderCap.warnings.some((w) => w.includes("predicts by 100ms")),
+    "the excess is named in ms",
+  );
+  // The live motivating class stays inside the cap: 89% -> 9.09x -> 4545ms.
+  const liveClass = evaluateBootStagingPolicy([
+    u4zgvStolenRun(89, 1995, 1, [u4zgvStolenSample(89, U4ZGV_T0 + 300)]),
+    u4zgvQuietRun(2),
+  ]);
+  assertEquals(liveClass.ok, true, "89% -> 9.09x (max 4545ms) still explains the 1995ms live-evidence stall");
 });
 
 Deno.test("h5wbd: an unplaceable task window fails closed - missing timeOrigin or untimed samples leave the breach as evidence", () => {
