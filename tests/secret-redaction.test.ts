@@ -375,36 +375,61 @@ Deno.test("redaction: userinfo subset-match parity with the pre-vj4s regex over 
 // (kv registry read, MCP server config, page tool result/args, journal
 // toolArgs, hook payload). If a locator is renamed or dropped, its case goes
 // RED here instead of coverage drifting.
-Deno.test("redaction: every SECRET_KEY_RE locator is pinned to a live call-site shape", async () => {
+// chrome-agent-platform-d8qsc + nn9sr: the locator contract, TWO-TIER.
+// FIRST-PARTY rows have a real extension/ producer — the producer literal is
+// asserted IN SOURCE, so a locator whose producer disappears (the drift class
+// the original finding was about) fails here instead of silently keeping an
+// invented key. PAGE-AUTHORED rows ride tool results, which carry ARBITRARY
+// page JSON — no fixed producer exists by definition — so the pinned thing is
+// the redaction PATH (the call sites that redact page-authored data), and the
+// labels say 'page-authored locator', not a call-site shape (nn9sr retired the
+// inert labels).
+Deno.test("redaction: locator rows are two-tier — first-party producers asserted in source, page-authored rows pinned to their redaction path", async () => {
   const { redactSecrets, SECRET_KEY_RE } = await import("../extension/lib/pure.js");
-  const CASES = [
-    // { locator: the regex alternative; key: the real payload key; where: the call site }
-    { locator: "api[_-]?key", key: "apiKey", where: "provider registry / providerConfig (kv read)" },
-    { locator: "token", key: "token", where: "MCP server config auth.token (kv cap:mcpServers)" },
-    { locator: "secret", key: "client_secret", where: "OAuth tool config (journal toolArgs)" },
-    { locator: "password", key: "password", where: "page tool result (tool-summary redactSecrets)" },
-    { locator: "authorization", key: "authorization", where: "HTTP headers object in a page tool result" },
-    { locator: "credential", key: "credential", where: "page tool args (hook/journal payload)" },
-    // key 'bearer' alone: ONLY the bearer alternative matches it (a compound
-    // like 'bearer_token' is satisfied by the token alternative even when the
-    // bearer alternative is dropped — chrome-agent-platform-2o235).
-    { locator: "bearer", key: "bearer", where: "page tool result" },
-    { locator: "access[_-]?key", key: "access_key", where: "cloud storage tool result" },
+
+  const FIRST_PARTY = [
+    { locator: "api[_-]?key", key: "apiKey", producerFile: "extension/lib/named-agents.js", producerPattern: "apiKey", where: "provider registry / providerConfig (kv read)" },
+    { locator: "token", key: "token", producerFile: "extension/lib/mcp-config.js", producerPattern: "headerName", where: "MCP server config auth.token (kv cap:mcpServers)" },
+    { locator: "authorization", key: "authorization", producerFile: "extension/lib/mcp-client-core.js", producerPattern: "Authorization", where: "owner-configured headers (mcp-client-core)" },
   ];
+  const PAGE_AUTHORED = [
+    { locator: "secret", key: "client_secret" },
+    { locator: "password", key: "password" },
+    { locator: "credential", key: "credential" },
+    { locator: "bearer", key: "bearer" },
+    { locator: "access[_-]?key", key: "access_key" },
+  ];
+  const CASES = [...FIRST_PARTY, ...PAGE_AUTHORED];
+
+  // First-party rows: the producer must still exist where it lives today.
+  for (const c of FIRST_PARTY) {
+    const producer = await Deno.readTextFile(new URL("../" + c.producerFile, import.meta.url));
+    assert(
+      producer.includes(c.producerPattern),
+      `${c.locator}: producer "${c.producerPattern}" must still exist in ${c.producerFile} — if it moved or vanished, re-anchor this row to the new call site (nn9sr)`,
+    );
+  }
+  // Page-authored rows: the redaction PATH must still exist (tool-summary runs
+  // redactSecrets over page/tool JSON; kv.js over the secret KV stores).
+  const toolSummary = await Deno.readTextFile(new URL("../extension/lib/tool-summary.js", import.meta.url));
+  assert(toolSummary.includes("redactSecrets("), "the page-authored redaction path (tool-summary) must exist");
+  const kvRoute = await Deno.readTextFile(new URL("../extension/background/routes/kv.js", import.meta.url));
+  assert(kvRoute.includes("redactSecrets("), "the kv redaction path (routes/kv.js) must exist");
+
+  // Per-locator: the key must still match the regex AND be redacted.
   for (const c of CASES) {
     assert(
       SECRET_KEY_RE.test(c.key),
-      `locator "${c.locator}" must still match its pinned key "${c.key}" (${c.where}) — the locator or the case has drifted`,
+      `locator "${c.locator}" must still match its pinned key "${c.key}" — the locator or the case has drifted`,
     );
     const out = redactSecrets({ [c.key]: "value-must-not-survive-4471" });
-    assertEquals(out[c.key], "[REDACTED]", `${c.locator} (${c.key}, ${c.where}) must be redacted`);
+    assertEquals(out[c.key], "[REDACTED]", `${c.locator} (${c.key}) must be redacted`);
   }
-  // Staleness gate, BOTH directions (chrome-agent-platform-2o235): the
-  // declared locator set is DERIVED from the regex source, not restated.
-  // (1) dropping an alternative fails its row's match assert above; (2) adding
-  // an alternative without a live-shaped case fails the declared-direction
-  // assert here; (3) a stale row (locator no longer in the regex) fails the
-  // case-direction assert.
+
+  // Bidirectional staleness gate (chrome-agent-platform-2o235): the declared
+  // locator set is DERIVED from the regex source, not restated. Dropping an
+  // alternative fails its row; adding one without a row fails here; a stale
+  // row fails the case-direction check.
   const src = SECRET_KEY_RE.source;
   // The capture group is the SECOND parenthesised region (after the lookbehind)
   // and contains no nested parens — plain keyword alternatives separated by '|'.
@@ -416,10 +441,10 @@ Deno.test("redaction: every SECRET_KEY_RE locator is pinned to a live call-site 
   const caseLocators = new Set(CASES.map((c) => c.locator));
   assertEquals(declared.length, declaredSet.size, "no duplicate alternatives in the regex");
   for (const d of declared) {
-    assert(caseLocators.has(d), `alternative "${d}" has no live-shaped case — add a row to CASES`);
+    assert(caseLocators.has(d), `alternative "${d}" has no row — add one to FIRST_PARTY or PAGE_AUTHORED`);
   }
   for (const c of CASES) {
     assert(declaredSet.has(c.locator), `case "${c.locator}" is no longer in the regex — stale row, remove or re-key it`);
   }
-  assertEquals(CASES.length, declared.length, "one live-shaped case per declared locator");
+  assertEquals(CASES.length, declared.length, "one row per declared locator");
 });
