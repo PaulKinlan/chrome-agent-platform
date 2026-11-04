@@ -267,6 +267,7 @@
   const {
     own,
     pickable,
+    invalidateElementRects,
     desc,
     rectIsUsableAnchor,
     makeFrozenAnchor,
@@ -4028,6 +4029,7 @@
 
   function hidePendingApplyDock() {
     pendingApplyInFlight = false;
+    invalidateElementRects(); // applies mutate the DOM — cached rects are stale (chrome-agent-platform-hheu4)
     clearStoredManualApplyState();
     if (pendingIntroAnimation) { pendingIntroAnimation.cancel(); pendingIntroAnimation = null; }
     if (pendingDockEl) pendingDockEl.style.display = 'none';
@@ -4199,6 +4201,7 @@
   function showManualApplyDecision(msg) {
     const count = parseInt(pendingPillEl?.dataset.count || '0', 10) || numberOrNull(msg?.remainingCount) || 0;
     pendingApplyInFlight = false;
+    invalidateElementRects(); // applies mutate the DOM — cached rects are stale (chrome-agent-platform-hheu4)
     storeManualApplyState(count, {
       phase: 'repair-decision',
       repairAttempt: numberOrNull(msg?.repair?.attempts) || numberOrNull(msg?.repair?.attempt) || 3,
