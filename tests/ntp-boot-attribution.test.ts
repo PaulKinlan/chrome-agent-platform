@@ -2646,16 +2646,38 @@ Deno.test("u4zgv: a severe stall on a run ONLY JUST above the steal bound still 
   assertStringIncludes(policy.error!, "severe long task breach");
 });
 
-Deno.test("u4zgv: the carve-out boundary — 624ms at 20% steal is excused (499.2ms real), 627ms is not (501.6ms real)", () => {
-  const excused = evaluateBootStagingPolicy([u4zgvStolenRun(20, 624), u4zgvQuietRun(2)]);
-  assertEquals(excused.ok, true, "624 * 0.8 = 499.2 <= 500: the measured steal can explain this breach");
+Deno.test("u4zgv: the carve-out boundary is pinned from BOTH sides — at 20% steal (1.25x, max 625ms) a 625ms stall is excused and a 626ms stall counts as evidence", () => {
+  // Stretch at 20% steal is exactly 1.25x, so a ceiling-level task can legitimately
+  // read up to 500 * 1.25 = 625ms wall. Just under/at the threshold: skip permitted.
+  const excused = evaluateBootStagingPolicy([u4zgvStolenRun(20, 625), u4zgvQuietRun(2)]);
+  assertEquals(excused.ok, true, "625ms == 500ms * 1.25 stretch prediction: inside the carve-out");
   assert(
-    excused.warnings.some((w) => w.includes("severe stall") && w.includes("steal-invalidated")),
-    "the excused breach is warned about, not silently dropped",
+    excused.warnings.some((w) => w.includes("severe stall") && w.includes("steal-invalidated") && w.includes("1.25x")),
+    "the excused breach is warned about, not silently dropped, and the warning names the stretch",
   );
-  const red = evaluateBootStagingPolicy([u4zgvStolenRun(20, 627), u4zgvQuietRun(2)]);
-  assertEquals(red.ok, false, "627 * 0.8 = 501.6 > 500: steal cannot explain this breach");
+  // Just over the threshold: still counts as evidence.
+  const red = evaluateBootStagingPolicy([u4zgvStolenRun(20, 626), u4zgvQuietRun(2)]);
+  assertEquals(red.ok, false, "626ms exceeds the 625ms stretch prediction by 1ms: evidence, never skipped");
   assertEquals(red.environmentalRefusal, false);
+  assert(
+    red.warnings.some((w) => w.includes("EXCEEDS") && w.includes("by 1ms")),
+    "the red path names the subtraction: how far past the stretch prediction the stall is",
+  );
+});
+
+Deno.test("u4zgv: the steal-side boundary — at exactly the bound the run is valid (no carve-out, plain red); just above it a stall inside the prediction may skip", () => {
+  // steal == bound (10 <= 10): the run is NOT steal-invalid, so Check 1 applies plain.
+  const atBound = u4zgvStolenRun(10, 600);
+  assertEquals(atBound.invalidatedBySteal, false, "the admission bound is strictly greater-than");
+  const atBoundPolicy = evaluateBootStagingPolicy([atBound, u4zgvQuietRun(2)]);
+  assertEquals(atBoundPolicy.ok, false);
+  assertStringIncludes(atBoundPolicy.error!, "severe long task breach");
+  assert(!atBoundPolicy.warnings.some((w) => w.includes("steal-invalidated")), "no carve-out warning on a valid run");
+  // steal just above the bound (10.5%): invalidated, and 1.117x predicts up to ~558.7ms,
+  // so a 550ms stall fits inside the prediction and may skip.
+  const justAbove = evaluateBootStagingPolicy([u4zgvStolenRun(10.5, 550), u4zgvQuietRun(2)]);
+  assertEquals(justAbove.ok, true, "550ms <= 500 * 1.117 = 558.7ms: the measured stretch can account for it");
+  assert(justAbove.warnings.some((w) => w.includes("steal-invalidated")));
 });
 
 Deno.test("u4zgv: an unexplained severe breach with NO valid sibling is a red, never an environmental refusal", () => {
@@ -2694,4 +2716,71 @@ Deno.test("pl6yz: the production harness resolves the steal bound ONCE from the 
     !/attributeBootRun\(\s*run,\s*rawMetrics,\s*intervalSamples\s*\)/.test(src),
     "no production caller may rely on the ambient resolveSpec() fallback per run",
   );
+});
+
+Deno.test("u4zgv: the carve-out is DETERMINISTIC — the same stall under the same steal classifies identically on consecutive runs, and unrelated samples or their order cannot flip it", () => {
+  // (a) Two consecutive evaluations of identical inputs agree on every verdict field.
+  const once = evaluateBootStagingPolicy([u4zgvStolenRun(11, 600), u4zgvQuietRun(2)]);
+  const twice = evaluateBootStagingPolicy([u4zgvStolenRun(11, 600), u4zgvQuietRun(2)]);
+  assertEquals(once.ok, twice.ok);
+  assertEquals(once.environmentalRefusal, twice.environmentalRefusal);
+  assertEquals(once.error, twice.error);
+  assertEquals(once.warnings.length, twice.warnings.length);
+  const excusedOnce = evaluateBootStagingPolicy([u4zgvStolenRun(89, 1995), u4zgvQuietRun(2)]);
+  const excusedTwice = evaluateBootStagingPolicy([u4zgvStolenRun(89, 1995), u4zgvQuietRun(2)]);
+  assertEquals(excusedOnce.ok, excusedTwice.ok);
+  assertEquals(excusedOnce.error, excusedTwice.error);
+  // (b) An unrelated QUIETER sample inside the same interval cannot flip the
+  // classification: the carve-out reads the WORST measured steal of the interval.
+  const metrics = { composerReadyEndMs: 120, threadListHydratedEndMs: 200, longTasks: [{ name: "self", duration: 600, startTime: 100 }] };
+  const quiet: any = { measurable: true, load1: 0.4, load5: 0.3, cores: 8, loadPerCore: 0.05, activeCompilers: 0, compilerNames: [], stealPct: 1 };
+  const withExtraQuiet = attributeBootRun(1, metrics, [u4zgvStolenSample(11), quiet, u4zgvStolenSample(11)], { stealBoundPct: 10 });
+  const mixed = evaluateBootStagingPolicy([withExtraQuiet, u4zgvQuietRun(2)]);
+  assertEquals(mixed.ok, once.ok, "an added quiet sample does not dilute the worst-steal reading");
+  assertEquals(mixed.environmentalRefusal, once.environmentalRefusal);
+  // (c) Sample ORDER cannot flip the verdict either (worst-steal is a max, not a first-match).
+  const reversed = attributeBootRun(1, metrics, [quiet, u4zgvStolenSample(11)], { stealBoundPct: 10 });
+  const reversedPolicy = evaluateBootStagingPolicy([reversed, u4zgvQuietRun(2)]);
+  assertEquals(reversedPolicy.ok, once.ok);
+  assertEquals(reversedPolicy.environmentalRefusal, once.environmentalRefusal);
+  assertEquals(reversedPolicy.ok, false, "600ms at 11% steal reds regardless of sample order");
+});
+
+Deno.test("u4zgv: a MISSING or MALFORMED steal sample excuses nothing — 'we could not measure the stretch' is never 'the stretch explains the stall'", () => {
+  const metrics = { composerReadyEndMs: 120, threadListHydratedEndMs: 200, longTasks: [{ name: "self", duration: 600, startTime: 100 }] };
+  // (a) No steal signal at all (macOS-style null): no carve-out, the breach is evidence.
+  const noSignal: any = { measurable: true, load1: 0.4, load5: 0.3, cores: 8, loadPerCore: 0.05, activeCompilers: 0, compilerNames: [], stealPct: null };
+  const nullRun = attributeBootRun(1, metrics, [noSignal], { stealBoundPct: 10 });
+  assertEquals(nullRun.invalidatedBySteal, false, "a null steal reading cannot invalidate by steal");
+  const nullPolicy = evaluateBootStagingPolicy([nullRun]);
+  assertEquals(nullPolicy.ok, false);
+  assertEquals(nullPolicy.environmentalRefusal, false, "evidence (red), never a silent skip or a refusal");
+  assertStringIncludes(nullPolicy.error!, "severe long task breach");
+  assert(!nullPolicy.warnings.some((w) => w.includes("steal-invalidated")), "no carve-out was applied");
+  // (b) Malformed steal (NaN): typeof 'number' but not a usable measurement — fail-closed.
+  const nanSample: any = { ...noSignal, stealPct: NaN };
+  const nanRun = attributeBootRun(1, metrics, [nanSample], { stealBoundPct: 10 });
+  assertEquals(nanRun.invalidatedBySteal, false, "NaN > bound is false, so no steal invalidation");
+  const nanPolicy = evaluateBootStagingPolicy([nanRun]);
+  assertEquals(nanPolicy.ok, false);
+  assertEquals(nanPolicy.environmentalRefusal, false);
+  assertStringIncludes(nanPolicy.error!, "severe long task breach");
+  // (c) Unmeasurable sample in the interval: the run is invalid (refusal-track), but the
+  // severe breach STILL reds — Check 1 has no unmeasurable-host skip.
+  const unmeasurable: any = { measurable: false, error: "/proc/stat unreadable" };
+  const unmeasRun = attributeBootRun(1, metrics, [unmeasurable], { stealBoundPct: 10 });
+  assertEquals(unmeasRun.validMeasurement, false);
+  assertEquals(unmeasRun.invalidatedBySteal, false);
+  const unmeasPolicy = evaluateBootStagingPolicy([unmeasRun]);
+  assertEquals(unmeasPolicy.ok, false);
+  assertEquals(unmeasPolicy.environmentalRefusal, false, "a severe breach on an unmeasured host is evidence, not a refusal");
+  assertStringIncludes(unmeasPolicy.error!, "severe long task breach");
+  // (d) A malformed sibling sample cannot DILUTE a real steal reading either: the
+  // carve-out uses the worst NUMERIC steal, so 89% still explains 1995ms.
+  const bigStall = { composerReadyEndMs: 120, threadListHydratedEndMs: 200, longTasks: [{ name: "self", duration: 1995, startTime: 100 }] };
+  const mixedRun = attributeBootRun(1, bigStall, [u4zgvStolenSample(89), nanSample], { stealBoundPct: 10 });
+  assertEquals(mixedRun.invalidatedBySteal, true);
+  assertEquals(mixedRun.hostWorstStealPct, 89, "the malformed NaN sample is excluded from the worst-steal reading");
+  const mixedPolicy = evaluateBootStagingPolicy([mixedRun, u4zgvQuietRun(2)]);
+  assertEquals(mixedPolicy.ok, true, "89% stretch (9.09x, max 4545ms) still explains the 1995ms stall");
 });

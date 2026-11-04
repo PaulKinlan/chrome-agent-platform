@@ -132,11 +132,13 @@ export interface BootStagingRunResult {
   hostWorstStealPct: number | null;
   /** True when THIS run's invalidation came from the host CPU steal bound (fbg7i/r2l8n).
    *  A steal-invalidated run's severe breaches are excused from Check 1 only IN
-   *  PROPORTION to the measured steal (u4zgv): a breach is skipped when removing
-   *  the run's worst-case steal share (duration * (1 - steal/100)) leaves it at or
-   *  under the ceiling (1995ms at 89% steal ≈ 219ms of real work — contention),
-   *  and it STILL REDS when the steal cannot explain it (600ms at 11% steal ≈
-   *  534ms of real work — product signal). */
+   *  PROPORTION to the measured steal (u4zgv): the run's worst-case steal implies a
+   *  stretch factor 1/(1 - steal/100), and a breach is skipped only when it fits
+   *  inside what that stretch predicts for a ceiling-level task (duration <=
+   *  500ms * stretch). 1995ms at 89% steal fits (9.09x predicts up to 4545ms —
+   *  contention); 600ms at 11% does not (1.12x predicts up to 561ms — ~534ms of
+   *  real work, product signal). A missing/malformed steal reading gives no
+   *  excuse at all (fail-closed): 'unmeasured stretch' is never 'explained'. */
   invalidatedBySteal: boolean;
   /** The bound that decision used, so a reader can see what "loaded" meant. (mr1ak) */
   hostQuietBound: number;
@@ -610,7 +612,11 @@ export function attributeBootRun(
       // back to the ambient resolveSpec() so an operator override can never
       // silently rewrite a pinned assertion.
       const stealBound = bounds.stealBoundPct ?? resolveSpec().maxStealPct;
-      const stolenSample = samples.find((s) => typeof s.stealPct === "number" && (s.stealPct as number) > stealBound);
+      // u4zgv: only a FINITE numeric steal reading is a measurement. A malformed
+      // sample (NaN/±Infinity) is 'we could not measure the stretch' — it can
+      // neither invalidate the run nor dilute a real reading (Math.max(89, NaN)
+      // is NaN, which would poison hostWorstStealPct below).
+      const stolenSample = samples.find((s) => Number.isFinite(s.stealPct) && (s.stealPct as number) > stealBound);
       if (stolenSample) {
         validMeasurement = false;
         invalidatedBySteal = true;
@@ -635,7 +641,9 @@ export function attributeBootRun(
   const hostAboveQuietBound = worstLoadPerCore != null && worstLoadPerCore > quietBound;
   const stealReadings = measuredSamples
     .map((s) => s.stealPct)
-    .filter((v): v is number => typeof v === "number");
+    // u4zgv: exclude malformed (non-finite) readings so one NaN sibling cannot
+    // poison the worst-steal max — a real 89% reading must survive it.
+    .filter((v): v is number => Number.isFinite(v));
   const worstStealPct = stealReadings.length > 0 ? Math.max(...stealReadings) : null;
 
   const loafEntries = rawMetrics.loafEntries || [];
@@ -723,11 +731,12 @@ export interface BootStagingPolicyEvaluation {
  *   fail as contract breaches with full attribution, while isolated cold-start tasks absorbed
  *   by median-0 pass with recorded warnings.
  * - Catastrophic stalls (> 500.0ms) fail immediately on any run. A steal-invalidated run's
- *   breach is excused only IN PROPORTION to the measured steal (r2l8n, tightened by u4zgv):
- *   it is skipped when removing the run's worst-case steal share leaves it at or under the
- *   ceiling (1995ms at 89% steal ≈ 219ms of real work — contention), and it still reds when
- *   the steal cannot explain it (600ms at 11% steal ≈ 534ms — product signal). Load-contended
- *   runs keep the pre-steal immediate-red behaviour.
+ *   breach is excused only within what its measured stretch predicts (r2l8n, tightened by
+ *   u4zgv): worst-case steal s implies stretch 1/(1-s/100), and a breach is skipped only when
+ *   duration <= 500ms * stretch (1995ms at 89% ≈ 219ms real — contention); the excess past
+ *   the prediction still reds (600ms at 11% ≈ 534ms real — product signal), an unmeasurable
+ *   stretch excuses nothing, and a red beats an environmental refusal. Load-contended runs
+ *   keep the pre-steal immediate-red behaviour.
  * - On valid runs, strictly enforces composer-ready < 150ms and thread-list-hydrated <= 250ms.
  */
 export function evaluateBootStagingPolicy(
@@ -749,26 +758,34 @@ export function evaluateBootStagingPolicy(
   }
 
   // 2. Check 1: Catastrophic stalls (> 500ms) fail immediately even if the host was loaded.
-  // A steal-invalidated run gets a PROPORTIONAL carve-out (r2l8n, tightened by u4zgv): at 89%
-  // steal a ~200ms-class task measured 1995ms wall (fbg7i exit-run, 2026-10-25), so steal CAN
-  // explain that breach. But at 11% steal the stretch factor is only 1/(1-0.11)=1.12x and a
-  // 600ms reading is still ~534ms of real work — steal cannot explain it, and excusing it
-  // would turn a genuine catastrophic stall into a PASS on a box that is NOT starved (the
-  // reviewer's adversarial cases B/C). A breach is excused only when removing the run's
-  // worst-case steal share leaves it at or under the ceiling; anything the measured steal
-  // cannot account for keeps the immediate red — even when no valid sibling remains, because
-  // a refusal must never supersede a red (case E).
+  // A steal-invalidated run gets a PROPORTIONAL carve-out (r2l8n, tightened by u4zgv), and the
+  // comparison is explicit: the measured steal implies a stretch factor 1/(1-steal/100) — at 11%
+  // that is 1.12x, at 89% it is 9.09x — so a task doing exactly the 500ms-ceiling of real work
+  // could legitimately read as up to 500ms * stretch on the wall. An observed stall is excused
+  // ONLY within that prediction; the excess past it (durationMs - maxExcusableWallMs) is wall
+  // time the measured steal CANNOT account for, i.e. real work above the ceiling, and it keeps
+  // the immediate red (live evidence both ways: 1995ms at 89% steal ≈ 219ms real — contention;
+  // 600ms at 11% ≈ 534ms real — product signal, the reviewer's adversarial cases B/C). A red
+  // beats an environmental refusal even when no valid sibling remains (case E), and 'we could
+  // not measure the stretch' is never 'the stretch explains the stall': a missing or malformed
+  // steal reading yields stretch 1x (no excuse), so the breach stays evidence — fail-closed.
   for (const r of runs) {
     if (r.severeBreaches.length === 0) continue;
     let breaches = r.severeBreaches;
     if (r.invalidatedBySteal) {
-      const stealPct = r.hostWorstStealPct ?? 0;
-      const realWorkMs = (t: { durationMs: number }) => t.durationMs * (1 - stealPct / 100);
-      const excused = breaches.filter((t) => realWorkMs(t) <= SEVERE_STALL_CEILING_MS);
-      breaches = breaches.filter((t) => realWorkMs(t) > SEVERE_STALL_CEILING_MS);
+      const stealPct = Number.isFinite(r.hostWorstStealPct) ? (r.hostWorstStealPct as number) : 0;
+      const stretchFactor = 1 / (1 - stealPct / 100); // 11% -> 1.12x; 89% -> 9.09x; 100% -> Infinity (no real work can run at all)
+      const maxExcusableWallMs = SEVERE_STALL_CEILING_MS * stretchFactor;
+      const excused = breaches.filter((t) => t.durationMs <= maxExcusableWallMs);
+      breaches = breaches.filter((t) => t.durationMs > maxExcusableWallMs);
       if (excused.length > 0) {
         warnings.push(
-          `[ntp-boot-staging] Run ${r.run}: severe stall (>${SEVERE_STALL_CEILING_MS}ms) observed INSIDE a steal-invalidated run — removing the ${stealPct.toFixed(0)}% worst-case steal share leaves ${excused.map((t) => `${Math.round(realWorkMs(t))}ms`).join(", ")} at or under the ceiling, so wall duration cannot be attributed to the product; excluded from the severe check (chrome-agent-platform-r2l8n)`,
+          `[ntp-boot-staging] Run ${r.run}: severe stall (>${SEVERE_STALL_CEILING_MS}ms) observed INSIDE a steal-invalidated run — worst measured steal ${stealPct.toFixed(0)}% implies a ${stretchFactor.toFixed(2)}x stretch, which can carry a ceiling-level task to ${Math.round(maxExcusableWallMs)}ms wall; the observed ${excused.map((t) => `${Math.round(t.durationMs)}ms`).join(", ")} fits inside that prediction (real work <= ${SEVERE_STALL_CEILING_MS}ms), so it is excluded from the severe check (chrome-agent-platform-r2l8n/u4zgv)`,
+        );
+      }
+      for (const t of breaches) {
+        warnings.push(
+          `[ntp-boot-staging] Run ${r.run}: severe stall of ${Math.round(t.durationMs)}ms EXCEEDS the ${Math.round(maxExcusableWallMs)}ms wall that its ${stretchFactor.toFixed(2)}x measured stretch (${stealPct.toFixed(0)}% steal) predicts by ${Math.round(t.durationMs - maxExcusableWallMs)}ms — the steal cannot account for the excess, so it stays a severe red (chrome-agent-platform-u4zgv)`,
         );
       }
     }
