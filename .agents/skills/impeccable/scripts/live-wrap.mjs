@@ -553,15 +553,30 @@ function applyBufferedManualEditToLines(originalLines, selectionStartLine, op) {
   return { lines: originalLines, changed: false };
 }
 
+// chrome-agent-platform-wdfe2: the locator regexes used to be compiled per LINE
+// although the op set is fixed per run — the same tag/id pattern rebuilt
+// thousands of times. Memoise per pattern (same shape as context.mjs's
+// segmentPatternCache).
+const manualEditLocatorReCache = new Map();
+function cachedLocatorRegExp(pattern, flags = "") {
+  const key = flags + "\u0000" + pattern;
+  let re = manualEditLocatorReCache.get(key);
+  if (!re) {
+    re = new RegExp(pattern, flags);
+    manualEditLocatorReCache.set(key, re);
+  }
+  return re;
+}
+
 function lineMatchesManualEditLocator(line, op) {
   if (op.tag) {
-    const tagRe = new RegExp('<\\s*' + escapeRegExp(op.tag) + '(?=[\\s>/]|$)', 'i');
+    const tagRe = cachedLocatorRegExp("<\\s*" + escapeRegExp(op.tag) + "(?=[\\s>/]|$)", "i");
     if (!tagRe.test(line)) return false;
   }
 
   if (op.elementId) {
     const id = escapeRegExp(op.elementId);
-    const idRe = new RegExp('\\bid\\s*=\\s*["\']' + id + '["\']');
+    const idRe = cachedLocatorRegExp("\\bid\\s*=\\s*[\"']" + id + "[\"']");
     if (!idRe.test(line)) return false;
   }
 

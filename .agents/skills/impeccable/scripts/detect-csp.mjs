@@ -84,14 +84,25 @@ const META_TAG_HINT = /http-equiv\s*=\s*["']Content-Security-Policy["']/i;
  * @param {string} cwd Project root.
  * @returns {{ shape: string|null, signals: string[] }}
  */
+// chrome-agent-platform-wdfe2: the config-name regex used to be rebuilt for
+// every file inside the walk. Memoise per name — same shape as context.mjs's
+// segmentPatternCache (the known name set is small and fixed per run).
+const configNameReCache = new Map();
+function isConfig(name, relPath) {
+  let re = configNameReCache.get(name);
+  if (!re) {
+    re = new RegExp("(^|/)" + name + "\\.config\\.");
+    configNameReCache.set(name, re);
+  }
+  return re.test(relPath);
+}
+
 export function detectCsp(cwd = process.cwd()) {
   const hits = { appendArrays: [], appendString: [], middleware: [], metaTag: [] };
 
   walk(cwd, cwd, 0, (absPath, relPath, body) => {
     const ext = path.extname(absPath);
     const base = path.basename(absPath).toLowerCase();
-    const isConfig = (name) =>
-      new RegExp('(^|/)' + name + '\\.config\\.').test(relPath);
 
     // === append-arrays candidates ===
 
@@ -104,14 +115,14 @@ export function detectCsp(cwd = process.cwd()) {
     }
 
     // SvelteKit kit.csp.directives
-    if (SCAN_EXTS.has(ext) && isConfig('svelte') &&
+    if (SCAN_EXTS.has(ext) && isConfig("svelte", relPath) &&
         SVELTEKIT_CSP_SIGNALS.every((re) => re.test(body))) {
       hits.appendArrays.push(relPath);
       return;
     }
 
     // Nuxt nuxt-security module
-    if (SCAN_EXTS.has(ext) && isConfig('nuxt') &&
+    if (SCAN_EXTS.has(ext) && isConfig("nuxt", relPath) &&
         NUXT_SECURITY_SIGNALS.every((re) => re.test(body))) {
       hits.appendArrays.push(relPath);
       return;
