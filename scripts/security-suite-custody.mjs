@@ -26,6 +26,10 @@ import path from "node:path";
 import process from "node:process";
 import { promisify } from "node:util";
 import { durableDir } from "./lib/durable-root.mjs";
+// 4ac90: the single-source steal instruments from the serial-phase fix (8qy5d) — the pure scale
+// component (dead band, 0.99 clamp, cap, unmeasurable -> 1) and the synchronous one-shot
+// /proc/stat delta sampler (150 ms bounded spin, null on any failure).
+import { currentStealFractionSync, stealScaleComponent } from "./lib/serial-phase.mjs";
 
 const execFileAsync = promisify(execFile);
 const HAS_PROC = (() => {
@@ -65,12 +69,21 @@ export const SELF_TEST_TOKEN = "security-suite-custody-v1";
 export const SELF_TEST_TERM_WAIT_FLOOR_MS = 250;
 export const SELF_TEST_TERM_WAIT_MAX_SCALE = 8;
 
-/** The self-test TERM grace window for a measured load (1 = idle, unmeasurable = idle).
- * `loadavg` is the 1-minute ABSOLUTE load (the predictor); `loadPerCpu` only ever raises it. */
-export function selfTestTermWaitMs({ loadavg = 1, loadPerCpu = 1 } = {}) {
+/** The self-test TERM grace window for a measured machine (1 = idle, unmeasurable = idle).
+ * `loadavg` is the 1-minute ABSOLUTE load (the predictor); `loadPerCpu` only ever raises it.
+ * `steal` (chrome-agent-platform-4ac90) is the host CPU-steal FRACTION (0..1, null =
+ * unmeasurable): loadavg is blind to hypervisor steal — the vCPUs are descheduled while the
+ * guest's runnable queue stays short — so a stolen box used to get the floor window and the
+ * TERM-then-KILL proof raced a child whose every turn cost 1/(1-S) of wall clock. The steal
+ * contributes its own scale component (serial-phase's `stealScaleComponent`: 1/(1-S), 2%
+ * dead band, 0.99 clamp, capped, null -> 1 — unmeasurable is idle, never a licence), and the
+ * three signals raise the window by MAX, never product: they overlap but are distinct, and
+ * SELF_TEST_TERM_WAIT_MAX_SCALE still bounds the wait, so escalation stays bounded.
+ *  @param {{ loadavg?: number, loadPerCpu?: number, steal?: number|null }} [opts] */
+export function selfTestTermWaitMs({ loadavg = 1, loadPerCpu = 1, steal = null } = {}) {
   const absolute = Number.isFinite(loadavg) && loadavg > 1 ? loadavg : 1;
   const perCpu = Number.isFinite(loadPerCpu) && loadPerCpu > 1 ? loadPerCpu : 1;
-  const scale = Math.min(Math.max(absolute, perCpu), SELF_TEST_TERM_WAIT_MAX_SCALE);
+  const scale = Math.min(Math.max(absolute, perCpu, stealScaleComponent(steal)), SELF_TEST_TERM_WAIT_MAX_SCALE);
   return Math.round(SELF_TEST_TERM_WAIT_FLOOR_MS * scale);
 }
 
@@ -88,13 +101,23 @@ export const SELF_TEST_READY_MAX_SCALE = 4;
  *  `selfTestTermWaitMs`: the ABSOLUTE 1-minute load (these VMs saturate absolutely; load-per-CPU reads
  *  ~0.7 while the box thrashes), load-per-CPU only ever raises it. PRODUCTION is untouched: the readiness
  *  handshake exists only for the self-test.
- *  @param {{ baseMs?: number, loadavg?: number, loadPerCpu?: number }} [opts]
+ *
+ *  chrome-agent-platform-4ac90: loadavg is also BLIND to hypervisor CPU steal — on 2026-10-24 a fast-gate
+ *  parallel phase ran at 80-90% steal while loadavg stayed low, the window stayed at its base, and the
+ *  supervisor exited 97 ("stubborn-readiness-timeout") over a child whose cold boot was simply 7x slower
+ *  than the window assumed — the same defect 8qy5d fixed for the serial per-file bound. The measured
+ *  steal FRACTION (null = unmeasurable -> no licence) contributes its scale component (1/(1-S), dead
+ *  band, clamp, cap — serial-phase's single-source `stealScaleComponent`) and joins the load signals by
+ *  MAX under the same x4 ceiling: at S=0.86 the component is 7.14 -> capped x4 -> a 48 s window instead
+ *  of 12 s. The declaration stays a snapshot (rblji): the test samples steal ONCE beside load and every
+ *  later check reads that same sample.
+ *  @param {{ baseMs?: number, loadavg?: number, loadPerCpu?: number, steal?: number|null }} [opts]
  */
-export function selfTestReadyDeadlineMs({ baseMs, loadavg = 1, loadPerCpu = 1 } = {}) {
+export function selfTestReadyDeadlineMs({ baseMs, loadavg = 1, loadPerCpu = 1, steal = null } = {}) {
   const base = Number.isFinite(baseMs) && baseMs > 0 ? baseMs : 0;
   const absolute = Number.isFinite(loadavg) && loadavg > 1 ? loadavg : 1;
   const perCpu = Number.isFinite(loadPerCpu) && loadPerCpu > 1 ? loadPerCpu : 1;
-  const scale = Math.min(Math.max(absolute, perCpu), SELF_TEST_READY_MAX_SCALE);
+  const scale = Math.min(Math.max(absolute, perCpu, stealScaleComponent(steal)), SELF_TEST_READY_MAX_SCALE);
   return Math.round(base * scale);
 }
 
@@ -1205,9 +1228,12 @@ export async function resolveSupervisorConfig({
     sampleFreezeMs,
     // whl7d: declared relationship, not a flat race — absolute load drives the window (see
     // SELF_TEST_TERM_WAIT_FLOOR_MS for why load-per-CPU was wrong).
+    // 4ac90: the host steal fraction joins the window at the wait (sampled per run, like the serial
+    // per-file bound): loadavg cannot see a hypervisor stealing the vCPUs.
     termWaitMs: selfTestTermWaitMs({
       loadavg: loadAverageSample(),
       loadPerCpu: loadPerCpuSample(),
+      steal: currentStealFractionSync(),
     }),
     killWaitMs: 1_000,
     evidenceRoot: durableDir("cap-sec-selftest-evidence"),

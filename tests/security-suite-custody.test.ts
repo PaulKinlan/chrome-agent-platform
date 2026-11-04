@@ -32,6 +32,7 @@ import {
   terminateAttestedGroupSafely,
   waitUntil,
 } from "../scripts/security-suite-custody.mjs";
+import { currentStealFractionSync } from "../scripts/lib/serial-phase.mjs";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url)).replace(/\/$/u, "");
@@ -70,16 +71,24 @@ const STUBBORN_ACK_DEADLINE_BASE_MS = 12_000;
 // against a LIVE load average: whenever the load drifted (it does, between module evaluation and test
 // execution) the derived numbers legitimately differed and the assertion failed. A declaration must be
 // a snapshot — re-deriving it from a moving box is not a stricter check, it is a different number.
-const DECLARED_READY_LOAD = { loadavg: loadAverageSample(), loadPerCpu: loadPerCpuSample() } as const;
-/** The declared ACK window for THIS box: the base, scaled by absolute load, capped (see SELF_TEST_READY_MAX_SCALE). */
+// 4ac90: the snapshot gains the host steal fraction beside the load samples (one 150 ms /proc/stat
+// delta, null on a non-Linux box) — loadavg alone is blind to a hypervisor stealing the vCPUs.
+const DECLARED_READY_LOAD = {
+  loadavg: loadAverageSample(),
+  loadPerCpu: loadPerCpuSample(),
+  steal: currentStealFractionSync(),
+} as const;
+/** The declared ACK window for THIS box: the base, scaled by absolute load OR measured steal, capped
+ * (see SELF_TEST_READY_MAX_SCALE). */
 function declaredAckDeadlineMs(
   baseMs: number,
-  load: { loadavg: number | null; loadPerCpu: number | null } = DECLARED_READY_LOAD,
+  load: { loadavg: number | null; loadPerCpu: number | null; steal?: number | null } = DECLARED_READY_LOAD,
 ): number {
   return selfTestReadyDeadlineMs({
     baseMs,
     loadavg: load.loadavg ?? 1,
     loadPerCpu: load.loadPerCpu ?? 1,
+    steal: load.steal ?? null,
   });
 }
 const ESCAPE_ACK_DEADLINE_MS = declaredAckDeadlineMs(ESCAPE_ACK_DEADLINE_BASE_MS);
@@ -649,6 +658,57 @@ Deno.test("4vmn7: the stubborn readiness window scales with ABSOLUTE load and is
     "load-per-CPU may only RAISE the window (the whl7d rule), never lower the absolute reading",
   );
   assertEquals(selfTestReadyDeadlineMs({ baseMs: base, loadavg: NaN, loadPerCpu: NaN }), base, "unmeasurable load is idle, never a licence");
+});
+
+// chrome-agent-platform-4ac90: loadavg is BLIND to hypervisor CPU steal — the vCPUs are descheduled
+// while the guest's runnable queue stays short. On 2026-10-24 a fast-gate parallel phase ran at 80-90%
+// steal with a quiet loadavg, the readiness window stayed at its base, and the supervisor exited 97
+// ("stubborn-readiness-timeout") over a child whose cold boot was simply ~7x slower than the window
+// assumed — the same defect 8qy5d fixed for the serial per-file bound, in the custody self-test. Both
+// windows now take the measured steal fraction through serial-phase's single-source
+// `stealScaleComponent` (1/(1-S), 2% dead band, 0.99 clamp, cap, unmeasurable -> 1) and join the load
+// signals by MAX under the existing ceilings — a bounded grace, never an unbounded wait.
+Deno.test("4ac90: the readiness and TERM windows scale with measured CPU steal, capped, fail-closed to idle", () => {
+  const base = 12_000;
+  assertEquals(
+    selfTestReadyDeadlineMs({ baseMs: base, loadavg: 1, steal: 0.5 }),
+    base * 2,
+    "50% steal (x2 stretch) doubles the readiness window on a quiet-load box",
+  );
+  assertEquals(
+    selfTestReadyDeadlineMs({ baseMs: base, loadavg: 1, steal: 0.86 }),
+    base * SELF_TEST_READY_MAX_SCALE,
+    "the 2026-10-24 box (86% steal, quiet loadavg) gets the capped window — not the base that produced exit 97",
+  );
+  assertEquals(
+    selfTestReadyDeadlineMs({ baseMs: base, loadavg: 1, steal: 0.995 }),
+    base * SELF_TEST_READY_MAX_SCALE,
+    "a saturated steal is clamped at 0.99 then capped: bounded, never Infinity",
+  );
+  assertEquals(selfTestReadyDeadlineMs({ baseMs: base, loadavg: 1, steal: 0.01 }), base, "the 2% dead band keeps cloud-idle noise from scaling every window");
+  assertEquals(selfTestReadyDeadlineMs({ baseMs: base, loadavg: 1, steal: null }), base, "unmeasurable steal is idle, never a licence (the load rule, applied to steal)");
+  assertEquals(selfTestReadyDeadlineMs({ baseMs: base, loadavg: 1, steal: NaN }), base);
+  // MAX, not product: the louder signal wins; the quieter one cannot multiply the window.
+  assertEquals(selfTestReadyDeadlineMs({ baseMs: base, loadavg: 3, steal: 0.5 }), base * 3, "load 3 dominates a x2 steal — the signals join by max");
+  assertEquals(selfTestReadyDeadlineMs({ baseMs: base, loadavg: 2, steal: 0.5 }), base * 2, "equal signals agree");
+  // The TERM window joins the same way under its own ceiling.
+  assertEquals(selfTestTermWaitMs({ loadavg: 1, steal: 0.5 }), SELF_TEST_TERM_WAIT_FLOOR_MS * 2);
+  assertEquals(selfTestTermWaitMs({ loadavg: 1, steal: 0.86 }), SELF_TEST_TERM_WAIT_FLOOR_MS * 4, "the steal component caps at x4 inside the x8 TERM ceiling");
+  assertEquals(selfTestTermWaitMs({ loadavg: 1, steal: null }), SELF_TEST_TERM_WAIT_FLOOR_MS);
+  assertEquals(selfTestTermWaitMs({ loadavg: 6, steal: 0.5 }), SELF_TEST_TERM_WAIT_FLOOR_MS * 6, "load still dominates when it is louder");
+  // Monotone in steal: more steal never buys a smaller window.
+  let previous = 0;
+  for (const steal of [0, 0.03, 0.1, 0.3, 0.5, 0.75, 0.86, 0.95, 0.99]) {
+    const ms = selfTestReadyDeadlineMs({ baseMs: base, loadavg: 1, steal });
+    assert(ms >= previous, `steal ${steal} produced ${ms}ms, below the previous ${previous}ms`);
+    previous = ms;
+  }
+  // The declaration snapshot every check in this file reads: a finite fraction in [0,1] or null.
+  const declared = DECLARED_READY_LOAD.steal;
+  assert(
+    declared === null || (Number.isFinite(declared) && declared >= 0 && declared <= 1),
+    `the declared steal snapshot must be null or a fraction in [0,1], got ${String(declared)}`,
+  );
 });
 
 // 4vmn7: the DECLARATION is the fix, so pin the declaration — not a clock race. The contract the suite
