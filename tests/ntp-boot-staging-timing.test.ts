@@ -29,7 +29,7 @@ import {
   ENVIRONMENTAL_REFUSAL_MARKER,
   ENVIRONMENTAL_REFUSAL_EXIT,
 } from "../scripts/lib/ntp-boot-attribution.ts";
-import { readLoadSample, type LoadSample } from "../scripts/lib/quiet-window.ts";
+import { readLoadSample, resolveSpec, type LoadSample } from "../scripts/lib/quiet-window.ts";
 // rvht7: acquire a quiet window BEFORE measuring, instead of asserting one from inside the least quiet job on
 // the box. Bounded wait; a window that never arrives is an environmental refusal (exit 75), never a product red.
 import { acquireQuietWindowForHeavyRun } from "../scripts/lib/heavy-quiet-acquire.ts";
@@ -37,6 +37,11 @@ import { acquireQuietWindowForHeavyRun } from "../scripts/lib/heavy-quiet-acquir
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT_DIR = `${ROOT}/extension`;
 const { binary: RESOLVED_BIN, tried: TRIED_BINS } = resolveChromiumBinaryReport();
+
+// et2oh/pl6yz: the harness resolves the steal bound ONCE from the spec and injects it into
+// every attributeBootRun call, so the whole measurement is classified against one pinned
+// bound even if the ambient CAP_QUIET_MAX_STEAL_PCT changes mid-run.
+const SPEC_STEAL_BOUND_PCT = resolveSpec().maxStealPct;
 
 Deno.test("ntp-boot-staging: headless Chrome for Testing boots ntp.html with 0 long tasks across 5 runs", async () => {
   if (RESOLVED_BIN === null) {
@@ -130,7 +135,7 @@ Deno.test("ntp-boot-staging: headless Chrome for Testing boots ntp.html with 0 l
       const postSample = await readLoadSample(currentSample.cpu ?? null).catch(failedSample);
       intervalSamples.push(postSample);
 
-      const runResult = attributeBootRun(run, rawMetrics, intervalSamples);
+      const runResult = attributeBootRun(run, rawMetrics, intervalSamples, { stealBoundPct: SPEC_STEAL_BOUND_PCT });
       runResults.push(runResult);
 
       console.log(`[ntp-boot-staging] Run ${run}: longTasksCount=${runResult.longTasks.length}, composerReadyMs=${runResult.composerReadyMs}, threadListHydratedMs=${runResult.threadListHydratedMs}, validMeasurement=${runResult.validMeasurement}, longTasks=${runResult.longTasks.map(formatTaskAttribution).join("; ") || "none"}`);

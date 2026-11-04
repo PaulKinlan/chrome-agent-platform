@@ -131,9 +131,12 @@ export interface BootStagingRunResult {
    *  it stretches every task's wall clock on every process at once. */
   hostWorstStealPct: number | null;
   /** True when THIS run's invalidation came from the host CPU steal bound (fbg7i/r2l8n).
-   *  A steal-invalidated run can never produce a severe-breach product red: steal
-   *  inflates wall duration without bound (measured: a ~200ms-class task read
-   *  1995ms at 89% steal), so its severeBreaches carry no product signal. */
+   *  A steal-invalidated run's severe breaches are excused from Check 1 only IN
+   *  PROPORTION to the measured steal (u4zgv): a breach is skipped when removing
+   *  the run's worst-case steal share (duration * (1 - steal/100)) leaves it at or
+   *  under the ceiling (1995ms at 89% steal ≈ 219ms of real work — contention),
+   *  and it STILL REDS when the steal cannot explain it (600ms at 11% steal ≈
+   *  534ms of real work — product signal). */
   invalidatedBySteal: boolean;
   /** The bound that decision used, so a reader can see what "loaded" meant. (mr1ak) */
   hostQuietBound: number;
@@ -535,6 +538,10 @@ export function formatActiveBuilders(sample: LoadSample): string {
   return `${sample.activeCompilers ?? sample.compilers ?? 1} compilers`;
 }
 
+/** Catastrophic-stall ceiling (ms), strictly greater-than on any host (mujlt Check 1).
+ *  Exported so the proportional steal carve-out (u4zgv) and its tests share one number. */
+export const SEVERE_STALL_CEILING_MS = 500.0;
+
 /**
  * Attributes all long tasks in a boot staging run, classifying marginal vs severe breaches.
  * Unrounded durations are checked against 50.0 ms strictly.
@@ -641,7 +648,7 @@ export function attributeBootRun(
 
   // Classification:
   // Catastrophic stall is strictly > 500.0ms on any host.
-  const severeCeilingMs = 500.0;
+  const severeCeilingMs = SEVERE_STALL_CEILING_MS;
 
   const severeBreaches = attributedTasks.filter((t) => t.durationMs > severeCeilingMs);
   const marginalBreaches = attributedTasks.filter((t) => t.durationMs <= severeCeilingMs);
@@ -715,10 +722,12 @@ export interface BootStagingPolicyEvaluation {
  * - Over VALID runs: median-0 contract is strictly enforced; persistent regressions (median > 0)
  *   fail as contract breaches with full attribution, while isolated cold-start tasks absorbed
  *   by median-0 pass with recorded warnings.
- * - Catastrophic stalls (> 500.0ms) fail immediately on any run NOT invalidated by host CPU
- *   steal (r2l8n): steal inflates wall duration without bound — a ~200ms-class task measured
- *   1995ms at 89% steal — so a stolen run's severe breaches are contention, never product
- *   signal; load-contended runs keep the pre-steal immediate-red behaviour.
+ * - Catastrophic stalls (> 500.0ms) fail immediately on any run. A steal-invalidated run's
+ *   breach is excused only IN PROPORTION to the measured steal (r2l8n, tightened by u4zgv):
+ *   it is skipped when removing the run's worst-case steal share leaves it at or under the
+ *   ceiling (1995ms at 89% steal ≈ 219ms of real work — contention), and it still reds when
+ *   the steal cannot explain it (600ms at 11% steal ≈ 534ms — product signal). Load-contended
+ *   runs keep the pre-steal immediate-red behaviour.
  * - On valid runs, strictly enforces composer-ready < 150ms and thread-list-hydrated <= 250ms.
  */
 export function evaluateBootStagingPolicy(
@@ -739,20 +748,32 @@ export function evaluateBootStagingPolicy(
     );
   }
 
-  // 2. Check 1: Catastrophic stalls (> 500ms) fail immediately even if the host was loaded —
-  // EXCEPT on runs invalidated by host CPU steal (r2l8n): at 89% steal a ~200ms-class task
-  // measured 1995ms wall (fbg7i exit-run, 2026-10-25), so a stolen run's severe breach is
-  // contention, not product evidence. Those runs stay excluded; if no valid run remains,
-  // Check 2 refuses environmentally.
+  // 2. Check 1: Catastrophic stalls (> 500ms) fail immediately even if the host was loaded.
+  // A steal-invalidated run gets a PROPORTIONAL carve-out (r2l8n, tightened by u4zgv): at 89%
+  // steal a ~200ms-class task measured 1995ms wall (fbg7i exit-run, 2026-10-25), so steal CAN
+  // explain that breach. But at 11% steal the stretch factor is only 1/(1-0.11)=1.12x and a
+  // 600ms reading is still ~534ms of real work — steal cannot explain it, and excusing it
+  // would turn a genuine catastrophic stall into a PASS on a box that is NOT starved (the
+  // reviewer's adversarial cases B/C). A breach is excused only when removing the run's
+  // worst-case steal share leaves it at or under the ceiling; anything the measured steal
+  // cannot account for keeps the immediate red — even when no valid sibling remains, because
+  // a refusal must never supersede a red (case E).
   for (const r of runs) {
-    if (r.severeBreaches.length > 0 && r.invalidatedBySteal) {
-      warnings.push(
-        `[ntp-boot-staging] Run ${r.run}: severe stall (>${500}ms) observed INSIDE a steal-invalidated run — wall duration cannot be attributed to the product at ${(r.hostWorstStealPct ?? 0).toFixed(0)}% steal; excluded from the severe check (chrome-agent-platform-r2l8n)`,
-      );
-      continue;
+    if (r.severeBreaches.length === 0) continue;
+    let breaches = r.severeBreaches;
+    if (r.invalidatedBySteal) {
+      const stealPct = r.hostWorstStealPct ?? 0;
+      const realWorkMs = (t: { durationMs: number }) => t.durationMs * (1 - stealPct / 100);
+      const excused = breaches.filter((t) => realWorkMs(t) <= SEVERE_STALL_CEILING_MS);
+      breaches = breaches.filter((t) => realWorkMs(t) > SEVERE_STALL_CEILING_MS);
+      if (excused.length > 0) {
+        warnings.push(
+          `[ntp-boot-staging] Run ${r.run}: severe stall (>${SEVERE_STALL_CEILING_MS}ms) observed INSIDE a steal-invalidated run — removing the ${stealPct.toFixed(0)}% worst-case steal share leaves ${excused.map((t) => `${Math.round(realWorkMs(t))}ms`).join(", ")} at or under the ceiling, so wall duration cannot be attributed to the product; excluded from the severe check (chrome-agent-platform-r2l8n)`,
+        );
+      }
     }
-    if (r.severeBreaches.length > 0) {
-      const details = r.severeBreaches.map(formatTaskAttribution).join("; ");
+    if (breaches.length > 0) {
+      const details = breaches.map(formatTaskAttribution).join("; ");
       return {
         ok: false,
         environmentalRefusal: false,
