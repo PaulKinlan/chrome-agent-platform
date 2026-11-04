@@ -147,7 +147,7 @@ function setToolState(kind, count = 0) {
 async function renderTools(origin) {
   if (!toolsEl) return;
   const res = await send("sidepanel.getTools", { origin });
-  toolsEl.innerHTML = "";
+  toolsEl.replaceChildren();
   if (!res?.ok) {
     setToolState("error");
     return;
@@ -378,7 +378,7 @@ async function refreshActiveTab() {
   currentTabOrigin = origin;
   if (hostEl) hostEl.textContent = hostFromUrl(tab.url || "") || (tab.title || "This page");
   setFavicon(tab.favIconUrl || "");
-  if (toolsEl) toolsEl.innerHTML = "";
+  if (toolsEl) toolsEl.replaceChildren();
   if (origin) await renderTools(origin);
   else setToolState("none");
   if (seq !== refreshSeq) return;
