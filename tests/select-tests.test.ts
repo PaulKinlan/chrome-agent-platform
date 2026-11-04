@@ -20,6 +20,7 @@ import {
   planSelection,
   referrersFor,
   selectTestFiles,
+  selectionFanInNotice,
 } from "../scripts/select-tests.mjs";
 
 // A real seam with a known importer: schedule-parser.js is imported by
@@ -204,4 +205,25 @@ Deno.test("fhh50: a plan that cannot map the delta says so (selection_covers_del
   assertEquals(refused.kind, "full", "unreferenced agent tooling must fail closed, not warn and proceed");
   assertEquals(fileMappingContextForPlan(refused).selectionCoversDelta, false);
   assertEquals(refused.unmappable.map((row: { file: string }) => row.file), [TOOLING_UNREFERENCED]);
+});
+
+// ---- chrome-agent-platform-nn5eq: a hot module's fan-in is stated, not discovered ----
+
+Deno.test("nn5eq: a large selection announces its fan-in cost without refusing to run", () => {
+  const ordinary = selectionFanInNotice({ selected: 134, population: 803 });
+  assertEquals(ordinary, null, "a normal subset must not nag");
+
+  const hot = selectionFanInNotice({ selected: 537, population: 803 });
+  assert(hot, "537/803 is a hot-module delta and must be named");
+  assert(/IMPORT FAN-IN, not a failure/.test(hot), hot);
+  assert(/537 of 803 suites \(67%\)/.test(hot), hot);
+  assert(/union FULL gate remains the landing verdict/.test(hot), hot);
+
+  // The boundary is a third of the population, and it must not drift silently.
+  assertEquals(selectionFanInNotice({ selected: 267, population: 803 }), null, "just under a third stays quiet");
+  assert(selectionFanInNotice({ selected: 268, population: 803 }), "a third or more is announced");
+
+  // No population, no claim.
+  assertEquals(selectionFanInNotice({ selected: 10, population: 0 }), null);
+  assertEquals(selectionFanInNotice({ selected: Number.NaN, population: 803 }), null);
 });

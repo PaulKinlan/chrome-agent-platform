@@ -955,6 +955,29 @@ export const OMITTED_CORE_ONLY_REASON = "not run: --core executes only the alway
 // the dropped count are always reported, and a bound that would erase every named entry is refused.
 export const MAX_OMITTED_ENTRIES = 5000;
 
+// chrome-agent-platform-nn5eq: a module with a very large importer fan-in (pure.js is imported by
+// nearly every suite) makes a small edit select most of the suite. That is not a defect in the
+// selector — the import edges are real — but it IS a budget statement the lane should hear while the
+// run is happening, rather than discovering it in an INTERRUPTED record. The threshold is a third of
+// the population: below it, the run is comfortably a subset; at or above it, the change is effectively
+// union-scale and the reader should know the FAST tier is only an accounting record.
+export const FAN_IN_NOTICE_FRACTION = 1 / 3;
+
+/**
+ * The fan-in notice for a large selection, or null when the selection is an ordinary subset.
+ * Pure so the threshold is pinned without running a suite (nn5eq).
+ * @param {{ selected: number, population: number }} args
+ * @returns {string | null}
+ */
+export function selectionFanInNotice({ selected, population }) {
+  if (!Number.isInteger(selected) || !Number.isInteger(population) || population <= 0) return null;
+  if (selected < population * FAN_IN_NOTICE_FRACTION) return null;
+  const pct = Math.round((selected / population) * 100);
+  return `select-tests: NOTE (nn5eq) — this delta selects ${selected} of ${population} suites (${pct}%): that is an IMPORT FAN-IN, not a failure. ` +
+    `A hot module (extension/lib/pure.js selects most of the tree) costs the whole subset budget, so a new helper belongs in its own small module. ` +
+    `The run continues inside the FAST bound; the union FULL gate remains the landing verdict.`;
+}
+
 /** The disclosure bound; a missing or nonsensical value falls back to complete. 0 is refused. */
 export function omittedLimit(raw = process.env.CAP_GATE_LEDGER_MAX_OMITTED) {
   const value = Number(raw);
@@ -1411,6 +1434,10 @@ async function main() {
     return;
   }
   for (const notice of plan.notices) console.error(notice);
+  if (plan.kind === "subset") {
+    const fanIn = selectionFanInNotice({ selected: plan.files?.length ?? 0, population: allTestFiles().length });
+    if (fanIn) console.error(fanIn);
+  }
   // The lockfile closure (package -> importers -> suites) is NOT printed here: the ledger emits it
   // immediately before the manifest line, which is where a reader (and the fleet's tail-window log
   // reader) actually looks. Printing it in both places put the same trail in the log twice.
