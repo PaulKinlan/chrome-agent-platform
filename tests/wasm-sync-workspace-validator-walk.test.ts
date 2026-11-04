@@ -51,3 +51,97 @@ Deno.test("S1 validator: exactDenseByteArray is a SINGLE indexed walk — one fr
   expectSeedFail({ files: [{ path: "scratch/g.bin", bytes: [1], [Symbol("x")]: 2 }] }, "bytes symbol key");
   expectSeedFail({ files: [{ path: "scratch/s.bin", get bytes() { return [1]; } }] }, "bytes getter");
 });
+
+// ---------------------------------------------------------------------------
+// j7k25: pins for the BOUNDED key-set proof that replaced the per-byte
+// reflective walks (Reflect.ownKeys + getOwnPropertyDescriptor per index,
+// ~13 s/MiB). Everything a bounded proof can still see must fail exactly as
+// before, and the two documented residuals (enumerable index accessor with a
+// valid-byte getter; extra nonenumerable string key) are pinned AS residuals:
+// accepted, snapshotted once, and inert in the frozen output — so any future
+// change to either behaviour is a deliberate, reviewed act.
+// ---------------------------------------------------------------------------
+
+Deno.test("j7k25: the byte validator's bounded proof — no full own-keys materialization, one dense result", async () => {
+  const source = await Deno.readTextFile(new URL("../extension/lib/wasm-sync-workspace.js", import.meta.url));
+  const blockStart = source.indexOf("function exactDenseByteArray");
+  const blockEnd = source.indexOf("function classForPath", blockStart);
+  assert(blockStart >= 0 && blockEnd > blockStart, "the byte validator exists");
+  const block = source.slice(blockStart, blockEnd);
+  assert(!block.includes("Reflect.ownKeys"), "j7k25: the ~6.5s-per-10.5M-keys materialization must not come back");
+  assert(!block.includes("getOwnPropertyDescriptor(value, String"), "j7k25: no per-index String(index) descriptor walk");
+  assert(block.includes("Object.keys(value)"), "the bounded key-set proof uses the own enumerable keys");
+  assert(block.includes("Object.getOwnPropertySymbols(value)"), "the bounded symbol check is present");
+});
+
+Deno.test("j7k25: enumerable key-set hostility on a REAL array still fails — extra keys, noncanonical keys, out-of-range indices, setters, nonenumerable indices", () => {
+  // extra enumerable string key
+  const extra = [1, 2]; extra.evil = 1;
+  expectSeedFail({ files: [row("scratch/a.bin", extra)] }, "extra enumerable string key");
+  // noncanonical enumerable key ("01" sorts after the canonical indices)
+  const noncanon = [1, 2];
+  Object.defineProperty(noncanon, "01", { value: 9, enumerable: true, configurable: true });
+  expectSeedFail({ files: [row("scratch/b.bin", noncanon)] }, "noncanonical index key");
+  // enumerable index beyond length
+  const beyond = [1, 2]; beyond[5] = 3;
+  expectSeedFail({ files: [row("scratch/c.bin", beyond)] }, "enumerable index beyond length");
+  // enumerable setter-only index: Get yields undefined -> byte check
+  const setterOnly = [1, 2, 3];
+  Object.defineProperty(setterOnly, 0, { set() {}, enumerable: true, configurable: true });
+  expectSeedFail({ files: [row("scratch/d.bin", setterOnly)] }, "setter-only index");
+  // nonenumerable index data: the enumerable count no longer matches length.
+  // (Pre-j7k25 ownKeys ACCEPTED this shape; the bounded proof is stricter.)
+  const nonEnumIndex = [1, 2, 3];
+  Object.defineProperty(nonEnumIndex, 0, { value: 1, enumerable: false, configurable: true });
+  expectSeedFail({ files: [row("scratch/e.bin", nonEnumIndex)] }, "nonenumerable index");
+  // hole / sparse stay caught by BOTH the count and the byte check
+  expectSeedFail({ files: [row("scratch/f.bin", [1, , 3])] }, "sparse");
+  expectSeedFail({ files: [row("scratch/g.bin", Array(3))] }, "holes");
+});
+
+Deno.test("j7k25 residual 1: an enumerable index accessor with a valid-byte getter is snapshotted EXACTLY ONCE and the frozen output is inert to later answers", () => {
+  let calls = 0;
+  const arr = [1, 2, 3];
+  Object.defineProperty(arr, 1, {
+    get() { calls++; return calls === 1 ? 42 : 99; },
+    enumerable: true,
+    configurable: true,
+  });
+  const ok = validateWorkspaceSeed({ files: [{ path: "scratch/getter.bin", bytes: arr }] });
+  assertEquals(calls, 1, "the single Get walk reads each index exactly once — no second observation exists");
+  assertEquals([...ok.files[0].bytes], [1, 42, 3], "the snapshot is the first (and only) answer");
+  assertEquals(calls, 1, "validation itself did not re-read");
+  // the getter's later answers cannot reach the frozen canonical clone
+  assertEquals(ok.files[0].bytes[1], 42);
+  assert(Object.isFrozen(ok.files[0].bytes));
+});
+
+Deno.test("j7k25 residual 2: an extra NONENUMERABLE string key is invisible to the bounded proof and inert in the output", () => {
+  const arr = [1, 2];
+  Object.defineProperty(arr, "hidden", { value: "payload", enumerable: false, configurable: true });
+  const ok = validateWorkspaceSeed({ files: [{ path: "scratch/hidden.bin", bytes: arr }] });
+  assertEquals([...ok.files[0].bytes], [1, 2], "the dense output carries only the canonical indices");
+  assertEquals(ok.files[0].bytes.length, 2);
+  assertEquals((ok.files[0].bytes as any).hidden, undefined, "the hidden key cannot ride into the clone");
+});
+
+Deno.test("j7k25: a getter that MUTATES the input mid-walk is caught by the bounded post-walk re-check", () => {
+  // (a) truncating the length mid-walk: the walk hits the missing tail as
+  // undefined (byte check) AND the post-walk length descriptor re-check fails.
+  const trunc = [1, 2, 3];
+  Object.defineProperty(trunc, 1, {
+    get() { trunc.length = 1; return 7; },
+    enumerable: true,
+    configurable: true,
+  });
+  expectSeedFail({ files: [row("scratch/trunc.bin", trunc)] }, "mid-walk length truncation");
+  // (b) swapping the prototype mid-walk: every byte still validates, so ONLY
+  // the post-walk prototype re-check can see it.
+  const proto = [1, 2, 3];
+  Object.defineProperty(proto, 1, {
+    get() { Object.setPrototypeOf(proto, Object.prototype); return 7; },
+    enumerable: true,
+    configurable: true,
+  });
+  expectSeedFail({ files: [row("scratch/proto.bin", proto)] }, "mid-walk prototype swap");
+});
