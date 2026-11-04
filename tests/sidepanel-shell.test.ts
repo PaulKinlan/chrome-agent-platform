@@ -74,3 +74,12 @@ Deno.test("side panel: the Agents picker uses the active-only projection (callab
   assert(picker, "the Agents picker is missing");
   assert(picker[0].includes("callable-only"), "the Agents picker is not callable-only (templates would appear)");
 });
+
+Deno.test("side panel: the tool-chip container is cleared with replaceChildren, never innerHTML", () => {
+  // The tool chips render from SW-sourced tool names with textContent (the
+  // renderTools contract). Clearing the container must be parse-free DOM
+  // hygiene too: replaceChildren(), not an innerHTML assignment
+  // (chrome-agent-platform-pn3xd, modern-web station).
+  assert(!/innerHTML\s*=/.test(js), "sidepanel.js must not assign innerHTML — use textContent/replaceChildren");
+  assert(js.includes("toolsEl.replaceChildren()"), "the tool-chip container must be cleared with replaceChildren()");
+});
