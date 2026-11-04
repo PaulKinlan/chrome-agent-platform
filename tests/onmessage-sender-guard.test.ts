@@ -156,6 +156,10 @@ function isShadowedAtCall(callNode: any, name: string): boolean {
           }
         }
         if (stmt.type === "FunctionDeclaration" && stmt.id?.name === name) return true;
+        // Class declarations are let-like block-scoped bindings: an inner
+        // same-named class shadows the import, and the un-newed call would
+        // THROW rather than gate (chrome-agent-platform-1925w).
+        if (stmt.type === "ClassDeclaration" && stmt.id?.name === name) return true;
         // `var` / function declarations hoist past nested blocks (not nested functions)
         if (!SHADOW_FN_TYPES.has(stmt.type) && stmt.type !== "VariableDeclaration" && nestedVarDeclares(stmt, name)) {
           return true;
@@ -808,6 +812,27 @@ Deno.test("guard falsification: detects un-gated, ignored, or missing sender lis
   const sites28 = analyzeOnMessageListeners(probeHoistedFunctionShadow, "extension/test-probe28.js");
   assertEquals(sites28.length, 1);
   assertEquals(sites28[0].checksSender, false, "a hoisted same-named function in an enclosing scope is not the vetted import (viiaq)");
+
+  // chrome-agent-platform-1925w: a CLASS declaration shadows too (let-like
+  // block-scoped binding, valid in an inner scope even with the import
+  // present). An inner same-named class makes the un-newed call THROW — a
+  // broken listener, not a gated one — and must not be credited.
+  const probeClassShadow = `
+    import { isTrustedServiceWorkerSender } from "./lib/pure.js";
+    function wrapper() {
+      class isTrustedServiceWorkerSender {
+        constructor(sender) { this.ok = sender.id === chrome.runtime.id; }
+      }
+      chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+        if (!isTrustedServiceWorkerSender(sender)) return false;
+        sendResponse({ ok: true });
+        return true;
+      });
+    }
+  `;
+  const sites29 = analyzeOnMessageListeners(probeClassShadow, "extension/test-probe29.js");
+  assertEquals(sites29.length, 1);
+  assertEquals(sites29[0].checksSender, false, "an inner same-named CLASS is not the vetted import — the call would throw, not gate (1925w)");
 
   // The shadow-then-alias chain the round-5 reviewer constructed.
   const probeShadowedAliasChain = `
