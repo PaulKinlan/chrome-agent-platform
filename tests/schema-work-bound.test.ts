@@ -16,6 +16,15 @@
 // named fatal ("schema-work-exceeded") before any validator is installed, and
 // leaves realistic schemas alone. Both halves matter: a bound that also bricks
 // ordinary tools is a regression, not a fix.
+//
+// SCOPE OF THE GUARANTEE (chrome-agent-platform-jzz9z): the budget presumes a
+// payload that RESPECTS the declared element caps. zod's .max() length check
+// runs AFTER the per-element loop, so a payload violating the caps (1M
+// elements against a 100-cap array) is REJECTED but costs a linear scan
+// first — the schema-side product bound does not bound PAYLOAD-side work.
+// Practical inputs are bounded elsewhere (8 KiB page-attached args,
+// provider output limits for model-produced args); a pre-parse length guard
+// is the escalation if that residual ever matters.
 
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { z } from "npm:zod@3";
@@ -189,4 +198,21 @@ Deno.test("mfu4a: a CYCLIC object graph terminates instead of recursing forever"
   const work = schemaValidationWork(cyclic);
   assert(Number.isFinite(work) && work <= BUDGET + 1, `work must stay finite and bounded (got ${work})`);
   assert(Date.now() - started < 1000, "the accounting pass must be cheap on a cyclic graph");
+});
+
+// chrome-agent-platform-jzz9z precision pin: the budget bounds the SCHEMA-side
+// product; PAYLOAD-side work is rejected but linear (zod's .max() runs after
+// the element loop). Pinned so the enforced-vs-documented relationship cannot
+// drift in either direction without a test noticing.
+Deno.test("mfu4a: a payload violating the declared caps is still rejected — but the scan is linear, not budgeted", () => {
+  const schema = { type: "array", maxItems: 100, items: { type: "integer" } };
+  const compiled = compileSchemaToZod(z, schema);
+  assertEquals(compiled.fatal, null, "the schema itself is legal (work = 1 + 100×1)");
+  assertEquals(compiled.work, 101, "the schema-side estimate reflects 100 element validations");
+  const payload = Array.from({ length: 1_000_000 }, (_, i) => i);
+  const parsed = compiled.zodSchema.safeParse(payload);
+  assertEquals(parsed.success, false, "a payload over the declared cap is rejected");
+  // The DOCUMENTED guarantee now says "for a payload that respects the declared
+  // element caps" — this pin keeps that statement honest: work=101 did NOT
+  // bound the 1M-element scan, and the header says so.
 });

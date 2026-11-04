@@ -17,9 +17,14 @@ export const SCHEMA_BOUNDS = {
   // (extension/lib/tool-argument-contract.js:4-9), so nothing else bounds the
   // work a remote MCP server can ask this service worker to do. This is the
   // budget on the PRODUCT: the worst-case number of leaf validations one
-  // payload can require. A realistic tool (a list of 100 records with a handful
-  // of fields each, or an array of arrays) sits in the hundreds to low
-  // thousands; the smallest useful multiplicative bomb is 100^3 = 1,000,000.
+  // payload can require — FOR A PAYLOAD THAT RESPECTS THE DECLARED ELEMENT
+  // CAPS (chrome-agent-platform-jzz9z: zod's .max() runs AFTER the per-element
+  // loop, so a 1M-element payload against a 100-cap array is REJECTED but
+  // costs a linear scan first; practical inputs are bounded elsewhere — 8 KiB
+  // page-attached args, provider output limits for model-produced args). A
+  // realistic tool (a list of 100 records with a handful of fields each, or an
+  // array of arrays) sits in the hundreds to low thousands; the smallest
+  // useful multiplicative bomb is 100^3 = 1,000,000.
   maxValidationWork: 100_000,
 };
 
