@@ -431,10 +431,17 @@ The inventory also resolves simple aliases of `chrome.runtime` / its `onMessage`
    - `sender.url === runtime.getURL("dist/background/service-worker.js")` (pin to the compiled Service Worker bundle)
 
 2. **Content Script Isolation Fences**:
-   Content scripts receiving extension notifications (`content-script.js`, `webmcp-detect-relay.js`) must verify:
+   `extension/content/content-script.js` (the WebMCP invoke relay) must verify the FULL service-worker authority
+   predicate — a faithful port of `isTrustedServiceWorkerSender` (KEEP IN SYNC with `extension/lib/pure.js`):
    - `sender != null` (reject missing sender)
    - `sender.id === runtime.id`
    - `sender.tab == null` (prevent cross-tab / cross-frame message injection)
+   - `sender.documentId == null` (reject extension documents/frames)
+   - `sender.url === runtime.getURL("dist/background/service-worker.js")` (pin to the compiled SW bundle — an inline
+     id+tab check alone admits every same-extension principal: the ntp hub, options, side panel, offscreen;
+     chrome-agent-platform-yl0wn)
+   `extension/content/webmcp-detect-relay.js` remains the one remaining relay-only site on the weaker inline fence
+   (id + tab-absence; detection re-arm only, no execution authority).
 
 ### 6.2 Complete Non-Dispatcher Listener Inventory
 
