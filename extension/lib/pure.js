@@ -17,9 +17,20 @@ export const SCHEMA_BOUNDS = {
   // (extension/lib/tool-argument-contract.js:4-9), so nothing else bounds the
   // work a remote MCP server can ask this service worker to do. This is the
   // budget on the PRODUCT: the worst-case number of leaf validations one
-  // payload can require. A realistic tool (a list of 100 records with a handful
-  // of fields each, or an array of arrays) sits in the hundreds to low
-  // thousands; the smallest useful multiplicative bomb is 100^3 = 1,000,000.
+  // payload can require — FOR A PAYLOAD THAT RESPECTS THE DECLARED ELEMENT
+  // CAPS (chrome-agent-platform-jzz9z: zod's .max() runs AFTER the per-element
+  // loop, so a 1M-element payload against a 100-cap array is REJECTED but
+  // costs a linear scan first. chrome-agent-platform-gtcha: the 8 KiB
+  // attached-args cap does NOT bound that scan — attached-webmcp-authority.js
+  // runs safeParse FIRST and measures the PARSED data's JSON after, so the cap
+  // bounds what is DISPATCHED, not what was SCANNED; and the args on that path
+  // are MODEL-produced — the page declares the TOOL, the model supplies the
+  // ARGS — so the practical bound on the residual scan is the provider's
+  // output limit: linear in the model's output size. A pre-parse length guard
+  // is the escalation if that residual ever matters). A
+  // realistic tool (a list of 100 records with a handful of fields each, or an
+  // array of arrays) sits in the hundreds to low thousands; the smallest
+  // useful multiplicative bomb is 100^3 = 1,000,000.
   maxValidationWork: 100_000,
 };
 
@@ -465,6 +476,26 @@ export function schemaValidationWork(schema, budget = SCHEMA_BOUNDS.maxValidatio
       if (isNode(node.patternProperties)) {
         for (const child of Object.values(node.patternProperties)) total = add(total, walk(child, depth + 1));
       }
+    }
+    // chrome-agent-platform-4vzgv: each required name ABSENT from properties
+    // is one z.any().refine presence constraint in buildBaseZod — work 1 each
+    // — and `required` is kept VERBATIM by the sanitizer with no length cap
+    // (maxProperties caps properties KEYS, not required), so a 200k-name
+    // required array compiled 200k refines while this budget reported 1.
+    // Counting only the ABSENT names mirrors the builder exactly: a required
+    // name WITH a declared property adds no refine (the property's own
+    // validator enforces presence), and non-string entries are dropped by the
+    // sanitizer, so they add nothing here either. The early break saturates
+    // the estimate so a hostile array cannot make the estimator itself the
+    // expensive part.
+    if (Array.isArray(node.required)) {
+      const propKeys = isNode(node.properties) ? new Set(Object.keys(node.properties)) : null;
+      let absent = 0;
+      for (const k of node.required) {
+        if (typeof k !== "string" || (propKeys && propKeys.has(k))) continue;
+        if (++absent > cap) break;
+      }
+      total = add(total, absent);
     }
     return total;
   };
