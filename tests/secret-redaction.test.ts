@@ -369,3 +369,35 @@ Deno.test("redaction: userinfo subset-match parity with the pre-vj4s regex over 
     }
   }
 });
+
+// chrome-agent-platform-d8qsc: the locator set must not drift silently. One
+// case per SECRET_KEY_RE alternative, each riding a REAL call-site shape
+// (kv registry read, MCP server config, page tool result/args, journal
+// toolArgs, hook payload). If a locator is renamed or dropped, its case goes
+// RED here instead of coverage drifting.
+Deno.test("redaction: every SECRET_KEY_RE locator is pinned to a live call-site shape", async () => {
+  const { redactSecrets, SECRET_KEY_RE } = await import("../extension/lib/pure.js");
+  const CASES = [
+    // { locator: the regex alternative; key: the real payload key; where: the call site }
+    { locator: "api[_-]?key", key: "apiKey", where: "provider registry / providerConfig (kv read)" },
+    { locator: "token", key: "token", where: "MCP server config auth.token (kv cap:mcpServers)" },
+    { locator: "secret", key: "client_secret", where: "OAuth tool config (journal toolArgs)" },
+    { locator: "password", key: "password", where: "page tool result (tool-summary redactSecrets)" },
+    { locator: "authorization", key: "authorization", where: "HTTP headers object in a page tool result" },
+    { locator: "credential", key: "credential", where: "page tool args (hook/journal payload)" },
+    { locator: "bearer", key: "bearer_token", where: "page tool result" },
+    { locator: "access[_-]?key", key: "access_key", where: "cloud storage tool result" },
+  ];
+  for (const c of CASES) {
+    assert(
+      SECRET_KEY_RE.test(c.key),
+      `locator "${c.locator}" must still match its pinned key "${c.key}" (${c.where}) — the locator or the case has drifted`,
+    );
+    const out = redactSecrets({ [c.key]: "value-must-not-survive-4471" });
+    assertEquals(out[c.key], "[REDACTED]", `${c.locator} (${c.key}, ${c.where}) must be redacted`);
+  }
+  // Staleness gate: the table above is the locator contract. When the regex
+  // grows an alternative, add its live-shaped case AND bump this count; a
+  // locator removed without removing its case fails the match assert above.
+  assertEquals(CASES.length, 8, "SECRET_KEY_RE declares 8 alternatives — keep one live-shaped case each");
+});
