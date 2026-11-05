@@ -255,12 +255,35 @@ const JS_SCRIPT_TYPES = new Set(["", "module", "text/javascript", "application/j
 
 export function extractInlineScripts(html) {
   const out = [];
+  // chrome-agent-platform-wd96v: HTML comments must never resurrect a script.
+  // Comment spans are computed on the RAW document: a script whose full span
+  // sits INSIDE a comment is dead markup (browsers parse comment state — tags
+  // inside never open elements). The reverse — a comment inside a script body —
+  // is the legacy `<!-- hide from old browsers` trick: that text is raw script
+  // data and stays live, so CONTAINMENT (not overlap) is the rule. An
+  // unterminated `<!--` comments out the rest of the document (comment state
+  // until EOF, per parser semantics).
+  const commentSpans = [];
+  for (const c of html.matchAll(/<!--[\s\S]*?-->/g)) commentSpans.push([c.index, c.index + c[0].length]);
+  const lastCommentEnd = commentSpans.length ? commentSpans[commentSpans.length - 1][1] : 0;
+  const unterminatedAt = html.indexOf("<!--", lastCommentEnd);
+  const deadFrom = unterminatedAt === -1 ? Infinity : unterminatedAt;
+  const insideComment = (start, end) =>
+    start >= deadFrom || commentSpans.some(([cs, ce]) => start >= cs && end <= ce);
   for (const m of html.matchAll(SCRIPT_TAG_RE)) {
+    if (insideComment(m.index, m.index + m[0].length)) continue;
     const attrs = m[1] ?? "";
     const body = m[2] ?? "";
     if (/\bsrc\s*=/i.test(attrs)) continue;
     if (!body.trim()) continue;
-    const type = (attrs.match(/\btype\s*=\s*["']([^"']*)["']/i)?.[1] ?? "").trim().toLowerCase();
+    // chrome-agent-platform-wd96v: type= parses like the HTML attribute grammar
+    // (double-quoted, single-quoted, OR unquoted — the old regex matched quoted
+    // only and read `type=text/template` as JavaScript) and like a media type
+    // (parameters after ";" are stripped, case and whitespace ignored — the old
+    // exact-set match excluded `type="text/javascript; charset=utf-8"`).
+    const rawType = attrs.match(/\btype\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i)
+      ?.slice(1).find((g) => g !== undefined) ?? "";
+    const type = rawType.trim().toLowerCase().split(";")[0].trim();
     if (!JS_SCRIPT_TYPES.has(type)) continue;
     out.push({ code: body, module: type === "module" });
   }

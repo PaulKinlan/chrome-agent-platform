@@ -18,6 +18,7 @@ import {
   exportedFunctions,
   parseBundleMap,
   resolveRef,
+  extractInlineScripts,
 } from "../scripts/check-reachability.mjs";
 
 const REPO = fileURLToPath(new URL("../", import.meta.url)).replace(/\/$/, "");
@@ -790,4 +791,65 @@ Deno.test("reachability (9lmsv): non-JS script types (template, JSON) are exclud
     report.unreachedExports.some((e: string) => e.startsWith("lib/provider.js:inlineUsed")),
     "a text/template or application/json body must not credit a named export even when the body is valid JS text",
   );
+});
+
+// ── chrome-agent-platform-wd96v: the extractor's remaining HTML approximations ──
+// extractInlineScripts parsed type= as QUOTED-only and as an exact media type,
+// and never looked at HTML comments. Three wrong verdicts follow: an unquoted
+// type=text/template body is credited as live JS (the exact case the 9lmsv
+// quoted-type test pins, only unquoted); a <script> inside an HTML comment is
+// credited though no browser ever parses it as an element; and
+// type="text/javascript; charset=utf-8" is excluded though it is plain
+// JavaScript. The legacy `<!-- hide` trick INSIDE a script body is the
+// opposite verdict: that comment is raw script text and stays live.
+
+Deno.test("reachability (wd96v): an unquoted non-JS type= is excluded, not credited", () => {
+  assertEquals(
+    extractInlineScripts(`<div onclick="resetAllStores()"></div><script type=text/template>inlineUsed();</script>`),
+    [],
+    "type=text/template without quotes is still a template body, not JavaScript",
+  );
+});
+
+Deno.test("reachability (wd96v): an unquoted type=module still parses as a module script", () => {
+  const out = extractInlineScripts(`<script type=module>inlineUsed();</script>`);
+  assertEquals(out.length, 1, "an unquoted module type is a real script");
+  assertEquals(out[0].module, true, "and its module flag must survive the unquoted parse");
+});
+
+Deno.test("reachability (wd96v): a JS media type with parameters is JavaScript, not excluded", () => {
+  const out = extractInlineScripts(`<script type="text/javascript; charset=utf-8">inlineUsed();</script>`);
+  assertEquals(out.length, 1, "charset parameters do not make a script non-JavaScript");
+  assertEquals(out[0].module, false, "parameter-carrying classic type stays classic");
+});
+
+Deno.test("reachability (wd96v): a script inside an HTML comment is dead markup and never credited", () => {
+  // Comment BEFORE the script: the whole element sits in comment state.
+  assertEquals(
+    extractInlineScripts(`<!-- <script type="module">inlineUsed();</script> -->`),
+    [],
+    "a commented-out script never runs, so it must never credit",
+  );
+  // Unterminated comment: per parser semantics the rest of the document is
+  // comment state until EOF.
+  assertEquals(
+    extractInlineScripts(`<p>x</p><!-- <script type="module">inlineUsed();</script>`),
+    [],
+    "an unterminated comment kills everything after it",
+  );
+  // Mixed page: the commented script is dead, the plain one after it is live.
+  const mixed = extractInlineScripts(
+    `<!-- <script type="module">deadCall();</script> --><script type="module">liveCall();</script>`,
+  );
+  assertEquals(mixed.length, 1, "the live sibling survives the commented one");
+  assertEquals(mixed[0].code.includes("liveCall"), true, "and it is the LIVE body that survives");
+});
+
+Deno.test("reachability (wd96v): the legacy comment-hiding trick INSIDE a script body stays live", () => {
+  // `<!--` inside a script body is raw script text (script data, not comment
+  // state): containment, not overlap, is the rule. Over-stripping here would
+  // silently drop real scripts.
+  const out = extractInlineScripts(`<script><!--\ninlineUsed();\n//--></script>`);
+  assertEquals(out.length, 1, "a script whose body hides in a legacy comment still runs");
+  assertEquals(out[0].code.includes("inlineUsed();"), true, "and its body is intact");
 });
