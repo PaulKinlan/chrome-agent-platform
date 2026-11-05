@@ -286,11 +286,15 @@ consequences are carried by the matching register entry where one exists.
 ### T6. SSRF and URL-channel exfiltration through the brokered fetch
 
 - **Boundary:** TB4. **Evidence:** `extension/lib/fetch-policy.js#isPrivateOrLoopbackHost`,
-  `#checkFetchPolicy`, `#extractFetchHosts`; shared by `checkPythonNetworkRequest`
-  (`extension/lib/python-network.js#checkPythonNetworkRequest`), the enclave proxy
-  (`extension/background/routes/enclave-proxy.js#enclaveProxy`), and skill import
-  (`extension/lib/skill-import.js#validateHttpUrl`, `#fetchWithSafeRedirects`, `#fetchGitHubSkill`,
-  `#discoverRepoSkillsAndCommands`, `#installBatchSkillsAndCommands`); SW routes at
+  `extension/lib/fetch-policy.js#checkFetchPolicy`, `extension/lib/fetch-policy.js#extractFetchHosts`;
+  shared by `extension/lib/python-network.js#checkPythonNetworkRequest`, the enclave proxy
+  (`extension/background/routes/enclave-proxy.js#createEnclaveProxyRoutes`), and skill import
+  (`extension/lib/skill-import.js#validateHttpUrl`, `extension/lib/skill-import.js#fetchWithSafeRedirects`,
+  `extension/lib/skill-import.js#fetchGitHubSkill`, `extension/lib/skill-import.js#discoverRepoSkillsAndCommands`,
+  `extension/lib/skill-import.js#installBatchSkillsAndCommands`); the script sandbox's fetch is
+  brokered, not direct (`extension/lib/script-host.js#runFetch` — a registered run fails closed
+  when the brokered service-worker route is unavailable, and the direct fallback is confined to
+  unscoped `runId == null` calls); SW routes at
   `extension/background/service-worker.js#cap:fetch` (`cap:fetch`),
   `extension/background/service-worker.js#python.fetch` (`python.fetch`), and
   `extension/background/service-worker.js#skill.import` (`skill.import` / `skill.discover` / `skill.importBatch`).
@@ -418,10 +422,14 @@ consequences are carried by the matching register entry where one exists.
 
 ### T14. MCP: unbounded server count and argument egress to a third party
 
-- **Boundary:** S8. **Evidence:** `extension/lib/mcp-config.js:113`
-  (`normalizeMcpServerList` enforces no upper bound) and `extension/lib/mcp-client-core.js:99`
-  (`mountRemoteMcpServers`). **Answer:** first-use per-server approval, fenced results,
-  action-ledger rows. **Register:** R10.
+- **Boundary:** S8. **Evidence:** `extension/lib/mcp-config.js#normalizeMcpServerList`
+  (enforces no upper bound) and `extension/lib/mcp-client-core.js#mountRemoteMcpServers`.
+  **Answer:** first-use per-server approval, fenced results,
+  action-ledger rows. EVERY remote transport receives the egress-guarded fetch:
+  `extension/lib/mcp-client-core.js#createGuardedMcpFetch` pins every request and every same-origin
+  redirect hop to the configured origin, and `extension/lib/mcp-client.js#guardedFetch` wires it
+  into both transport constructions (`StreamableHTTPClientTransport` and `SSEClientTransport`).
+  **Register:** R10.
 
 ### T15. A web page driving the local shell-capable ACP harness
 
@@ -491,7 +499,7 @@ consequences are carried by the matching register entry where one exists.
 
 - **Boundary:** TB2 / TB4. **Evidence:** `extension/lib/browser-tools.js` (`register_user_script`,
   `update_user_script`, `register_content_script`, `update_content_script`),
-  `extension/lib/owner-approval.js:90` (`DESTRUCTIVE_ACTIONS`),
+  `extension/lib/owner-approval.js#DESTRUCTIVE_ACTIONS`,
   `extension/background/service-worker.js#browser.destructive-action`.
 - **Threat:** a model steered by prompt injection or untrusted page content registers
   persistent JavaScript to execute on target web origins across future browsing sessions.
@@ -564,27 +572,35 @@ and each names the executable check that would catch a regression.
   `extension/lib/fetch-policy.js:135`; `extension/background/service-worker.js#cap:fetch`,
   `extension/background/service-worker.js#python.fetch`. A new egress helper that calls `fetch` directly breaks this.
 - **INV-6 — A credential-shaped key never reaches a prompt, a log, a receipt or an error
-  string.** `extension/lib/pure.js:959`, `:1114`; `tests/security.test.ts:79-99`,
+  string.** `extension/lib/pure.js#SECRET_KEY_RE` classifies the credential-shaped keys that
+  `extension/lib/pure.js#redactSecrets` strips recursively (`redactSecretText` and
+  `safeProviderError` cover the text and provider-error surfaces); `tests/security.test.ts:79-99`,
   `tests/secret-redaction.test.ts`.
 - **INV-7 — Untrusted content reaches the model only inside a per-assembly random
   boundary, and the model is told that fenced text is data.**
-  `extension/lib/untrusted-fence.js:46-96`; `extension/lib/system-prompts.js:763-773`;
+  `extension/lib/untrusted-fence.js#mintUntrustedToken`,
+  `extension/lib/untrusted-fence.js#wrapUntrustedContent`,
+  `extension/lib/untrusted-fence.js#tagUntrusted`;
+  `extension/lib/system-prompts.js#renderBoundarySkills`;
   `extension/lib/skill-import.js` (imported third-party skill and command bodies are fenced
   with `wrapUntrustedContent` at import time as defense-in-depth; live model execution paths
   in `system-prompts.js` and `acp-model.js` apply the unguessable per-assembly random token;
   finding `tm-unfenced-imported-instructions`).
 - **INV-8 — Destructive actions require an approval bound to the exact action, target and
-  payload digest, and expiring.** `extension/lib/owner-approval.js:23`, `:533`, `:634`;
+  payload digest, and expiring.** `extension/lib/owner-approval.js#DESTRUCTIVE_ACTIONS` is the
+  destructive-action set the digest approval flow keys on;
   `extension/lib/browser-tools.js` (`register_user_script`, `update_user_script`,
   `register_content_script`, `update_content_script` digest approval via `browser.destructive-action`).
 - **INV-9 — Origin-keyed isolation is injective and reserved namespaces are fenced.**
-  `extension/lib/memory.js:227`, `:262`, `:308`.
+  `extension/lib/memory.js#isReservedMasterKey`, `extension/lib/memory.js#SITE_RESERVED_KEYS`,
+  `extension/lib/memory.js#isReservedReadKey`, `extension/lib/memory.js#isReservedWriteKey`.
 - **INV-10 — Imported archives strip `__proto__` and the credential keys TOGETHER in every
-  recursive redacted context.** `extension/lib/archive-target-registry.js:375`, `:444`;
+  recursive redacted context.** `extension/lib/archive-target-registry.js#CREDENTIAL_KEYS`
+  (stripped alongside `__proto__` in every recursive redacted context);
   `docs/STREAMING-CREDENTIAL-FILTER-RESERVED-MEMBERS.md` §2.
 - **INV-11 — Browser mutations accept `http(s)` destinations only, before any grant
-  check.** `extension/lib/browser-tools.js:556`
-  (`webDestination`); `docs/CONSTITUTION.md:29-33`.
+  check.** `extension/lib/browser-tools.js#webDestination`;
+  `docs/CONSTITUTION.md:29-33`.
 - **INV-12 — A page's MAIN world has no extension API.** `extension/content/webmcp-detect-main.js:5`;
   `scripts/security-suite.ts:308`.
 - **INV-13 — Every wildcard `postMessage` target is a deliberate, reasoned allowlist
@@ -598,12 +614,12 @@ and each names the executable check that would catch a regression.
   `tests/acp-loopback-optout.test.ts`.
 - **INV-15 — Every new offscreen execution host must authenticate the service
   worker before handling a job.** `isTrustedServiceWorkerSender` at
-  `extension/lib/pure.js:959` is the common onMessage predicate; the ACP model
-  host validates its `onConnect` sender separately (`extension/lib/acp-model-host.js:5-13`).
+  `extension/lib/pure.js#isTrustedServiceWorkerSender` is the common onMessage predicate; the ACP model
+  host validates its `onConnect` sender separately (`extension/lib/acp-model-host.js#registerAcpModelHost`).
   An extension ID alone does not establish the SW principal because documents
   and content scripts share it. Validate each host's exact job envelope and
-  asset identity as appropriate (`extension/lib/emscripten-host.js:30-54`,
-  `:110`, `:168`). The existing onMessage sender guard does not yet prove
+  asset identity as appropriate (`extension/lib/emscripten-host.js#registerEmscriptenHost`).
+  The existing onMessage sender guard does not yet prove
   inventory completeness; adding a new registration without updating this
   model and its guard must be treated as an unreviewed change.
 
