@@ -36,12 +36,19 @@ const FAKE_KEY = "sk-ant-not-a-real-key-5f5u-wiring";
 async function fixtureMcpReport(logPath: string, harness?: string, timeoutMs = 20_000): Promise<boolean | null> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
+    let rows;
     try {
-      const rows = Deno.readTextFileSync(logPath).split("\n").filter(Boolean).map((line) => JSON.parse(line));
-      const report = rows.find((row) => row?.type === "fixture-env");
-      const row = harness === undefined ? report : rows.find((r) => r?.harness === harness);
-      if (row) return row.mcpExclusive === true;
-    } catch { /* not written yet */ }
+      rows = Deno.readTextFileSync(logPath).split("\n").filter(Boolean).map((line) => JSON.parse(line));
+    } catch (error) {
+      // chrome-agent-platform-5x2rz: the same contract the bead accepted for fixtureRowSeen
+      // (e18f3) — only "not written yet" is swallowed; a corrupt, foreign or unreadable log
+      // surfaces as its own error instead of a silent full-bound wait returning a bare null.
+      if (error instanceof Deno.errors.NotFound) { /* not written yet */ }
+      else throw error;
+    }
+    const report = rows?.find((row) => row?.type === "fixture-env");
+    const row = harness === undefined ? report : rows?.find((r) => r?.harness === harness);
+    if (row) return row.mcpExclusive === true;
     await new Promise((r) => setTimeout(r, 100));
   }
   return null;
@@ -63,11 +70,17 @@ const freshLog = (name: string) =>
 async function fixtureEnvReport(logPath: string, timeoutMs = 20_000): Promise<"PRESENT" | "ABSENT" | null> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
+    let rows;
     try {
-      const rows = Deno.readTextFileSync(logPath).split("\n").filter(Boolean).map((line) => JSON.parse(line));
-      const report = rows.find((row) => row?.type === "fixture-env");
-      if (report) return report.anthropicApiKey === "PRESENT" ? "PRESENT" : "ABSENT";
-    } catch { /* not written yet */ }
+      rows = Deno.readTextFileSync(logPath).split("\n").filter(Boolean).map((line) => JSON.parse(line));
+    } catch (error) {
+      // chrome-agent-platform-5x2rz: swallow Deno.errors.NotFound only — a corrupt log is
+      // its own defect (see fixtureRowSeen / e18f3).
+      if (error instanceof Deno.errors.NotFound) { /* not written yet */ }
+      else throw error;
+    }
+    const report = rows?.find((row) => row?.type === "fixture-env");
+    if (report) return report.anthropicApiKey === "PRESENT" ? "PRESENT" : "ABSENT";
     await new Promise((r) => setTimeout(r, 100));
   }
   return null;
@@ -348,4 +361,34 @@ Deno.test("nqe6j: the NATIVE HOST spawns a pi adapter with MCP discovery off (th
     "the native host is a real spawn site: with CAP_ACP_HARNESS=pi its adapter child must get the isolation too",
   );
   assertEquals(await run("not-a-harness", otherLog), false, "and an unknown harness must not be isolated by guess");
+});
+
+Deno.test("5x2rz: the fixture pollers swallow only not-written-yet — a corrupt log is its own defect, never a silent bound", async () => {
+  // chrome-agent-platform-5x2rz: fixtureEnvReport/fixtureMcpReport used to catch EVERY
+  // read/parse error, so a corrupt or foreign log path consumed the whole bound and came
+  // back as a bare null — the exact cryptic 'Values are not equal: null / true' e18f3
+  // removed for fixtureRowSeen. Same contract, pinned for the two siblings: NotFound
+  // waits; anything else throws in milliseconds.
+  const dir = await Deno.makeTempDir();
+  const corrupt = `${dir}/corrupt.jsonl`;
+  await Deno.writeTextFile(corrupt, "{not json\n");
+  const missing = `${dir}/never-written.jsonl`;
+
+  const probes: Array<[string, () => Promise<boolean | null | "PRESENT" | "ABSENT">]> = [
+    ["fixtureEnvReport", () => fixtureEnvReport(corrupt, 1_500)],
+    ["fixtureMcpReport", () => fixtureMcpReport(corrupt, undefined, 1_500)],
+    ["fixtureMcpReport(harness)", () => fixtureMcpReport(corrupt, "pi", 1_500)],
+  ];
+  for (const [name, probe] of probes) {
+    const t0 = Date.now();
+    const thrown = await probe().then(() => false, (e) => (e instanceof SyntaxError ? "syntax" : String(e)));
+    assert(thrown, `${name} must THROW on a corrupt log, not return null (got a fulfilled promise)`);
+    assert(Date.now() - t0 < 1_000, `${name} must fail in milliseconds, not after the bound`);
+  }
+
+  // The NotFound path is unchanged: a not-yet-written log waits out its (short) bound.
+  const t0 = Date.now();
+  assertEquals(await fixtureEnvReport(missing, 400), null, "a not-yet-written log still waits and reports null");
+  assert(Date.now() - t0 >= 350, "the NotFound wait must actually wait, not fail fast");
+  await Deno.remove(dir, { recursive: true }).catch(() => {});
 });
