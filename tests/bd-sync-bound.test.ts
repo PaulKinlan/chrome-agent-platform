@@ -278,3 +278,20 @@ Deno.test("qhuf2 (P1): the post-commit hook routes through the bound, and a MISS
   assertEquals(holderAfter, false, "the wrapper cleaned its sidecar after the routed push");
   await Deno.remove(dir, { recursive: true }).catch(() => {});
 });
+
+Deno.test("qhuf2 (veitb): a FAILED sidecar write warns loudly instead of being swallowed", async () => {
+  const dir = await Deno.makeTempDir({ dir: durableDir("scratch"), prefix: "cap-qhuf2-veitb-" });
+  await writeFakeBd(dir);
+  // Unwritable sidecar path: the sync itself must still succeed (we hold the
+  // lock; bd runs), but the wrapper must TELL the operator that no holder
+  // record exists — otherwise a contender that times out during this run
+  // reports "no LIVE holder is recorded" about a live wrapper holder, the
+  // exact false claim veitb named.
+  const res = await runWrapper(dir, ["push"], { CAP_BD_SYNC_HOLDER: `${dir}/nonexistent-dir/holder` });
+  assertEquals(res.code, 0, `the sync itself must still succeed: ${res.stderr}`);
+  assertStringIncludes(res.stderr, "could not write the holder sidecar", "the failed write must warn loudly (veitb)");
+  assertStringIncludes(res.stderr, "lsof", "and say what the degraded guidance will be");
+  const argv = await Deno.readTextFile(`${dir}/argv.log`);
+  assertStringIncludes(argv, "dolt push", "the push ran despite the sidecar failure");
+  await Deno.remove(dir, { recursive: true }).catch(() => {});
+});

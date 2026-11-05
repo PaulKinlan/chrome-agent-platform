@@ -90,7 +90,7 @@ if ! flock -w "$WAIT" 9; then
       printf '%s\n' "$holders"
       echo "bd-sync-bound: kill the pid above (inspect: tr '\\0' ' ' < /proc/<pid>/cmdline) and retry this command."
     else
-      echo "bd-sync-bound: no LIVE holder is recorded — the holder died without cleanup, or holds the lock outside this wrapper."
+      echo "bd-sync-bound: no LIVE holder is recorded — the holder died without cleanup, holds the lock outside this wrapper, or its sidecar write failed (it printed a WARNING then)."
       echo "bd-sync-bound: inspect the lock directly: lsof '$LOCK_FILE' 2>/dev/null || fuser -v '$LOCK_FILE' 2>&1"
     fi
     echo "bd-sync-bound: the fleet shim bounds the flock WAIT, never the HOLDER (qhuf2 / fleet-cilm5)."
@@ -104,8 +104,17 @@ fi
 # data from a holder that died without its EXIT trap; overwriting is the truth.
 acquired=1
 tmp="$HOLDER_FILE.tmp.$$"
-printf 'pid=%s cmd=bd-dolt-%s start=%s\n' "$$" "$sub" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$tmp" 2>/dev/null || true
-mv "$tmp" "$HOLDER_FILE" 2>/dev/null || true
+# veitb: a FAILED sidecar write must not be swallowed — without this warning a
+# contender that times out would read no holder line and report 'no LIVE holder'
+# about a live wrapper holder. The sync itself still proceeds (the lock is held);
+# the warning makes the missing record discoverable.
+if printf 'pid=%s cmd=bd-dolt-%s start=%s\n' "$$" "$sub" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$tmp" 2>/dev/null &&
+   mv "$tmp" "$HOLDER_FILE" 2>/dev/null; then
+  :
+else
+  rm -f "$tmp" 2>/dev/null || true
+  echo "bd-sync-bound: WARNING: could not write the holder sidecar ('$HOLDER_FILE') — a contender that times out will not see this holder's pid and will fall back to the lsof guidance (veitb)" >&2
+fi
 
 rc=0
 FLEET_BD_LOCKED=1 timeout --kill-after=15 "$HOLD" bd dolt "$sub" "$@" || rc=$?
