@@ -171,35 +171,33 @@ workhorse sans, deliberate grid. Earned familiarity over novelty.
   Settings → Agents moved to the template select (n3fqo) — but it stays the
   reusable catalogue grid (no component is deleted; REVIEW-2026-08-30 §9) and
   is exercised in the component gallery.
-- Settings → Agents offers the catalogue through `agent-template-select`
-  (chrome-agent-platform-n3fqo — owner directive: the card grid's starter-only
-  default hid the scheduled agents): the SAME searchable grouped native select
-  as the create dialog, listing EVERY template — Starter / Other / Scheduled
-  groups, a live filter, and the classic-select fallback. Already-enabled
-  background skills stay listed (the full catalogue stays reachable) and are
-  reported honestly — `"<name> is already enabled — nothing to add."` — instead
-  of being re-added; choosing anything else enables Add, which instantiates the
-  template with its schedule intact (`background-agent.set` for skills,
-  `named-agent.create` with the structured schedule for curated templates).
-- The CREATE-AGENT dialog and Settings → Agents offer the catalogue through
-  `agent-template-select`
-  (CAP-FB-20260831-TEMPLATE-CUSTOM-SELECT-01): a NATIVE `<select>` with the
-  Customizable Select pattern where supported — first-child `<button>`
-  select-button, `<selectedcontent>` mirroring the choice, `appearance:
-  base-select`, grouped `optgroup`s Starter / Other / Scheduled (matching the
-  gallery's order), a live search filter input above it (matches narrow,
-  empty state, restore), and a CLASSIC-select fallback where `appearance:
-  base-select` is unsupported. The selection survives filtering (a filtered-out
-  choice is retained as a hidden option so the native value never resets). The
-  picker popup is styled in BOTH schemes with explicit light defaults and a
-  `@media (prefers-color-scheme: dark)` block (charcoal popup, light text,
-  checked/hover states) plus `color-scheme: light dark` on the select; exactly
-  ONE chevron renders (`::picker-icon` is suppressed; the button draws its
-  own). Known limitation: headless Chrome paints the base-select popup from UA
-  system colors (author `::picker` backgrounds ignored), so automated pixel
-  checks observe a light popup in headless; the computed-style gate proves the
-  authored contrast (light 17.2:1, dark 12.9:1) and real headed Chrome paints
-  the computed styles.
+- The CREATE-AGENT dialog and Settings → Agents both offer the catalogue
+  through `agent-template-select`
+  (CAP-FB-20260831-TEMPLATE-CUSTOM-SELECT-01; chrome-agent-platform-n3fqo —
+  owner directive: the card grid's starter-only default hid the scheduled
+  agents): a NATIVE `<select>` with the Customizable Select pattern where
+  supported — first-child `<button>` select-button, `<selectedcontent>`
+  mirroring the choice, `appearance: base-select`, grouped `optgroup`s
+  Starter / Other / Scheduled (matching the gallery's order), a live search
+  filter input above it (matches narrow, empty state, restore), and a
+  CLASSIC-select fallback where `appearance: base-select` is unsupported. The
+  selection survives filtering (a filtered-out choice is retained as a hidden
+  option so the native value never resets). The picker popup is styled in BOTH
+  schemes with explicit light defaults and a `@media (prefers-color-scheme:
+  dark)` block (charcoal popup, light text, checked/hover states) plus
+  `color-scheme: light dark` on the select; exactly ONE chevron renders
+  (`::picker-icon` is suppressed; the button draws its own). Known limitation:
+  headless Chrome paints the base-select popup from UA system colors (author
+  `::picker` backgrounds ignored), so automated pixel checks observe a light
+  popup in headless; the computed-style gate proves the authored contrast
+  (light 17.2:1, dark 12.9:1) and real headed Chrome paints the computed
+  styles. Settings → Agents lists EVERY template — Starter / Other / Scheduled
+  groups — and already-enabled background skills stay listed (the full
+  catalogue stays reachable) and are reported honestly — `"<name> is already
+  enabled — nothing to add."` — instead of being re-added; choosing anything
+  else enables Add, which instantiates the template with its schedule intact
+  (`background-agent.set` for skills, `named-agent.create` with the structured
+  schedule for curated templates).
 - The create-agent dialog's primary order is template select → Name → what it
   does (with visible dictation/refine tools) → English schedule → Advanced.
   Initial focus lands on the select.
