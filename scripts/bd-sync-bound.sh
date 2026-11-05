@@ -13,17 +13,22 @@
 #   scripts/bd-sync-bound.sh pull [bd dolt args...]
 #
 # Contract:
-#   1. HOLDER NAMED: a sidecar ($CAP_BD_SYNC_HOLDER, default ~/.fleet/bd-sync.holder)
-#      records pid + command + start time while we hold the lock. A contender that times
-#      out WAITING prints the ALIVE holder lines and the kill guidance (exit 3), instead
-#      of retrying blind for an hour. Dead pids are filtered; the sidecar is removed on
-#      exit.
+#   1. HOLDER NAMED, AND ONLY THE HOLDER: a sidecar ($CAP_BD_SYNC_HOLDER, default
+#      ~/.fleet/bd-sync.holder) records pid + command + start time — written ONLY
+#      AFTER the lock is acquired, so a WAITER's pid can never appear in it
+#      (qhuf2 review P2: the first cut appended every contender's pid BEFORE the
+#      flock, so the kill guidance could name an innocent waiting lane). A
+#      contender that times out WAITING prints the ALIVE holder lines and the
+#      kill guidance (exit 3); if NO live holder is recorded it says so and
+#      points at lsof/fuser on the lock file instead of guessing. Dead pids are
+#      filtered; the sidecar is removed by the holder on exit.
 #   2. WAIT BOUNDED: flock -w "$CAP_BD_SYNC_WAIT" (default 120s). Expiry is a LOUD
 #      failure naming the holder, never a silent queue.
 #   3. HOLD BOUNDED: the bd child runs under `timeout --kill-after=15
 #      "$CAP_BD_SYNC_HOLD"` (default 180s), so a hung git send-pack dies and releases
 #      both the flock and the embedded dolt DB. Exit 124/137 means the bound killed a
-#      hung network sync — a failure of the network, not of bd.
+#      hung network sync — a failure of the network, not of bd. The bound TERMINATES;
+#      it never merely warns.
 #   4. NESTED SAFE: the shim execs bd under ITS OWN flock on the SAME lock file, so the
 #      wrapper always sets FLEET_BD_LOCKED=1 for its child (the shim's documented
 #      bypass) — without it, the shim's flock would wait on ours and deadlock on
@@ -52,11 +57,11 @@ if [ "${FLEET_BD_LOCKED:-}" = "1" ]; then
   exit "$rc"
 fi
 
-printf 'pid=%s cmd=bd-dolt-%s start=%s\n' "$$" "$sub" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$HOLDER_FILE" 2>/dev/null || true
-# Only the lock HOLDER may remove the sidecar: a losing contender exits via this trap
-# too, and deleting the file then would destroy the winner's holder record — exactly
-# the evidence the loss message just printed. A loser's stale line is dead pid data;
-# the next winner prunes it on acquire and every read filters live pids only.
+# qhuf2 review P2: NO identity is written before the flock. A waiter records
+# nothing anywhere; the sidecar is stamped by the winner AFTER acquisition (below)
+# and removed by the winner's EXIT trap. Only the lock HOLDER may remove the
+# sidecar: deleting it from a losing path would destroy the winner's holder
+# record — exactly the evidence the loss message just printed.
 acquired=0
 trap '[ "$acquired" = 1 ] && rm -f "$HOLDER_FILE"' EXIT
 # NB: a bare `exec 9>file` only — adding e.g. `2>/dev/null` to the same exec would
@@ -77,20 +82,29 @@ alive_holder_lines() {
 }
 
 if ! flock -w "$WAIT" 9; then
+  holders="$(alive_holder_lines)"
   {
-    echo "bd-sync-bound: '$LOCK_FILE' still held after ${WAIT}s. Alive holder(s):"
-    alive_holder_lines
-    echo "bd-sync-bound: kill the pid above (inspect: tr '\\0' ' ' < /proc/<pid>/cmdline) and retry this command."
+    echo "bd-sync-bound: '$LOCK_FILE' still held after the ${WAIT}s bounded wait (exit 3)."
+    if [ -n "$holders" ]; then
+      echo "Alive holder(s):"
+      printf '%s\n' "$holders"
+      echo "bd-sync-bound: kill the pid above (inspect: tr '\\0' ' ' < /proc/<pid>/cmdline) and retry this command."
+    else
+      echo "bd-sync-bound: no LIVE holder is recorded — the holder died without cleanup, or holds the lock outside this wrapper."
+      echo "bd-sync-bound: inspect the lock directly: lsof '$LOCK_FILE' 2>/dev/null || fuser -v '$LOCK_FILE' 2>&1"
+    fi
     echo "bd-sync-bound: the fleet shim bounds the flock WAIT, never the HOLDER (qhuf2 / fleet-cilm5)."
   } >&2
   exit 3
 fi
 
-# We hold the lock: prune dead lines, then re-stamp so the sidecar names the REAL holder.
+# We hold the lock, so we ARE the holder: stamp the sidecar with our line only
+# (atomic tmp+mv), AFTER acquisition. Under record-after-acquisition there is no
+# legitimate foreign live line to preserve — anything left in the file is stale
+# data from a holder that died without its EXIT trap; overwriting is the truth.
 acquired=1
 tmp="$HOLDER_FILE.tmp.$$"
-alive_holder_lines > "$tmp" 2>/dev/null || true
-printf 'pid=%s cmd=bd-dolt-%s start=%s\n' "$$" "$sub" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$tmp" 2>/dev/null || true
+printf 'pid=%s cmd=bd-dolt-%s start=%s\n' "$$" "$sub" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$tmp" 2>/dev/null || true
 mv "$tmp" "$HOLDER_FILE" 2>/dev/null || true
 
 rc=0
