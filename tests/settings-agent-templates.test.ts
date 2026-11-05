@@ -422,6 +422,40 @@ Deno.test("Settings picker lists enabled background skills, marked — never hid
   assertEquals(catalogue.some((t: any) => t?.id === "chief-of-staff"), true, "curated templates must always be offered");
 });
 
+Deno.test("Settings picker: an enabled skill colliding with a curated id keeps its enabled flag on the surviving curated record (033ym)", () => {
+  // price-watcher is BOTH a built-in background skill (skill-registry, every
+  // 360 min) and a curated AGENT_TEMPLATE ("Price & Change Watcher", every
+  // 60 min). The dedupe keeps the curated record, which historically carried no
+  // enabled flag — so the picker offered Add and created a duplicate scheduled
+  // agent on the same id. The curated survivor must INHERIT enabled:true from
+  // the colliding enabled skill so the picker reports "already enabled" and Add
+  // stays disabled (t163u/n3fqo intent, extended to the colliding case).
+  const enabledCollidingSkill = {
+    id: "price-watcher",
+    name: "Price watcher",
+    mode: "background",
+    enabled: true,
+    schedule: { periodInMinutes: 360, prompt: "Watch prices" },
+  };
+  const disabledCollidingSkill = {
+    id: "chief-of-staff",
+    name: "Chief of Staff",
+    mode: "background",
+    enabled: false,
+    schedule: { periodInMinutes: 60, prompt: "Plan the day" },
+  };
+  const catalogue: any[] = composeSettingsTemplateCatalogue([enabledCollidingSkill, disabledCollidingSkill]);
+  const survivors = catalogue.filter((t) => t?.id === "price-watcher");
+  assertEquals(survivors.length, 1, "price-watcher must appear exactly once (curated survivor)");
+  assertEquals(survivors[0].enabled, true,
+    "the curated survivor must inherit enabled:true from the colliding enabled skill — otherwise the picker cannot report 'already enabled' and Add creates a duplicate");
+  assertStringIncludes(String(survivors[0].name), "Price", "the curated record's richer definition survives");
+  // A DISABLED colliding skill must NOT mark the curated record enabled — it stays addable.
+  const cos = catalogue.filter((t) => t?.id === "chief-of-staff");
+  assertEquals(cos.length, 1, "chief-of-staff must appear exactly once");
+  assertEquals(cos[0].enabled ?? false, false, "a disabled colliding skill must not mark the curated record enabled");
+});
+
 Deno.test("Settings Add handler maps background template prompt to schedule.task and handles scheduleError (66avy/72omn)", async () => {
   const host = new PanelNode("div");
   host.id = "background-agent-add";

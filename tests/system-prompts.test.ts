@@ -1546,6 +1546,16 @@ Deno.test("runtime context: the memory digest lists written keys under the data 
     "thread:t_1": { messages: ["secret thread body"] },
     "run-registry": { rows: 3 },
     "origins": ["https://example.com"],
+    // chrome-agent-platform-lx7en: the WIDENED reserved prefixes must be fed
+    // through the REAL gatherMemoryDigest path end-to-end. The original fixture
+    // contained only keys the OLD narrow filter also skipped, so reverting
+    // runtime-context.js to a narrower predicate stayed green while run-log-wal:/
+    // run-log-idx:/thread-runs: rows flowed back into the prompt digest (the
+    // exact defect uctzp reported). The unit test in runtime-context.test.ts
+    // calls shouldSkipMemoryDigestKey directly and cannot catch a wiring revert.
+    "run-log-wal:exec_x": { frames: 7 },
+    "run-log-idx:exec_x": "idx-secret-body",
+    "thread-runs:t_1": { runs: ["secret thread-runs body"] },
   });
   const ctx = await gatherRuntimeContext({
     scope: "hub",
@@ -1567,6 +1577,13 @@ Deno.test("runtime context: the memory digest lists written keys under the data 
   assert(!layer.text.includes("secret thread body"), "thread bodies never digest");
   assert(!layer.text.includes("run-registry"), "the run registry never digests");
   assert(!/^- threads:/m.test(layer.text), "the threads index never digests");
+  // chrome-agent-platform-lx7en: the widened reserved families never digest —
+  // asserted by KEY and by VALUE so a narrowed filter cannot leak either.
+  assert(!layer.text.includes("run-log-wal:exec_x"), "the run WAL never digests");
+  assert(!layer.text.includes("idx-secret-body"), "the run log index never digests");
+  assert(!layer.text.includes("thread-runs:t_1"), "thread-runs rows never digest");
+  assert(!layer.text.includes("secret thread-runs body"), "thread-runs row bodies never digest");
+  assert(!composed.text.includes("idx-secret-body"), "the whole composition carries no run-log-idx content");
   // The agent-written text is DATA: it never lands in a protected layer.
   for (const l of composed.layers.filter((l) => l.protected)) {
     assert(!l.text.includes("owner-favourite-colour"), `protected layer ${l.id} stays free of store content`);

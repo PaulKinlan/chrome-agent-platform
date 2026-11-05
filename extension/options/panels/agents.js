@@ -1023,11 +1023,22 @@ export function composeSettingsTemplateCatalogue(backgroundAgents = []) {
       return template && a?.enabled === true ? { ...template, enabled: true } : template;
     })
     .filter(Boolean);
-  return [
+  const catalogue = [
     ...STARTER_TEMPLATE_IDS.map(agentTemplateById).filter(Boolean).map((t) => ({ ...t, starter: true })),
     ...AGENT_TEMPLATES.filter((t) => !starterIds.has(t.id)),
     ...backgroundTemplates.filter((t) => !AGENT_TEMPLATES.some((c) => c.id === t.id)),
   ];
+  // chrome-agent-platform-033ym: a curated template and a background skill can
+  // share an id (price-watcher is both), and the dedupe above keeps the curated
+  // record — which must therefore INHERIT the skill's enabled flag. Without it
+  // the picker cannot report "already enabled" and Add creates a duplicate
+  // scheduled agent on the same id. A disabled colliding skill marks nothing.
+  const enabledSkillIds = new Set(
+    backgroundTemplates.filter((t) => t.enabled === true).map((t) => t.id)
+  );
+  return catalogue.map((t) =>
+    t?.enabled !== true && enabledSkillIds.has(t?.id) ? { ...t, enabled: true } : t
+  );
 }
 
 export function renderBackgroundAgentPicker(agents, ctx) {

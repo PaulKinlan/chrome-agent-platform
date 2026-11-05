@@ -463,38 +463,38 @@ Deno.test("hangs in parallel phase", async () => {
   }
 });
 
-Deno.test("6z8yi: cancelling parent while parallel child is running leaves no orphan Deno or sleeper process", async () => {
+Deno.test("6z8yi/7az89: the runner's signal-handler group-kill reaps a defenseless parallel child on SIGTERM", async () => {
+  // 7az89: the ORIGINAL cancel test could not distinguish the runner's remedies
+  // at all — it SIGKILLed the parent (uncatchable, so process.on("exit") and the
+  // signal handlers provably never ran) and its fixture carried its own ppid
+  // watchdog, so the fixture's self-defense passed the test no matter which
+  // runner code was deleted (measured: deleting the onExit group kill and
+  // no-opping SIGHUP/SIGQUIT left the test green, identical to the pristine
+  // tip). This rework makes the RUNNER's remedy the mechanism under test,
+  // per coord's directive on the bead:
+  //   - the fixture is defenseless: no ppid monitor, no self-defense timeout;
+  //   - the sh liveness watchdog is opted out (CAP_PARALLEL_WATCHDOG=0, whose
+  //     only legitimate use is this test), so it cannot mask a deleted handler
+  //     by reaping the group 0.5s later;
+  //   - the cancel is a CATCHABLE signal (SIGTERM), so the runner's signal
+  //     handler — the group-kill — is the only code that can reap the fixture.
+  // Mutant: deleting the process.on("SIGTERM", onSigTerm) registration leaves
+  // the runner dying by default disposition with the detached group alive, and
+  // this test REDS on both pids (drill on the bead).
   const dir = await durableDir(`1k2a-parallel-cancel-test-${Deno.pid}-${crypto.randomUUID().slice(0, 8)}`);
   const pidFile = `${dir}/grandchild.pid`;
   const probeFile = `${dir}/zz-probe-cancel.test.ts`;
 
   const probeSrc = `
-const initialPpid = Deno.ppid;
-let sleeper = 0;
-const ppidTimer = setInterval(() => {
-  if (Deno.ppid !== initialPpid || Deno.ppid === 1) {
-    if (sleeper > 0) {
-      try { Deno.kill(sleeper, "SIGKILL"); } catch {}
-    }
-    Deno.exit(1);
-  }
-}, 50);
-setTimeout(() => {
-  if (sleeper > 0) {
-    try { Deno.kill(sleeper, "SIGKILL"); } catch {}
-  }
-  Deno.exit(1);
-}, 60000);
-
 const b = new Deno.Command("bash", {
   args: ["-c", "sleep 60 & echo $! > ${pidFile}.sleep"],
   stdout: "null",
   stderr: "null",
 });
 b.outputSync();
-sleeper = Number((await Deno.readTextFile("${pidFile}.sleep")).trim());
+const sleeper = Number((await Deno.readTextFile("${pidFile}.sleep")).trim());
 await Deno.writeTextFile("${pidFile}", JSON.stringify({ denoPid: Deno.pid, sleeperPid: sleeper }));
-Deno.test("hangs in parallel phase until parent cancel", async () => {
+Deno.test("hangs in parallel phase until the runner's signal handler reaps the group", async () => {
   setInterval(() => {}, 1000);
   await new Promise(() => {});
 });
@@ -509,6 +509,7 @@ Deno.test("hangs in parallel phase until parent cancel", async () => {
       cwd: ROOT,
       env: {
         CAP_PARALLEL_TEST_TIMEOUT_MS: timeoutMs,
+        CAP_PARALLEL_WATCHDOG: "0",
       },
       stdout: "piped",
       stderr: "piped",
@@ -528,8 +529,9 @@ Deno.test("hangs in parallel phase until parent cancel", async () => {
     assert(pids.denoPid && pids.denoPid > 0, "probe must have recorded denoPid");
     assert(pids.sleeperPid && pids.sleeperPid > 0, "probe must have recorded sleeperPid");
 
-    // Cancel parent abruptly with SIGKILL while the child is actively running
-    child.kill("SIGKILL");
+    // Cancel the runner with a CATCHABLE signal so its handler (the group-kill)
+    // is the mechanism under test; SIGKILL would bypass every handler.
+    child.kill("SIGTERM");
     await child.status;
 
     // Verify both Deno child and sleeper process exit promptly and do not survive as orphans
@@ -947,7 +949,7 @@ Deno.test("v6kut: computeLoadScale and loadScaledTimeout are bounded, load-respo
 
 Deno.test("xkm3b: 6z8yi parallel resilience tests derive probe readiness and reap budgets from loadScaledTimeout, avoiding fixed 5s timeouts under gate load", async () => {
   const src = await Deno.readTextFile("tests/parallel-phase-resilience.test.ts");
-  const test1 = src.slice(src.indexOf("6z8yi: cancelling parent"), src.indexOf("6z8yi/qvv7k:"));
+  const test1 = src.slice(src.indexOf("6z8yi/7az89:"), src.indexOf("6z8yi/qvv7k:"));
   const test2 = src.slice(src.indexOf("6z8yi/qvv7k:"), src.indexOf("1k2a/5nhz: parallel phase timeout with cold-boot delay"));
 
   assert(!test1.includes("for (let i = 0; i < 50; i++)"), "test1 must not use fixed 50-iteration (5s) readiness poll");
