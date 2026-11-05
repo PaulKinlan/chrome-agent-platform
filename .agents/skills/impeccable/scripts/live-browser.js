@@ -267,6 +267,7 @@
   const {
     own,
     pickable,
+    cachedRect,
     invalidateElementRects,
     desc,
     rectIsUsableAnchor,
@@ -1730,9 +1731,12 @@
 
   function layoutFlowChildren(parent) {
     if (!parent) return [];
+    // chrome-agent-platform-ffp7s: rects come from the SHARED hheu4 cache
+    // (cachedRect), not raw getBoundingClientRect — this runs per uncoalesced
+    // mousemove in insert mode, and pickable() just measured most of these.
     return [...parent.children]
       .filter(pickable)
-      .map((el) => ({ el, rect: el.getBoundingClientRect() }));
+      .map((el) => ({ el, rect: cachedRect(el) }));
   }
 
   function computeInsertPosition(clientX, clientY, rect, axis) {
@@ -7291,7 +7295,7 @@
       const parent = target.parentElement;
       const axis = detectInsertAxis(parent);
       const siblings = layoutFlowChildren(parent);
-      const rect = target.getBoundingClientRect();
+      const rect = cachedRect(target); // ffp7s: shared cache, not a raw layout read
       const resolved = resolveInsertHover({
         clientX: e.clientX,
         clientY: e.clientY,

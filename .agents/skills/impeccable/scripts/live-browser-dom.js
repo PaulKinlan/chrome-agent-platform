@@ -30,10 +30,29 @@
     // scroll, resize, DOM mutation, and explicit apply-completion so the
     // measurements are reused across the burst while never outliving a
     // layout change.
+    // chrome-agent-platform-ffp7s: hheu4 only routed pickable() through the
+    // cache; the insert-mode path (live-browser.js layoutFlowChildren +
+    // handleMouseMove's target read) kept calling getBoundingClientRect
+    // directly, so every uncoalesced mousemove still forced N+1 layouts.
+    // cachedRect() below is the SINGLE shared read path for this cache —
+    // every hot-path caller must go through it, never raw
+    // getBoundingClientRect, or the fix silently regresses per caller.
     let elementRectCache = new WeakMap();
     function invalidateElementRects() {
       // WeakMap has no clear(); a fresh map drops every entry.
       elementRectCache = new WeakMap();
+    }
+
+    // The shared cache read. Returns the same cached DOMRect snapshot for an
+    // element until the next invalidation, for EVERY caller.
+    function cachedRect(el) {
+      if (!el || typeof el.getBoundingClientRect !== 'function') return null;
+      let r = elementRectCache.get(el);
+      if (!r) {
+        r = el.getBoundingClientRect();
+        elementRectCache.set(el, r);
+      }
+      return r;
     }
     // Per-instance listeners: each instance's invalidator clears only its own
     // cache, so parallel instances stay correct (the cost is one listener set
@@ -49,12 +68,8 @@
       if (!el || el.nodeType !== 1) return false;
       if (tagsToSkip.has(String(el.tagName || '').toLowerCase())) return false;
       if (own(el)) return false;
-      let r = elementRectCache.get(el);
-      if (!r) {
-        r = el.getBoundingClientRect();
-        elementRectCache.set(el, r);
-      }
-      return r.width >= 20 && r.height >= 20;
+      const r = cachedRect(el);
+      return !!r && r.width >= 20 && r.height >= 20;
     }
 
     function desc(el) {
@@ -150,6 +165,7 @@
     return {
       own,
       pickable,
+      cachedRect,
       invalidateElementRects,
       desc,
       rectIsUsableAnchor,
