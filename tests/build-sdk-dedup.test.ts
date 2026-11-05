@@ -87,25 +87,25 @@ console.log("GUARD_PASSED");
       );
       
       // Candidate 1 (bound to zod@3)
-      await mkPkg(path.join(denoStore, "@modelcontextprotocol+sdk@1.31.0", "node_modules", "@modelcontextprotocol"), "sdk");
+      await mkPkg(path.join(denoStore, "@modelcontextprotocol+sdk@1.32.2", "node_modules", "@modelcontextprotocol"), "sdk");
       await Deno.symlink(
         path.join(denoStore, "zod@3.25.76", "node_modules", "zod"),
-        path.join(denoStore, "@modelcontextprotocol+sdk@1.31.0", "node_modules", "zod"),
+        path.join(denoStore, "@modelcontextprotocol+sdk@1.32.2", "node_modules", "zod"),
         { type: "dir" }
       );
 
       // Candidate 2 (bound to zod@4)
-      await mkPkg(path.join(denoStore, "@modelcontextprotocol+sdk@1.31.0_1", "node_modules", "@modelcontextprotocol"), "sdk");
+      await mkPkg(path.join(denoStore, "@modelcontextprotocol+sdk@1.32.2_1", "node_modules", "@modelcontextprotocol"), "sdk");
       await Deno.symlink(
         path.join(denoStore, "zod@4.4.3", "node_modules", "zod"),
-        path.join(denoStore, "@modelcontextprotocol+sdk@1.31.0_1", "node_modules", "zod"),
+        path.join(denoStore, "@modelcontextprotocol+sdk@1.32.2_1", "node_modules", "zod"),
         { type: "dir" }
       );
 
       // Symlink root sdk to Candidate 2 to test that requireFromRoot mismatch triggers the fallback loop!
       await Deno.mkdir(path.join(nm, "@modelcontextprotocol"), { recursive: true });
       await Deno.symlink(
-        path.join(denoStore, "@modelcontextprotocol+sdk@1.31.0_1", "node_modules", "@modelcontextprotocol", "sdk"),
+        path.join(denoStore, "@modelcontextprotocol+sdk@1.32.2_1", "node_modules", "@modelcontextprotocol", "sdk"),
         path.join(nm, "@modelcontextprotocol", "sdk"),
         { type: "dir" }
       );
@@ -143,17 +143,17 @@ console.log("GUARD_PASSED");
       );
       
       // Candidate 1 (bound to zod@4 instead of zod@3)
-      await mkPkg(path.join(denoStore, "@modelcontextprotocol+sdk@1.31.0", "node_modules", "@modelcontextprotocol"), "sdk");
+      await mkPkg(path.join(denoStore, "@modelcontextprotocol+sdk@1.32.2", "node_modules", "@modelcontextprotocol"), "sdk");
       await Deno.symlink(
         path.join(denoStore, "zod@4.4.3", "node_modules", "zod"),
-        path.join(denoStore, "@modelcontextprotocol+sdk@1.31.0", "node_modules", "zod"),
+        path.join(denoStore, "@modelcontextprotocol+sdk@1.32.2", "node_modules", "zod"),
         { type: "dir" }
       );
 
       // Symlink root sdk to Candidate 1
       await Deno.mkdir(path.join(nm, "@modelcontextprotocol"), { recursive: true });
       await Deno.symlink(
-        path.join(denoStore, "@modelcontextprotocol+sdk@1.31.0", "node_modules", "@modelcontextprotocol", "sdk"),
+        path.join(denoStore, "@modelcontextprotocol+sdk@1.32.2", "node_modules", "@modelcontextprotocol", "sdk"),
         path.join(nm, "@modelcontextprotocol", "sdk"),
         { type: "dir" }
       );
@@ -192,25 +192,25 @@ console.log("GUARD_PASSED");
       );
       
       // Candidate 1 (bound to zod@3)
-      await mkPkg(path.join(denoStore, "@modelcontextprotocol+sdk@1.31.0", "node_modules", "@modelcontextprotocol"), "sdk");
+      await mkPkg(path.join(denoStore, "@modelcontextprotocol+sdk@1.32.2", "node_modules", "@modelcontextprotocol"), "sdk");
       await Deno.symlink(
         path.join(denoStore, "zod@3.25.76", "node_modules", "zod"),
-        path.join(denoStore, "@modelcontextprotocol+sdk@1.31.0", "node_modules", "zod"),
+        path.join(denoStore, "@modelcontextprotocol+sdk@1.32.2", "node_modules", "zod"),
         { type: "dir" }
       );
 
       // Candidate 2 (bound to zod@4)
-      await mkPkg(path.join(denoStore, "@modelcontextprotocol+sdk@1.31.0_1", "node_modules", "@modelcontextprotocol"), "sdk");
+      await mkPkg(path.join(denoStore, "@modelcontextprotocol+sdk@1.32.2_1", "node_modules", "@modelcontextprotocol"), "sdk");
       await Deno.symlink(
         path.join(denoStore, "zod@4.4.3", "node_modules", "zod"),
-        path.join(denoStore, "@modelcontextprotocol+sdk@1.31.0_1", "node_modules", "zod"),
+        path.join(denoStore, "@modelcontextprotocol+sdk@1.32.2_1", "node_modules", "zod"),
         { type: "dir" }
       );
 
       // Symlink root sdk to Candidate 1 (this is the regression case: it's ALREADY bound to zod@3)
       await Deno.mkdir(path.join(nm, "@modelcontextprotocol"), { recursive: true });
       await Deno.symlink(
-        path.join(denoStore, "@modelcontextprotocol+sdk@1.31.0", "node_modules", "@modelcontextprotocol", "sdk"),
+        path.join(denoStore, "@modelcontextprotocol+sdk@1.32.2", "node_modules", "@modelcontextprotocol", "sdk"),
         path.join(nm, "@modelcontextprotocol", "sdk"),
         { type: "dir" }
       );
@@ -246,7 +246,7 @@ console.log("GUARD_PASSED");
       // A stale .deno store that already has SDK entries, so the mixed-layout
       // auto-heal branch runs (rmSync + `deno install`) rather than plain bd06.
       const denoStore = path.join(nm, ".deno");
-      await mkPkg(path.join(denoStore, "@modelcontextprotocol+sdk@1.31.0", "node_modules", "@modelcontextprotocol"), "sdk");
+      await mkPkg(path.join(denoStore, "@modelcontextprotocol+sdk@1.32.2", "node_modules", "@modelcontextprotocol"), "sdk");
       await mkPkg(path.join(denoStore, "zod@3.25.76", "node_modules"), "zod");
 
       await Deno.writeTextFile(path.join(tmp, "guard.mjs"), guardLogic);

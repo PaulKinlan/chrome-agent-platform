@@ -413,13 +413,13 @@ Deno.test("bbz3s: stale, mixed, flat and dangling AJV links fail closed against 
     // read Node's old resolver cache rather than the disk state under test.
     const root = Deno.makeTempDirSync({ dir: durableDir("bbz3s-live-resolution"), prefix: "layout-" });
     roots.push(root);
-    const sdkDir = join(root, "node_modules", ".deno", "@modelcontextprotocol+sdk@1.31.0", "node_modules", "@modelcontextprotocol", "sdk");
+    const sdkDir = join(root, "node_modules", ".deno", "@modelcontextprotocol+sdk@1.32.2", "node_modules", "@modelcontextprotocol", "sdk");
     const ajvDir = join(sdkDir, "node_modules", "ajv");
     const store = (version: string) => join(root, "node_modules", ".deno", `fast-uri@${version}`, "node_modules", "fast-uri");
     Deno.mkdirSync(join(ajvDir, "node_modules"), { recursive: true });
     Deno.mkdirSync(join(ajvDir, "dist", "runtime"), { recursive: true });
     Deno.writeTextFileSync(join(ajvDir, "dist", "runtime", "uri.js"), 'module.exports = require("fast-uri");\n');
-    Deno.writeTextFileSync(join(sdkDir, "package.json"), JSON.stringify({ name: "@modelcontextprotocol/sdk", version: options.sdk ?? "1.31.0" }));
+    Deno.writeTextFileSync(join(sdkDir, "package.json"), JSON.stringify({ name: "@modelcontextprotocol/sdk", version: options.sdk ?? "1.32.2" }));
     Deno.writeTextFileSync(join(ajvDir, "package.json"), JSON.stringify({ name: "ajv", version: "8.20.0" }));
     for (const version of versions) {
       Deno.mkdirSync(store(version), { recursive: true });
@@ -438,12 +438,12 @@ Deno.test("bbz3s: stale, mixed, flat and dangling AJV links fail closed against 
     }
     Deno.writeTextFileSync(join(root, "package-lock.json"), JSON.stringify({ packages: {
       "node_modules/fast-uri": { version: "3.1.9", integrity: "sha512-test" },
-      "node_modules/@modelcontextprotocol/sdk": { version: "1.31.0" },
+      "node_modules/@modelcontextprotocol/sdk": { version: "1.32.2" },
     } }));
     Deno.writeTextFileSync(join(root, "deno.lock"), JSON.stringify({ npm: {
       [`fast-uri@${options.deno ?? "3.1.9"}`]: { integrity: options.deno ? "sha512-old" : "sha512-test" },
-      "@modelcontextprotocol/sdk@1.31.0_zod@3.25.76": { integrity: "sha512-sdk" },
-      "@modelcontextprotocol/sdk@1.31.0_zod@4.4.3": { integrity: "sha512-sdk" },
+      "@modelcontextprotocol/sdk@1.32.2_zod@3.25.76": { integrity: "sha512-sdk" },
+      "@modelcontextprotocol/sdk@1.32.2_zod@4.4.3": { integrity: "sha512-sdk" },
     } }));
     return { root, sdkDir, expected: join(store("3.1.9"), "package.json") };
   };

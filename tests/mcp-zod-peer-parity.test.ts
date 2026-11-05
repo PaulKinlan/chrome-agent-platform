@@ -41,11 +41,11 @@ import {
   objectFromShape,
   getParseErrorMessage,
   safeParse,
-} from "../node_modules/.deno/@modelcontextprotocol+sdk@1.31.0/node_modules/@modelcontextprotocol/sdk/dist/esm/server/zod-compat.js";
+} from "../node_modules/.deno/@modelcontextprotocol+sdk@1.32.2/node_modules/@modelcontextprotocol/sdk/dist/esm/server/zod-compat.js";
 import {
   toJsonSchemaCompat,
-} from "../node_modules/.deno/@modelcontextprotocol+sdk@1.31.0/node_modules/@modelcontextprotocol/sdk/dist/esm/server/zod-json-schema-compat.js";
-import { McpServer } from "../node_modules/.deno/@modelcontextprotocol+sdk@1.31.0/node_modules/@modelcontextprotocol/sdk/dist/esm/server/mcp.js";
+} from "../node_modules/.deno/@modelcontextprotocol+sdk@1.32.2/node_modules/@modelcontextprotocol/sdk/dist/esm/server/zod-json-schema-compat.js";
+import { McpServer } from "../node_modules/.deno/@modelcontextprotocol+sdk@1.32.2/node_modules/@modelcontextprotocol/sdk/dist/esm/server/mcp.js";
 import { compileSchemaToZod } from "../extension/lib/pure.js";
 
 // Module-scope definition of cap-diff-core-from-source mirroring build.mjs:359-365

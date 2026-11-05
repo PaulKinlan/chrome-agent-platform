@@ -14,7 +14,7 @@
     "npm:@ai-sdk/google@^4.0.44": "4.0.44_zod@3.25.76",
     "npm:@ai-sdk/openai-compatible@^3.0.30": "3.0.31_zod@3.25.76",
     "npm:@ai-sdk/openai@^4.0.42": "4.0.42_zod@3.25.76",
-    "npm:@modelcontextprotocol/sdk@1.31.0": "1.31.0_zod@3.25.76",
+    "npm:@modelcontextprotocol/sdk@1.32.2": "1.32.2_zod@3.25.76",
     "npm:@types/node@^24.13.3": "24.13.3",
     "npm:acorn@^8.18.0": "8.18.0",
     "npm:agent-do@0.7": "0.7.0_@ai-sdk+anthropic@4.0.45__zod@4.4.3_@ai-sdk+google@4.0.44__zod@4.4.3_@ai-sdk+openai@4.0.42__zod@4.4.3",
@@ -307,14 +307,14 @@
       "os": ["win32"],
       "cpu": ["x64"]
     },
-    "@hono/node-server@2.1.1_hono@4.13.13": {
+    "@hono/node-server@2.1.1_hono@4.13.16": {
       "integrity": "sha512-ELuehkj5VCBdgEw9zs+ivkKwyzzUCSQuE96YmiPvn1ECBoZCczbFXJLeEGMTYjphP6gydh4pHMqEYPVMYUVgQg==",
       "dependencies": [
         "hono"
       ]
     },
-    "@modelcontextprotocol/sdk@1.31.0_zod@3.25.76": {
-      "integrity": "sha512-UvTMgnNlnIBO/22ob2RcVGDlcvOslQs8T59+FTGdA0L27a39fdGF/EDETNtDVK4DZGpwomlsYpRdA8UXcVL/pw==",
+    "@modelcontextprotocol/sdk@1.32.2_zod@3.25.76": {
+      "integrity": "sha512-SWsVtH/0vULSQStoZ6xxH2K09Li8fXYTMC64ZeogCdpZ3XSi1eCPOByV1OpuJxuI3OcmHhosDWYyii07tpPsLw==",
       "dependencies": [
         "@hono/node-server",
         "ajv",
@@ -335,8 +335,8 @@
         "zod-to-json-schema@3.25.2_zod@3.25.76"
       ]
     },
-    "@modelcontextprotocol/sdk@1.31.0_zod@4.4.3": {
-      "integrity": "sha512-UvTMgnNlnIBO/22ob2RcVGDlcvOslQs8T59+FTGdA0L27a39fdGF/EDETNtDVK4DZGpwomlsYpRdA8UXcVL/pw==",
+    "@modelcontextprotocol/sdk@1.32.2_zod@4.4.3": {
+      "integrity": "sha512-SWsVtH/0vULSQStoZ6xxH2K09Li8fXYTMC64ZeogCdpZ3XSi1eCPOByV1OpuJxuI3OcmHhosDWYyii07tpPsLw==",
       "dependencies": [
         "@hono/node-server",
         "ajv",
@@ -389,7 +389,7 @@
         "@ai-sdk/anthropic@4.0.45_zod@4.4.3",
         "@ai-sdk/google@4.0.44_zod@4.4.3",
         "@ai-sdk/openai@4.0.42_zod@4.4.3",
-        "@modelcontextprotocol/sdk@1.31.0_zod@4.4.3",
+        "@modelcontextprotocol/sdk@1.32.2_zod@4.4.3",
         "ai@7.0.66_zod@4.4.3",
         "ignore",
         "yaml",
@@ -468,8 +468,8 @@
         "get-intrinsic"
       ]
     },
-    "content-disposition@1.1.0": {
-      "integrity": "sha512-5jRCH9Z/+DRP7rkvY83B+yGIGX96OYdJmzngqnw2SBSxqCFPd0w2km3s5iawpGX8krnwSGmF0FW5Nhr0Hfai3g=="
+    "content-disposition@2.0.1": {
+      "integrity": "sha512-e+H0ZXHSWYrENhQzw1LPuP4oF5MzVKmDU6d3hxlvaPEYLLg62MxtQNPRx4SYSuYJSBUgnQIG4HIN2tEtNv7Dog=="
     },
     "content-type@1.0.5": {
       "integrity": "sha512-nTjqfcBFEipKdXCv4YDQWCfmcLZKm81ldF0pAopTvyrFGVbcR6P/VAAd5G7N+0tTr8QqiU0tFadD6FK4NtJwOA=="
@@ -584,7 +584,7 @@
         "eventsource-parser"
       ]
     },
-    "express-rate-limit@8.6.2_express@5.2.1": {
+    "express-rate-limit@8.6.2_express@5.3.0": {
       "integrity": "sha512-YH4ru+eOJxQABscKFfRCy9R7x9QFGdezclVMwwgFFndzS2Xnm0uo6B0ABZsLhcpeptGv2qvuJVWlQr9gQZoC3A==",
       "dependencies": [
         "debug",
@@ -592,13 +592,13 @@
         "ip-address"
       ]
     },
-    "express@5.2.1": {
-      "integrity": "sha512-hIS4idWWai69NezIdRt2xFVofaF4j+6INOpJlVOLDO8zXGpUVEVzIYk12UUi2JzjEzWL3IOAxcTubgz9Po0yXw==",
+    "express@5.3.0": {
+      "integrity": "sha512-qCqy1xSoaugxOD4IVHb1ZWdkvCF2W3aE2okKouWj8VwJ+ztskSiXoBnCSJqfKT+cVPJhuJqe9YLbY425+Zh00g==",
       "dependencies": [
         "accepts",
         "body-parser",
         "content-disposition",
-        "content-type@1.0.5",
+        "content-type@2.1.0",
         "cookie",
         "cookie-signature",
         "debug",
@@ -688,8 +688,8 @@
         "function-bind"
       ]
     },
-    "hono@4.13.13": {
-      "integrity": "sha512-CQ46U0ZkAGmbT/4UxdzzGJpacP2IeKgY4a5/tOI9AABbpOMfK739wfDXmv1usCk+3RkKj1hQy4/fjhiwa2xlrA=="
+    "hono@4.13.16": {
+      "integrity": "sha512-AOLOEhvrV+iH92xXCnFr/5+3KjPKcI3xP63XJtX5spAnkznPdHijlIsUTpi7/9EhWqrTCekw5c5zh1K+YsVw7A=="
     },
     "http-errors@2.0.1": {
       "integrity": "sha512-4FbRdAX+bSdmo4AUFuS0WNiPz8NgFt+r8ThgNWmlrjQjt1Q7ZR9+zTlce2859x4KSXrwIsaeTqDoKQmtP8pLmQ==",
@@ -1215,7 +1215,7 @@
         "npm:@ai-sdk/google@^4.0.44",
         "npm:@ai-sdk/openai-compatible@^3.0.30",
         "npm:@ai-sdk/openai@^4.0.42",
-        "npm:@modelcontextprotocol/sdk@1.31.0",
+        "npm:@modelcontextprotocol/sdk@1.32.2",
         "npm:@types/node@^24.13.3",
         "npm:acorn@^8.18.0",
         "npm:agent-do@0.7",
