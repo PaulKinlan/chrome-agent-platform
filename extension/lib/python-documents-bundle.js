@@ -949,6 +949,15 @@ export async function executeReadSpreadsheet({
   }
   const boundedMaxRows = Math.min(Math.max(1, Number(maxRows) || 1000), TABLE_LIMITS.maxRows);
 
+  // Build and frame-check the worker payload BEFORE any runtime work: the
+  // frame ceiling is a pure host-side property of the request (and has always
+  // refused oversized frames with this message - heavy-suite contract), and
+  // neither this check nor the zip seam below needs the runtime to exist.
+  const stdinPayload = JSON.stringify({ maxRows: boundedMaxRows }) + "---SPLIT---" + cleanB64;
+  if (stdinPayload.length > MAX_DOCUMENT_TRANSPORT_BYTES) {
+    return { ok: false, error: "document_oversized: encoded spreadsheet request exceeds the 256 KiB worker frame" };
+  }
+
   // chrome-agent-platform-01d0r: HOST-enforced budget seam — an over-budget
   // container is refused on its declared central-directory sizes BEFORE the
   // Pyodide runtime is even fetched; the generated Python keeps its own
@@ -967,10 +976,6 @@ export async function executeReadSpreadsheet({
 
   const stdout = [];
   runtime.setStdout({ batched: (chunk) => stdout.push(chunk) });
-  const stdinPayload = JSON.stringify({ maxRows: boundedMaxRows }) + "---SPLIT---" + cleanB64;
-  if (stdinPayload.length > MAX_DOCUMENT_TRANSPORT_BYTES) {
-    return { ok: false, error: "document_oversized: encoded spreadsheet request exceeds the 256 KiB worker frame" };
-  }
   setDocumentStdin(runtime, stdinPayload);
 
   try {
@@ -1143,6 +1148,13 @@ export async function executeReadDocument({
   const cleanDocType = String(docType).toLowerCase().includes("pptx") ? "pptx" : "docx";
   const boundedMaxChars = Math.min(Math.max(100, Number(maxCharacters) || 100000), 500000);
 
+  // Frame-check before any runtime work, then the host budget seam (see
+  // executeReadSpreadsheet for both orderings).
+  const stdinPayload = JSON.stringify({ docType: cleanDocType, maxCharacters: boundedMaxChars }) + "---SPLIT---" + cleanB64;
+  if (stdinPayload.length > MAX_DOCUMENT_TRANSPORT_BYTES) {
+    return { ok: false, error: "document_oversized: encoded document request exceeds the 256 KiB worker frame" };
+  }
+
   // chrome-agent-platform-01d0r: HOST-enforced budget seam (see
   // executeReadSpreadsheet) — refuse before the runtime is fetched.
   const zipBudget = checkDocumentZipBudget(cleanB64);
@@ -1159,10 +1171,6 @@ export async function executeReadDocument({
 
   const stdout = [];
   runtime.setStdout({ batched: (chunk) => stdout.push(chunk) });
-  const stdinPayload = JSON.stringify({ docType: cleanDocType, maxCharacters: boundedMaxChars }) + "---SPLIT---" + cleanB64;
-  if (stdinPayload.length > MAX_DOCUMENT_TRANSPORT_BYTES) {
-    return { ok: false, error: "document_oversized: encoded document request exceeds the 256 KiB worker frame" };
-  }
   setDocumentStdin(runtime, stdinPayload);
 
   try {
