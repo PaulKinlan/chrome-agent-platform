@@ -8,7 +8,12 @@
 //  3. the UI surface is a MASKED projection ({ keyId, configured, lastUsed,
 //     masked }) whose JSON serialization contains no plaintext;
 //  4. errors name the key id, never the value;
-//  5. tampered ciphertext fails closed (integrity, not silent truncation).
+//  5. tampered ciphertext fails closed (integrity, not silent truncation);
+//  6. the at-rest CLAIM itself is falsifiable (chrome-agent-platform-03p47):
+//     the stored record decrypts under EXACTLY the claimed derivation
+//     (PBKDF2-SHA-256 @ 210k over extension-id + per-install salt ->
+//     non-extractable AES-GCM-256, record id as additionalData) and under
+//     no near-miss parameter set, and two fresh installs never share a salt.
 
 import { assert, assertEquals, assertRejects, assertThrows } from "jsr:@std/assert@1";
 import {
@@ -112,6 +117,134 @@ Deno.test("jao1.1: a different extension derivation cannot decrypt the record (e
     () => stranger.getSecretRaw("BRAVE_SEARCH_API_KEY", { caller: "sw", access: SW_ACCESS }),
     Error,
   );
+});
+
+// ── 03p47: the at-rest claim is falsifiable ─────────────────────────────
+// The header of secret-vault.js CLAIMS: AES-GCM-256 at rest under a
+// PBKDF2-SHA-256 (210k iterations) key derived from extension id + per-install
+// random salt, records bound to their key id via additionalData. The scheme
+// field in the record is just a string — before this pin, a regression could
+// weaken the derivation (or store a “ciphertext” not produced by it) while
+// keeping the label, and every existing test stayed green. These tests
+// re-derive the key INDEPENDENTLY with the claimed parameter set and decrypt
+// the at-rest bytes: any drift in iterations, hash, key length, derivation
+// material or additionalData turns decryption into a rejection.
+
+const CLAIM_EXT_ID = "a".repeat(32) + "b";
+const CLAIM_SALT_B64 = "c3RhcnRlci1zYWx0LWZpeGVkLWZvci10ZXN0cw==";
+
+async function deriveClaimKey(opts: { iterations?: number; hash?: string; length?: number; material?: string; saltB64?: string } = {}) {
+  const enc = new TextEncoder();
+  const saltB64 = opts.saltB64 ?? CLAIM_SALT_B64;
+  const baseKey = await crypto.subtle.importKey(
+    "raw",
+    enc.encode(opts.material ?? `${CLAIM_EXT_ID}:${saltB64}`),
+    "PBKDF2",
+    false,
+    ["deriveKey"],
+  );
+  return crypto.subtle.deriveKey(
+    {
+      name: "PBKDF2",
+      salt: Uint8Array.from(atob(saltB64), (c) => c.charCodeAt(0)),
+      iterations: opts.iterations ?? 210_000,
+      hash: opts.hash ?? "SHA-256",
+    },
+    baseKey,
+    { name: "AES-GCM", length: opts.length ?? 256 },
+    false,
+    ["encrypt", "decrypt"],
+  );
+}
+
+Deno.test("03p47: the at-rest record decrypts under EXACTLY the claimed derivation, and under no near-miss of it", async () => {
+  const KEY_ID = "AT_REST_CLAIM_KEY";
+  const SECRET = "sk-claim-1234567890abcdef";
+  const storage = fakeStorage();
+  const vault = await createSecretVault({
+    storageArea: storage,
+    extensionId: CLAIM_EXT_ID,
+    installSaltB64: CLAIM_SALT_B64,
+  });
+  await vault.setSecret(KEY_ID, SECRET, { by: "sw" });
+
+  const recordKey = `cap:vault:secret:${KEY_ID}`;
+  const record: any = storage.map.get(recordKey);
+  assert(record?.iv && record?.ct, "the at-rest shape is an {iv, ct} envelope, not plaintext");
+  const iv = Uint8Array.from(atob(record.iv), (c) => c.charCodeAt(0));
+  const ct = Uint8Array.from(atob(record.ct), (c) => c.charCodeAt(0));
+  const aad = new TextEncoder().encode(recordKey);
+
+  // The CLAIMED parameter set decrypts the at-rest bytes back to the secret.
+  const claimedKey = await deriveClaimKey();
+  const plain = new TextDecoder().decode(
+    await crypto.subtle.decrypt(
+      { name: "AES-GCM", iv: iv as unknown as BufferSource, additionalData: aad as unknown as BufferSource },
+      claimedKey,
+      ct as unknown as BufferSource,
+    ),
+  );
+  assertEquals(plain, SECRET,
+    "at-rest bytes are AES-GCM-256 ciphertext under PBKDF2-SHA-256/210k over extension-id + install salt");
+
+  // Discrimination guard (961k5 lesson): every near-miss of the claim must
+  // FAIL to decrypt — otherwise the green above would not be about the claim.
+  const nearMisses: Array<[string, CryptoKey, BufferSource]> = [
+    ["one fewer iteration", await deriveClaimKey({ iterations: 209_999 }), aad as unknown as BufferSource],
+    ["SHA-512 instead of SHA-256", await deriveClaimKey({ hash: "SHA-512" }), aad as unknown as BufferSource],
+    ["AES-128 instead of AES-256", await deriveClaimKey({ length: 128 }), aad as unknown as BufferSource],
+    ["a different install salt", await deriveClaimKey({ saltB64: "YW5vdGhlci1zYWx0LWVudGlyZWx5LWRpZmZlcmVudA==" }), aad as unknown as BufferSource],
+    ["a different extension id", await deriveClaimKey({ material: `${"b".repeat(32)}c:${CLAIM_SALT_B64}` }), aad as unknown as BufferSource],
+    ["the right key but another record's additionalData", claimedKey, new TextEncoder().encode("cap:vault:secret:SOME_OTHER_KEY") as unknown as BufferSource],
+  ];
+  for (const [label, key, additionalData] of nearMisses) {
+    await assertRejects(
+      () => crypto.subtle.decrypt(
+        { name: "AES-GCM", iv: iv as unknown as BufferSource, additionalData },
+        key,
+        ct as unknown as BufferSource,
+      ),
+      Error,
+      undefined,
+      `a derivation differing only by ${label} must NOT decrypt the at-rest record`,
+    );
+  }
+});
+
+Deno.test("03p47: the install salt is per-install RANDOM, persisted, and reused on reopen — two installs never share a key", async () => {
+  const EXT = CLAIM_EXT_ID;
+  const SECRET = "sk-cross-1234";
+  const s1 = fakeStorage();
+  const s2 = fakeStorage();
+  // No installSaltB64: both vaults run the REAL ensureInstallSalt path.
+  const v1 = await createSecretVault({ storageArea: s1, extensionId: EXT });
+  const v2 = await createSecretVault({ storageArea: s2, extensionId: EXT });
+
+  const salt1 = s1.map.get("cap:vault:install-salt");
+  const salt2 = s2.map.get("cap:vault:install-salt");
+  assert(typeof salt1 === "string" && salt1.length > 0, "install 1 persists its salt");
+  assert(typeof salt2 === "string" && salt2.length > 0, "install 2 persists its salt");
+  assert(salt1 !== salt2, "two fresh installs must NOT share a salt (per-install random)");
+  assert(atob(salt1).length >= 16, "the salt carries at least 128 bits of entropy");
+
+  // Salt binding through the public API: install 1's record copied into
+  // install 2's storage (same extension id, different salt) must not open.
+  await v1.setSecret("CROSS_INSTALL_KEY", SECRET, { by: "sw" });
+  s2.map.set("cap:vault:secret:CROSS_INSTALL_KEY", s1.map.get("cap:vault:secret:CROSS_INSTALL_KEY"));
+  await assertRejects(
+    () => v2.getSecretRaw("CROSS_INSTALL_KEY", { caller: "sw", access: SW_ACCESS }),
+    Error,
+    undefined,
+    "a different install's salt must not derive install 1's key",
+  );
+
+  // Neither snapshot carries the plaintext, and reopening the SAME storage
+  // reuses the persisted salt (deterministic within one install).
+  assert(!JSON.stringify([...s1.map.entries()]).includes(SECRET), "install 1 snapshot: no plaintext");
+  assert(!JSON.stringify([...s2.map.entries()]).includes(SECRET), "install 2 snapshot: no plaintext");
+  const v1again = await createSecretVault({ storageArea: s1, extensionId: EXT });
+  const got = await v1again.getSecretRaw("CROSS_INSTALL_KEY", { caller: "sw", access: SW_ACCESS });
+  assertEquals(got.value, SECRET, "the same install reopens its own record via the persisted salt");
 });
 
 Deno.test("jao1.1: masked projection — shape, tail-only mask, and zero plaintext in its serialization", async () => {
