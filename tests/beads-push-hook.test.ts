@@ -13,6 +13,16 @@
 // These tests run the extracted helper directly with a fake `bd` on PATH, so
 // the loud-failure behaviour is asserted synchronously (the hook backgrounds
 // the helper, so its stderr timing through `git commit` is not deterministic).
+//
+// chrome-agent-platform-qhuf2 SUPERSESSION (deliberate, reviewed): quiet-on-
+// success now applies to the BOUNDED path — the helper routes through
+// scripts/bd-sync-bound.sh, and a successful bounded push is fully silent.
+// A checkout WITHOUT the wrapper falls back to a raw `bd dolt push` (a beads
+// sync must never silently stop, f151's core), but that push is UNBOUNDED —
+// exactly the hang that held bd-sync.lock for 25+ minutes on 2026-10-31 — so
+// it may not be silent: the fallback prints a named UNBOUNDED warning on
+// stderr and into the log. The old contract (silent raw success) is pinned no
+// more; the new one is pinned below and in tests/bd-sync-bound.test.ts.
 
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { spawnSync } from "node:child_process";
@@ -78,15 +88,54 @@ Deno.test("f151: a failing bd dolt push is LOUD — exit 0, one named stderr lin
   }
 });
 
-Deno.test("f151: a successful bd dolt push stays quiet and still exits 0", async () => {
+Deno.test("f151+qhuf2: a successful BOUNDED push stays quiet and still exits 0", async () => {
+  const s = await scratch();
+  try {
+    // The bounded path: the helper finds scripts/bd-sync-bound.sh (the real
+    // wrapper, copied in) and routes through it. The wrapper needs flock +
+    // timeout (system PATH) and a writable HOME for its defaults; the lock and
+    // sidecar are pinned into the scratch dir.
+    await mkdir(path.join(s.dir, "scripts"), { recursive: true });
+    await writeFile(
+      path.join(s.dir, "scripts", "bd-sync-bound.sh"),
+      await readFile(path.join(REPO_ROOT, "scripts", "bd-sync-bound.sh"), "utf8"),
+    );
+    await chmod(path.join(s.dir, "scripts", "bd-sync-bound.sh"), 0o755);
+    const r = spawnSync("sh", [HELPER], {
+      cwd: s.dir,
+      encoding: "utf8",
+      env: {
+        ...s.env,
+        HOME: s.dir,
+        CAP_BD_SYNC_LOCK: path.join(s.dir, "sync.lock"),
+        CAP_BD_SYNC_HOLDER: path.join(s.dir, "holder"),
+      },
+    });
+    assertEquals(r.status, 0, r.stderr);
+    assertEquals(r.stdout ?? "", "", "no console output on a successful bounded push");
+    assertEquals(r.stderr ?? "", "", "no console output on a successful bounded push");
+    const log = await readFile(path.join(s.dir, ".git", "beads-push.log"), "utf8");
+    assertEquals(log, "", "the success log is empty (nothing was printed)");
+  } finally {
+    await rm(s.dir, { recursive: true, force: true });
+  }
+});
+
+Deno.test("qhuf2: a wrapper-LESS checkout's raw fallback is LOUD — UNBOUNDED named on stderr AND in the log, exit 0, push still runs", async () => {
+  // The deliberate supersession of f151's silent-raw-success: an unbounded push
+  // (no wrapper in this checkout) may happen — a beads sync must never silently
+  // stop — but it must SAY SO, because an unbounded push is the 25-minute
+  // lock-hold hang shape (qhuf2).
   const s = await scratch();
   try {
     const r = spawnSync("sh", [HELPER], { cwd: s.dir, encoding: "utf8", env: s.env });
-    assertEquals(r.status, 0, r.stderr);
-    assertEquals(r.stdout ?? "", "", "no console output on success");
-    assertEquals(r.stderr ?? "", "", "no console output on success");
+    assertEquals(r.status, 0, `the push helper must never block a commit: ${r.stderr}`);
+    const err = r.stderr ?? "";
+    assert(/UNBOUNDED/.test(err), `the raw fallback must name itself loudly on stderr: ${err}`);
+    assert(/bd-sync-bound\.sh/.test(err), `the warning must name the missing wrapper: ${err}`);
+    assert(/qhuf2/.test(err), `the warning must name the bead so it is actionable: ${err}`);
     const log = await readFile(path.join(s.dir, ".git", "beads-push.log"), "utf8");
-    assertEquals(log, "", "the success log is empty (nothing was printed)");
+    assert(log.includes("UNBOUNDED"), `the warning must be captured in the push log too: ${log}`);
   } finally {
     await rm(s.dir, { recursive: true, force: true });
   }

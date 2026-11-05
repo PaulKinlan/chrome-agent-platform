@@ -110,7 +110,20 @@ the retired tasks tracker, the retired done tracker, the retired known-issues fi
 kept only for history. Never create, update, or consult them for state;
 a markdown tracker entry is not a task. Everything lives in beads, synced to
 the GitHub remote via `bd dolt push` (a post-commit hook does this
-automatically; run it manually after beads-only changes).
+automatically; run it manually after beads-only changes). Manual syncs go
+through `scripts/bd-sync-bound.sh push|pull` (chrome-agent-platform-qhuf2):
+the fleet shim bounds the flock WAIT but never the HOLDER, so a hung git
+send-pack held the lock and the dolt DB for 25+ minutes while every write
+failed with the misleading "database is locked" — the wrapper bounds the
+hold (exit 124/137 = hung network, not a bd failure) and NAMES the live
+holder pid to kill (hub-side fix: fleet-cilm5). Every project-owned sync
+entry point routes through the wrapper: the post-commit hook calls it
+directly, and where the wrapper is missing from a checkout the hook falls
+back to a raw push LOUDLY — a named WARNING on stderr, never silently. A
+lane that runs `bd dolt push` directly steps outside the project-side
+bound (only the hub-owned shim can bound that path). The holder sidecar is
+written only AFTER lock acquisition, so the kill guidance names the holder
+and can never point at a waiting lane.
 
 The reference hooks are tracked in `scripts/git-hooks/`: `pre-commit`
 refreshes `.beads/issues.jsonl` into the checkout being committed;
