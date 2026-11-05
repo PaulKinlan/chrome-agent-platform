@@ -96,6 +96,33 @@ Deno.test("nco2: unenumerated scripts under scripts/ fail closed", () => {
   assert(/not enumerated/.test(libHelper.mechanism), libHelper.mechanism);
 });
 
+Deno.test("maqob: scripts/**.sh map by text reference like every other spawned script; unreferenced .sh fail closed", () => {
+  // The qhuf2 shape: a shell wrapper and a git hook, both spawned by path and both
+  // literally referenced by their test — before maqob, isScriptsHarness matched
+  // only .ts|.mjs|.js, so they fell through to the generic 'genuinely unmappable'
+  // default and EVERY shell-script change paid the full gate despite real coverage.
+  assertEquals(isScriptsHarness("scripts/bd-sync-bound.sh"), true);
+  assertEquals(isScriptsHarness("scripts/git-hooks/beads-push.sh"), true);
+
+  const referenced = classifyUncovered("scripts/bd-sync-bound.sh", {
+    referrers: ["tests/bd-sync-bound.test.ts"],
+  });
+  assertEquals(referenced.tests, ["tests/bd-sync-bound.test.ts"],
+    "a referenced .sh maps to its referring tests (mechanism 4, text-referenced scripts)");
+  assert(/named by tests/.test(referenced.mechanism), referenced.mechanism);
+
+  // No tree guard scans .sh (harnessFiles() is scripts/*.ts only), so an
+  // UNREFERENCED .sh must fail closed exactly like an unenumerated .mjs.
+  assertEquals(isGuardEnumeratedScript("scripts/bd-sync-bound.sh"), false);
+  const unreferenced = classifyUncovered("scripts/git-hooks/some-unreferenced-hook.sh");
+  assertEquals(unreferenced.tests, [], "an unreferenced .sh must fail closed");
+  assert(/not enumerated/.test(unreferenced.mechanism), unreferenced.mechanism);
+
+  // The extension widens nothing else: non-shell, non-script paths are untouched.
+  assertEquals(isScriptsHarness("scripts/notes.md"), false);
+  assertEquals(isScriptsHarness("extension/lib/script-host.js"), false, "only scripts/ is harness territory");
+});
+
 Deno.test("3p3e.12: ONLY the two shipped Export HTML documents map to the exact DOM-entry guard", () => {
   const allowed = ["extension/ntp/ntp.html", "extension/artifact/artifact.html"];
   assertEquals(Object.keys(HTML_EXPORT_ENTRY_GUARDS).sort(), allowed.sort());
