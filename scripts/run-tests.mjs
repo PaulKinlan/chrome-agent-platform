@@ -94,8 +94,12 @@ function runParallel(files, phase = "parallel phase", durationsOut = null, kille
     // Watchdog (qvv7k): monitor runner PID. If this runner process dies unexpectedly
     // (e.g. uncatchable SIGKILL from a gate timeout or reaper), terminate the detached
     // child's process group so no test descendants survive reparented to init (PID 1).
+    // CAP_PARALLEL_WATCHDOG=0 opts out — the ONLY legitimate use is
+    // chrome-agent-platform-7az89's cancel test, which must isolate the signal-handler
+    // group-kill (below) from this watchdog so deleting the handler registration is
+    // observable. Production never sets it: the default stays watchdog ON (fail closed).
     let watchdog = null;
-    if (child.pid) {
+    if (child.pid && process.env.CAP_PARALLEL_WATCHDOG !== "0") {
       try {
         watchdog = spawn(
           "sh",
