@@ -137,9 +137,13 @@ export function isAgentTooling(rel) {
   return /^\.agents[\\/]/.test(rel.replace(/\\/g, "/"));
 }
 
-/** A harness under scripts/ that no test imports. */
+/** A harness under scripts/ that no test imports. Includes .sh: git hooks and
+ * shell wrappers (scripts/git-hooks/beads-push.sh, scripts/bd-sync-bound.sh) are
+ * spawned by path exactly like the .ts/.mjs harnesses, and before maqob they
+ * fell through to the generic unmappable default even when a test literally
+ * referenced them — making every shell-script change fast-uncertifiable. */
 export function isScriptsHarness(rel) {
-  return /^scripts[\\/].+\.(ts|mjs|js)$/.test(rel.replace(/\\/g, "/"));
+  return /^scripts[\\/].+\.(ts|mjs|js|sh)$/.test(rel.replace(/\\/g, "/"));
 }
 
 /** A fixture under tests/fixtures/ that no test imports statically. */
@@ -316,8 +320,8 @@ export function classifyUncovered(rel, { referrers = [] } = {}) {
       };
     }
     // NOT guard-enumerated: harnessFiles() scans scripts/*.ts only, so a .mjs
-    // helper or a subdirectory file is NOT inspected by those guards.
-    // Fails closed to the full suite.
+    // helper, a subdirectory file, or a .sh hook/wrapper is NOT inspected by
+    // those guards. Fails closed to the full suite.
     return {
       mechanism:
         "scripts/ file not enumerated by the tree-walking guards (they scan top-level scripts/*.ts only) " +
