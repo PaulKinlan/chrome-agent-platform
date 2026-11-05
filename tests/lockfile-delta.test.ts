@@ -423,6 +423,47 @@ Deno.test("lezl0 ROUND 2: a JSR hash-only change is FULL, and so is a remote URL
   assertStringIncludes(remote.reason, "deno.land");
 });
 
+Deno.test("m3oa0: a jsr VERSION bump or remote ADDITION with a resolving importer certifies as closure + guard", () => {
+  // chrome-agent-platform-m3oa0 re-validation: the dead importer-resolution branch
+  // (edgeRequired names never passed to the closure, so the refusal stated a fact
+  // never checked) was fixed by the round-1/2/3 rework — edgeRequired names now
+  // reach closureFor via `ask`, and a version-only bump (no integrity move) certifies
+  // as a subset when a real importer resolves it. These pins hold the required-
+  // resolution branch open: the only other jsr/remote pins are the hash-only FULLs.
+  const base = denoLock({ jsr: { "@scope/pkg@1.0.0": { integrity: "sha256-aaa", dependencies: [] } } });
+  const tip = denoLock({ jsr: { "@scope/pkg@1.1.0": { integrity: "sha256-bbb", dependencies: [] } } });
+  const resolved = classifyLockfileDelta(
+    { denoLock: { base, tip } },
+    { coreSuites: CORE, closureFor: closureStub({ "@scope/pkg": ["extension/lib/pkg-user.js"] }) },
+  );
+  assertEquals(resolved.kind, "subset", `a version-only jsr bump whose importer resolves must certify: ${resolved.reason}`);
+  assertEquals(resolved.packages, ["@scope/pkg"]);
+  assertEquals(resolved.importers["@scope/pkg"], ["extension/lib/pkg-user.js"]);
+  assert(resolved.suites.includes("tests/closure.test.ts"), "the importer closure must be selected");
+
+  const baseRemote = denoLock({ extra: { remote: { "https://deno.land/x/thing@1/mod.ts": "aaaa" } } });
+  const tipRemote = denoLock({ extra: { remote: {
+    "https://deno.land/x/thing@1/mod.ts": "aaaa",
+    "https://esm.sh/new@2/x.ts": "dddd",
+  } } });
+  const remoteAdded = classifyLockfileDelta(
+    { denoLock: { base: baseRemote, tip: tipRemote } },
+    { coreSuites: CORE, closureFor: closureStub({ "https://esm.sh/new@2/x.ts": ["extension/lib/remote-user.js"] }) },
+  );
+  assertEquals(remoteAdded.kind, "subset", `a remote ADDITION whose importer resolves must certify: ${remoteAdded.reason}`);
+  assertEquals(remoteAdded.importers["https://esm.sh/new@2/x.ts"], ["extension/lib/remote-user.js"]);
+
+  // The refusal half: the SAME bump with nothing resolving it still refuses — and the
+  // refusal now states a fact the closure WAS consulted for (the m3oa0 complaint).
+  const refused = classifyLockfileDelta(
+    { denoLock: { base, tip } },
+    { coreSuites: CORE, closureFor: closureStub({}) },
+  );
+  assertEquals(refused.kind, "full");
+  assertStringIncludes(refused.reason, "@scope/pkg");
+  assertEquals(refused.unresolved, ["@scope/pkg"]);
+});
+
 Deno.test("lezl0 ROUND 3: what still certifies, now that any changed integrity value is FULL", () => {
   // Coord's round-3 ruling is deliberately conservative: an entry whose integrity VALUE changed is
   // FULL even when its version moved with it, because the changed hash is verified by nothing in the
