@@ -6,6 +6,7 @@
 // receive these modules (isolation guard).
 
 import { sha256Hex, createSha256 } from "./pure.js";
+import { PYTHON_EXEC_BOUNDS, withTimeout } from "./python-execution.js";
 import { validatePurePythonWheel } from "./python-wheel-validator.js";
 import { TABLE_LIMITS, TABLE_VERSION, TABLE_MEDIA_TYPE, canonicalTableJson } from "./table-core.js";
 import { toCanonicalTable, createTabularArtifact } from "./table-extractor.js";
@@ -31,6 +32,114 @@ export const DOCUMENTS_BUNDLE_PINS = Object.freeze({
 });
 
 export const MAX_DOCUMENT_TRANSPORT_BYTES = 256 * 1024;
+
+// chrome-agent-platform-01d0r: the HOST-enforced OOXML container budget.
+// The same numeric budgets also live inside the generated Python readers
+// (MAX_ZIP_MEMBER_BYTES / MAX_TOTAL_ZIP_BYTES / MAX_ZIP_MEMBERS), but that
+// enforcement runs INSIDE Pyodide — the same in-process trust context as the
+// parser it is supposed to fence. This seam runs in the service worker, on
+// the raw container bytes, BEFORE the Pyodide runtime is even fetched: a
+// crafted document that declares an over-budget inflation is refused without
+// the parser ever starting. tests/python-documents-host-seam.test.ts pins the
+// JS budget to the generated Python literals so the two cannot drift.
+export const DOCUMENT_ZIP_BUDGET = Object.freeze({
+  maxMembers: 256,
+  maxMemberBytes: 10 * 1024 * 1024,
+  maxTotalUncompressedBytes: 12 * 1024 * 1024,
+});
+
+function base64ToBytes(b64) {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes;
+}
+
+/**
+ * Host-side zip/OOXML container check (chrome-agent-platform-01d0r). Walks
+ * the end-of-central-directory record and the central directory of the RAW
+ * container bytes and enforces DOCUMENT_ZIP_BUDGET on the DECLARED
+ * uncompressed sizes — the zip-bomb shape — before any parser runs. Budget
+ * refusals speak the module's established document_incomplete vocabulary
+ * (incomplete: true) so owners and the heavy-suite contract see one language
+ * whether the host seam or the Python backstop refused. Structural problems
+ * the bounded readers cannot represent at all (non-zip bytes, ZIP64,
+ * encrypted entries, corrupt or self-disagreeing directories) fail closed as
+ * document_invalid. Returns { ok: true, members, totalUncompressedBytes } or
+ * a refusal object.
+ */
+export function checkDocumentZipBudget(base64) {
+  let bytes;
+  try {
+    bytes = base64ToBytes(String(base64 ?? ""));
+  } catch {
+    return { ok: false, error: "document_invalid: attachment is not valid base64" };
+  }
+  // Locate EOCD (signature 0x06054b50) scanning backwards over the comment window.
+  let eocd = -1;
+  const floor = Math.max(0, bytes.length - 22 - 0xffff);
+  for (let i = bytes.length - 22; i >= floor; i--) {
+    if (bytes[i] === 0x50 && bytes[i + 1] === 0x4b && bytes[i + 2] === 0x05 && bytes[i + 3] === 0x06) {
+      eocd = i;
+      break;
+    }
+  }
+  if (eocd < 0) {
+    return { ok: false, error: "document_invalid: not a ZIP/OOXML container (no end-of-central-directory record)" };
+  }
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const totalEntries = dv.getUint16(eocd + 10, true);
+  const cdSize = dv.getUint32(eocd + 12, true);
+  const cdOffset = dv.getUint32(eocd + 16, true);
+  if (totalEntries > DOCUMENT_ZIP_BUDGET.maxMembers) {
+    return { ok: false, incomplete: true, error: `document_incomplete: the container declares ${totalEntries} ZIP members, exceeding the ${DOCUMENT_ZIP_BUDGET.maxMembers}-member reader budget (refused host-side before parsing)` };
+  }
+  if (totalEntries === 0xffff || cdSize === 0xffffffff || cdOffset === 0xffffffff) {
+    return { ok: false, error: "document_invalid: ZIP64 containers are outside the bounded readers' support and refused fail-closed" };
+  }
+  if (cdOffset + cdSize > bytes.length) {
+    return { ok: false, error: "document_invalid: central directory extends past the end of the container" };
+  }
+  let pos = cdOffset;
+  let seen = 0;
+  let total = 0;
+  const cdEnd = cdOffset + cdSize;
+  while (pos + 46 <= cdEnd) {
+    if (dv.getUint32(pos, true) !== 0x02014b50) {
+      return { ok: false, error: "document_invalid: corrupt central directory entry" };
+    }
+    const flags = dv.getUint16(pos + 8, true);
+    if (flags & 0x1) {
+      return { ok: false, error: "document_invalid: encrypted zip entries are outside the bounded readers' support" };
+    }
+    const uncompressed = dv.getUint32(pos + 24, true);
+    if (uncompressed === 0xffffffff) {
+      return { ok: false, error: "document_invalid: ZIP64 entry sizes are outside the bounded readers' support" };
+    }
+    if (uncompressed > DOCUMENT_ZIP_BUDGET.maxMemberBytes) {
+      return { ok: false, incomplete: true, error: `document_incomplete: a ZIP member declares ${uncompressed} uncompressed bytes, exceeding the ${DOCUMENT_ZIP_BUDGET.maxMemberBytes}-byte reader budget (refused host-side before parsing)` };
+    }
+    total += uncompressed;
+    if (total > DOCUMENT_ZIP_BUDGET.maxTotalUncompressedBytes) {
+      // Message-compatible with the generated Python backstop's refusal
+      // ("total uncompressed ZIP content exceeds the reader budget") so the
+      // owner-facing contract is identical whichever layer refused first.
+      return { ok: false, incomplete: true, error: `document_incomplete: total uncompressed ZIP content exceeds the reader budget (${total} bytes declared in the central directory; refused host-side before parsing)` };
+    }
+    seen += 1;
+    if (seen > DOCUMENT_ZIP_BUDGET.maxMembers) {
+      return { ok: false, incomplete: true, error: `document_incomplete: the container holds more than ${DOCUMENT_ZIP_BUDGET.maxMembers} ZIP members (refused host-side before parsing)` };
+    }
+    const nameLen = dv.getUint16(pos + 28, true);
+    const extraLen = dv.getUint16(pos + 30, true);
+    const commentLen = dv.getUint16(pos + 32, true);
+    pos += 46 + nameLen + extraLen + commentLen;
+  }
+  if (seen !== totalEntries) {
+    return { ok: false, error: "document_invalid: central directory entry count disagrees with the end-of-central-directory record" };
+  }
+  return { ok: true, members: seen, totalUncompressedBytes: total };
+}
 
 // Pyodide's stdin bridge consumes bounded chunks. Supplying a whole compressed
 // document in one callback can truncate the base64 payload at its internal
@@ -826,6 +935,7 @@ export async function executeReadSpreadsheet({
   createAssetFn = null,
   attachmentName = "spreadsheet.xlsx",
   origin = "master",
+  timeoutMs = PYTHON_EXEC_BOUNDS.maxRunMs,
 }) {
   if (!base64Data || typeof base64Data !== "string") {
     return { ok: false, error: "invalid_input: missing base64 spreadsheet data" };
@@ -838,6 +948,13 @@ export async function executeReadSpreadsheet({
     };
   }
   const boundedMaxRows = Math.min(Math.max(1, Number(maxRows) || 1000), TABLE_LIMITS.maxRows);
+
+  // chrome-agent-platform-01d0r: HOST-enforced budget seam — an over-budget
+  // container is refused on its declared central-directory sizes BEFORE the
+  // Pyodide runtime is even fetched; the generated Python keeps its own
+  // budget as defense-in-depth inside the parser context.
+  const zipBudget = checkDocumentZipBudget(cleanB64);
+  if (!zipBudget.ok) return zipBudget;
 
   const runtime = typeof runtimeProvider === "function" ? await runtimeProvider() : null;
   if (!runtime) {
@@ -857,9 +974,17 @@ export async function executeReadSpreadsheet({
   setDocumentStdin(runtime, stdinPayload);
 
   try {
-    await runtime.runPythonAsync(READ_SPREADSHEET_SCRIPT);
+    // 01d0r: the same wall-clock fence python.execute runs under — the readers
+    // previously called runPythonAsync bare. It cannot preempt a synchronous
+    // CPU-bound parse (the size seams above bound the WORK; see R15 for the
+    // fuel-counter residual), but a hung or awaiting interpreter no longer
+    // wedges the route forever.
+    await withTimeout(runtime.runPythonAsync(READ_SPREADSHEET_SCRIPT), timeoutMs);
   } catch (err) {
     const message = String(err?.message ?? err);
+    if (message.includes("python_run_timeout")) {
+      return { ok: false, error: `document_timeout: the bounded reader exceeded its ${timeoutMs} ms wall-clock fence` };
+    }
     const incomplete = message.match(/document_incomplete: ([^\n]+)/);
     if (incomplete) return { ok: false, incomplete: true, error: `document_incomplete: ${incomplete[1]}` };
     return { ok: false, error: `spreadsheet_parse_failed: ${message}` };
@@ -1003,6 +1128,7 @@ export async function executeReadDocument({
   attachmentName = "document",
   untrusted = false,
   untrustedToken = null,
+  timeoutMs = PYTHON_EXEC_BOUNDS.maxRunMs,
 }) {
   if (!base64Data || typeof base64Data !== "string") {
     return { ok: false, error: "invalid_input: missing base64 document data" };
@@ -1016,6 +1142,11 @@ export async function executeReadDocument({
   }
   const cleanDocType = String(docType).toLowerCase().includes("pptx") ? "pptx" : "docx";
   const boundedMaxChars = Math.min(Math.max(100, Number(maxCharacters) || 100000), 500000);
+
+  // chrome-agent-platform-01d0r: HOST-enforced budget seam (see
+  // executeReadSpreadsheet) — refuse before the runtime is fetched.
+  const zipBudget = checkDocumentZipBudget(cleanB64);
+  if (!zipBudget.ok) return zipBudget;
 
   const runtime = typeof runtimeProvider === "function" ? await runtimeProvider() : null;
   if (!runtime) {
@@ -1035,9 +1166,14 @@ export async function executeReadDocument({
   setDocumentStdin(runtime, stdinPayload);
 
   try {
-    await runtime.runPythonAsync(READ_DOCUMENT_SCRIPT);
+    // 01d0r: wall-clock fence parity with python.execute (see the
+    // executeReadSpreadsheet comment for the honest limit).
+    await withTimeout(runtime.runPythonAsync(READ_DOCUMENT_SCRIPT), timeoutMs);
   } catch (err) {
     const message = String(err?.message ?? err);
+    if (message.includes("python_run_timeout")) {
+      return { ok: false, error: `document_timeout: the bounded reader exceeded its ${timeoutMs} ms wall-clock fence` };
+    }
     const incomplete = message.match(/document_incomplete: ([^\n]+)/);
     if (incomplete) return { ok: false, incomplete: true, error: `document_incomplete: ${incomplete[1]}` };
     return { ok: false, error: `document_parse_failed: ${message}` };

@@ -25,7 +25,12 @@ export const PYTHON_EXEC_BOUNDS = Object.freeze({
 const encoder = new TextEncoder();
 function utf8Bytes(value) { return encoder.encode(String(value ?? "")); }
 
-function withTimeout(promise, ms) {
+/** Shared wall-clock fence (chrome-agent-platform-01d0r: also used by the
+ * OOXML document readers). Best-effort by nature: it cannot preempt a
+ * CPU-bound synchronous WASM parse — it fires when the runtime yields (an
+ * awaited or hung interpreter) — so size seams bound the WORK and this bounds
+ * liveness, exactly like the python.execute tool's fence. */
+export function withTimeout(promise, ms) {
   return new Promise((resolve, reject) => {
     const t = setTimeout(() => reject(new Error("python_run_timeout")), ms);
     promise.then(
