@@ -578,7 +578,11 @@ Deno.test("xy6n2 falsifier: the DERIVED late-marker window is still a BOUND — 
   const tempTest = `${tempDir}/never-ready.test.ts`;
   await Deno.writeTextFile(
     tempTest,
-    'Deno.test("hangs without a marker", async () => { setInterval(() => {}, 1000); await new Promise(() => {}); });\n',
+    // chrome-agent-platform-urco2: the last uncovered fixture template — this one runs
+    // through the ready handshake (serial-runner writes the sentinel) and then hangs
+    // forever, so a bound-killed gate leaked it for the reaper's full sweep exactly like
+    // the six templates tf96x already covered.
+    `${selfReapWatchdog(`${tempTest}.runner`)}Deno.test("hangs without a marker", async () => { setInterval(() => {}, 1000); await new Promise(() => {}); });\n`,
   );
   const bootMs = await measureChildBootMs(tempDir);
   const softMs = bootMs + 500;
