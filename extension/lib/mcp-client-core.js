@@ -198,6 +198,10 @@ export function createGuardedMcpFetch({ origin, fetchImpl = globalThis.fetch, ma
     for (let hop = 0; hop <= maxHops; hop++) {
       // Always overwrite the caller's redirect policy: this is the guard.
       const res = await fetchImpl(current.href, { ...(init ?? {}), redirect: "manual" });
+      // chrome-agent-platform-u6hd6: isRedirectLike is the ONE redirect test (opaque
+      // browser shape OR a 3xx status) — the loop previously re-stated both conditions
+      // inline and the helper sat dead. Anything that is not a redirect is the answer.
+      if (!isRedirectLike(res)) return res;
       if (res?.type === "opaqueredirect") {
         const resolved = await resolveOpaqueRedirect(current);
         if (!resolved) {
@@ -213,7 +217,6 @@ export function createGuardedMcpFetch({ origin, fetchImpl = globalThis.fetch, ma
         continue;
       }
       const status = Number(res?.status ?? 0);
-      if (!(status >= 300 && status < 400)) return res;
       const location = headerValue(res, "location");
       if (!location) throw refuse(`${current.href} answered ${status} without an inspectable Location`);
       let next;
