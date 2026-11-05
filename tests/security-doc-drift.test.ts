@@ -1,7 +1,7 @@
 // @ts-nocheck
 // Security documentation is a boundary inventory, not a free-form promise.
 // Keep these guards executable against the source they describe (im4e1, em71i,
-// xbjki, 5x4iw); the mutants below demonstrate each guard can actually fail.
+// xbjki, 5x4iw, of68a); the mutants below demonstrate each guard can actually fail.
 import { fileURLToPath } from "node:url";
 import { assert, assertEquals, assertThrows } from "jsr:@std/assert@1";
 import * as acorn from "npm:acorn";
@@ -133,15 +133,61 @@ function sourceAnchorLines(ast: unknown, symbol: string): number[] {
   return sourceAnchorNodes(ast, symbol).map((m) => m.line);
 }
 
-function assertLiveRouteCitations(model: string, pure: string, worker: string, register = read("docs/RISK-REGISTER.md")): void {
+function mcpGuardedTransportWiring(ast: unknown): string[] {
+  const wired: string[] = [];
+  const visit = (node: unknown) => {
+    if (!node || typeof node !== "object") return;
+    if (node.type === "NewExpression" && node.callee?.type === "Identifier" &&
+        (node.callee.name === "StreamableHTTPClientTransport" || node.callee.name === "SSEClientTransport")) {
+      const guarded = (Array.isArray(node.arguments) ? node.arguments : []).some((argument) =>
+        argument?.type === "ObjectExpression" && (argument.properties ?? []).some((property: any) =>
+          property?.type === "Property" && !property.computed &&
+          property.key?.type === "Identifier" && property.key.name === "fetch" &&
+          property.value?.type === "Identifier" && property.value.name === "guardedFetch"));
+      if (guarded) wired.push(node.callee.name);
+    }
+    for (const [key, value] of Object.entries(node)) {
+      if (key === "start" || key === "end" || key === "loc") continue;
+      if (Array.isArray(value)) value.forEach(visit);
+      else if (value && typeof value === "object") visit(value);
+    }
+  };
+  visit(ast);
+  return wired.sort();
+}
+
+function assertLiveRouteCitations(model: string, pure: string, worker: string,
+  register = read("docs/RISK-REGISTER.md"), extraSources: Map<string, string> = new Map()): void {
   // chrome-agent-platform-atxc6: extracted route modules are anchorable sources too — a citation must
   // resolve to the executable member wherever it now lives, and an unregistered source fails closed.
   const hooks = read("extension/background/routes/hooks.js");
-  const sources = new Map([
+  // of68a: the surface-presence registry. Every THREAT_MODEL.md control anchor resolves against
+  // the file the model names; a citation whose file is not registered here FAILS CLOSED, and a
+  // cited declaration that disappears from a landing merge fails the gate (surface presence).
+  const sources = new Map<string, string>([
     ["extension/lib/pure.js", pure],
     ["extension/background/service-worker.js", worker],
     ["extension/background/routes/hooks.js", hooks],
+    ["extension/lib/fetch-policy.js", read("extension/lib/fetch-policy.js")],
+    ["extension/lib/python-network.js", read("extension/lib/python-network.js")],
+    ["extension/background/routes/enclave-proxy.js", read("extension/background/routes/enclave-proxy.js")],
+    ["extension/lib/skill-import.js", read("extension/lib/skill-import.js")],
+    ["extension/lib/script-host.js", read("extension/lib/script-host.js")],
+    ["extension/lib/mcp-config.js", read("extension/lib/mcp-config.js")],
+    ["extension/lib/mcp-client-core.js", read("extension/lib/mcp-client-core.js")],
+    ["extension/lib/mcp-client.js", read("extension/lib/mcp-client.js")],
+    ["extension/lib/settings-session.js", read("extension/lib/settings-session.js")],
+    ["extension/background/routes/auth.js", read("extension/background/routes/auth.js")],
+    ["extension/lib/untrusted-fence.js", read("extension/lib/untrusted-fence.js")],
+    ["extension/lib/system-prompts.js", read("extension/lib/system-prompts.js")],
+    ["extension/lib/memory.js", read("extension/lib/memory.js")],
+    ["extension/lib/archive-target-registry.js", read("extension/lib/archive-target-registry.js")],
+    ["extension/lib/browser-tools.js", read("extension/lib/browser-tools.js")],
+    ["extension/lib/owner-approval.js", read("extension/lib/owner-approval.js")],
+    ["extension/lib/acp-model-host.js", read("extension/lib/acp-model-host.js")],
+    ["extension/lib/emscripten-host.js", read("extension/lib/emscripten-host.js")],
   ]);
+  for (const [path, source] of extraSources) sources.set(path, source);
   const parsed = new Map<string, unknown>();
   const check = (piece: string, path: string, symbol: string) => {
     const anchor = `${path}#${symbol}`;
@@ -168,6 +214,45 @@ function assertLiveRouteCitations(model: string, pure: string, worker: string, r
   // resolved in THAT module — the citation still points at the executable member, just in its new home.
   const hooksSubscribe = ["extension/background/routes/hooks.js", "hooks.subscribe"];
   const backgroundSet = swRoute("background-agent.set");
+  // of68a: the remaining documented control anchors — each pair must appear in the named
+  // section as a full backticked `path#symbol` citation AND resolve to exactly one live
+  // AST declaration in the registered source. Adding a control to the model without
+  // registering its source fails closed; deleting the control from the tree fails here.
+  const fetchPolicyPrivate = ["extension/lib/fetch-policy.js", "isPrivateOrLoopbackHost"];
+  const fetchPolicyCheck = ["extension/lib/fetch-policy.js", "checkFetchPolicy"];
+  const fetchPolicyExtract = ["extension/lib/fetch-policy.js", "extractFetchHosts"];
+  const pythonNetwork = ["extension/lib/python-network.js", "checkPythonNetworkRequest"];
+  const enclaveProxyRoutes = ["extension/background/routes/enclave-proxy.js", "createEnclaveProxyRoutes"];
+  const skillUrl = ["extension/lib/skill-import.js", "validateHttpUrl"];
+  const skillRedirects = ["extension/lib/skill-import.js", "fetchWithSafeRedirects"];
+  const skillGitHub = ["extension/lib/skill-import.js", "fetchGitHubSkill"];
+  const skillDiscover = ["extension/lib/skill-import.js", "discoverRepoSkillsAndCommands"];
+  const skillBatch = ["extension/lib/skill-import.js", "installBatchSkillsAndCommands"];
+  const scriptHostFetch = ["extension/lib/script-host.js", "runFetch"];
+  const mcpNormalize = ["extension/lib/mcp-config.js", "normalizeMcpServerList"];
+  const mcpMount = ["extension/lib/mcp-client-core.js", "mountRemoteMcpServers"];
+  const mcpGuardedFetch = ["extension/lib/mcp-client-core.js", "createGuardedMcpFetch"];
+  const mcpGuardedBinding = ["extension/lib/mcp-client.js", "guardedFetch"];
+  const settingsRoutes = ["extension/lib/settings-session.js", "SETTINGS_SESSION_ROUTES"];
+  const settingsSessions = ["extension/lib/settings-session.js", "createSettingsSessions"];
+  const authSession = ["extension/background/routes/auth.js", "requireSettingsSession"];
+  const authSurface = ["extension/background/routes/auth.js", "requireSettingsSurface"];
+  const destructiveActions = ["extension/lib/owner-approval.js", "DESTRUCTIVE_ACTIONS"];
+  const secretKeyRe = ["extension/lib/pure.js", "SECRET_KEY_RE"];
+  const redactSecrets = ["extension/lib/pure.js", "redactSecrets"];
+  const mintToken = ["extension/lib/untrusted-fence.js", "mintUntrustedToken"];
+  const wrapUntrusted = ["extension/lib/untrusted-fence.js", "wrapUntrustedContent"];
+  const tagUntrusted = ["extension/lib/untrusted-fence.js", "tagUntrusted"];
+  const renderBoundary = ["extension/lib/system-prompts.js", "renderBoundarySkills"];
+  const reservedMaster = ["extension/lib/memory.js", "isReservedMasterKey"];
+  const siteReserved = ["extension/lib/memory.js", "SITE_RESERVED_KEYS"];
+  const reservedRead = ["extension/lib/memory.js", "isReservedReadKey"];
+  const reservedWrite = ["extension/lib/memory.js", "isReservedWriteKey"];
+  const credentialKeys = ["extension/lib/archive-target-registry.js", "CREDENTIAL_KEYS"];
+  const webDestination = ["extension/lib/browser-tools.js", "webDestination"];
+  const trustedSwSender = ["extension/lib/pure.js", "isTrustedServiceWorkerSender"];
+  const acpModelHost = ["extension/lib/acp-model-host.js", "registerAcpModelHost"];
+  const emscriptenHost = ["extension/lib/emscripten-host.js", "registerEmscriptenHost"];
   const sections: Array<[string, string[][]]> = [
     [section(model, "## 1. System Overview", "## 2. Trust Boundaries"), [listener]],
     [section(model, "**TB2 —", "**TB3 —"), [pureRoute, listener, allowlist]],
@@ -175,12 +260,24 @@ function assertLiveRouteCitations(model: string, pure: string, worker: string, r
     [section(model, "| S1 |", "| S2 |"), [pureRoute, listener]],
     [section(model, "### T2.", "### T3."), [pureRoute, listener, allowlist, classifier]],
     [section(model, "### T4.", "### T5."), [allowlist, namedTools, exportFolder]],
-    [section(model, "### T6.", "### T7."), [fetchRoute, pythonFetch]],
+    [section(model, "### T6.", "### T7."), [fetchRoute, pythonFetch, fetchPolicyPrivate, fetchPolicyCheck,
+      fetchPolicyExtract, pythonNetwork, enclaveProxyRoutes, skillUrl, skillRedirects, skillGitHub,
+      skillDiscover, skillBatch, scriptHostFetch, swRoute("skill.import")]],
     [section(model, "### T13.", "### T14."), [hooksSubscribe, backgroundSet, swRoute("dispatchHook")]],
-    [section(model, "### T19.", "## 6."), [swRoute("browser.destructive-action")]],
+    [section(model, "### T14.", "### T15."), [mcpNormalize, mcpMount, mcpGuardedFetch, mcpGuardedBinding]],
+    [section(model, "### T19.", "## 6."), [swRoute("browser.destructive-action"), destructiveActions]],
+    [section(model, "### T20.", "## 6."), [settingsRoutes, settingsSessions, authSession, authSurface,
+      swRoute("settings.session.open"), swRoute("settings.session.close")]],
     [section(model, "**INV-1 —", "**INV-2 —"), [listener, classifier]],
     [section(model, "**INV-2 —", "**INV-3 —"), [pureRoute]],
     [section(model, "**INV-5 —", "**INV-6 —"), [fetchRoute, pythonFetch]],
+    [section(model, "**INV-6 —", "**INV-7 —"), [secretKeyRe, redactSecrets]],
+    [section(model, "**INV-7 —", "**INV-8 —"), [mintToken, wrapUntrusted, tagUntrusted, renderBoundary]],
+    [section(model, "**INV-8 —", "**INV-9 —"), [destructiveActions]],
+    [section(model, "**INV-9 —", "**INV-10 —"), [reservedMaster, siteReserved, reservedRead, reservedWrite]],
+    [section(model, "**INV-10 —", "**INV-11 —"), [credentialKeys]],
+    [section(model, "**INV-11 —", "**INV-12 —"), [webDestination]],
+    [section(model, "**INV-15 —", "## 7."), [trustedSwSender, acpModelHost, emscriptenHost]],
     [section(register, "### R6", "### R7"), [swRoute("withRunLock"), swRoute("runTask")]],
     [section(register, "### R8", "### R9"), [swRoute("runTask")]],
     [section(register, "### R11", "### R12"), [namedTools, exportFolder, swRoute("background-agent.delete")]],
@@ -191,6 +288,19 @@ function assertLiveRouteCitations(model: string, pure: string, worker: string, r
     [section(register, "### R22", "### R23"), [pureRoute, listener, allowlist, classifier]],
   ];
   for (const [piece, anchors] of sections) for (const [path, symbol] of anchors) check(piece, path, symbol);
+
+  // Surface presence (of68a): T14 claims BOTH remote MCP transports receive the egress-guarded
+  // fetch. The census fails if either construction loses its `fetch: guardedFetch` member — the
+  // exact silent-deletion shape (a landing merge dropping a wiring line while every behavioral
+  // test mocks the transport) this gate exists for.
+  const mcpClientAst = parsed.get("extension/lib/mcp-client.js");
+  assert(mcpClientAst,
+    "the guarded-transport census requires extension/lib/mcp-client.js to be cited and parsed");
+  const wired = mcpGuardedTransportWiring(mcpClientAst);
+  assert(wired.includes("StreamableHTTPClientTransport") && wired.includes("SSEClientTransport") &&
+      wired.length === 2,
+    "both MCP transports must receive the guarded fetch (StreamableHTTPClientTransport, " +
+      `SSEClientTransport); wired: ${JSON.stringify(wired)}`);
 
   // Assert containment (hf1u0): PAGE_ALLOWED_ROUTES.has must lie within the chrome.runtime.onMessage.addListener callback
   const swAst = parsed.get("extension/background/service-worker.js");
@@ -378,4 +488,57 @@ Deno.test("5x4iw: page route and dispatcher citations resolve at current source 
     "duplicating the listener must fail");
   assert(/candidates: (?:extension\/background\/service-worker\.js:\d+, ){1}extension\/background\/service-worker\.js:\d+/.test(ambiguous.message),
     "ambiguity diagnostic must list both newly resolved source lines for a mechanical retarget");
+});
+
+Deno.test("of68a: documented control anchors resolve to live declarations — deleting one must red", () => {
+  const model = read("THREAT_MODEL.md");
+  const pure = read("extension/lib/pure.js");
+  const worker = read("extension/background/service-worker.js");
+  assertLiveRouteCitations(model, pure, worker);
+
+  // The bead's own falsifier: a landing merge drops one transport's guarded-fetch wiring
+  // while the model still claims it — the census must name the lost transport.
+  const mcpClient = read("extension/lib/mcp-client.js");
+  assertThrows(() =>
+    assertLiveRouteCitations(model, pure, worker, undefined, new Map([
+      ["extension/lib/mcp-client.js",
+        mcpClient.replace("return new SSEClientTransport(url, { requestInit, fetch: guardedFetch });",
+          "return new SSEClientTransport(url, { requestInit });")],
+    ])),
+    Error, "SSEClientTransport", "dropping the SSE transport's guarded fetch must fail the census");
+
+  // A cited declaration is deleted from the tree (INV-7's fence).
+  const fence = read("extension/lib/untrusted-fence.js");
+  assertThrows(() =>
+    assertLiveRouteCitations(model, pure, worker, undefined, new Map([
+      ["extension/lib/untrusted-fence.js",
+        fence.replace("export function wrapUntrustedContent(content, token = UNTRUSTED_TOKEN_PLACEHOLDER)",
+          "export function retiredWrapUntrustedContent(content)")],
+    ])),
+    Error, "missing security anchor extension/lib/untrusted-fence.js#wrapUntrustedContent",
+    "deleting a cited fence declaration must fail");
+
+  // A cited declaration is duplicated (INV-9's reserved-key gate).
+  const memory = read("extension/lib/memory.js");
+  const ambiguous = assertThrows(() =>
+    assertLiveRouteCitations(model, pure, worker, undefined, new Map([
+      ["extension/lib/memory.js", `${memory}\n{\nfunction isReservedReadKey(also) { return false; }\n}\n`],
+    ])),
+    Error, "ambiguous security anchor extension/lib/memory.js#isReservedReadKey");
+  assert(/candidates: extension\/lib\/memory\.js:\d+, extension\/lib\/memory\.js:\d+/.test(ambiguous.message),
+    "the ambiguity diagnostic must list both candidate declarations");
+
+  // The citation is stripped from the model while the code stays — doc drift, caught.
+  assertThrows(() =>
+    assertLiveRouteCitations(model.replace("extension/lib/memory.js#isReservedMasterKey", "extension/lib/memory.js"),
+      pure, worker),
+    Error, "missing security anchor extension/lib/memory.js#isReservedMasterKey in documented section",
+    "removing a documented anchor must fail");
+
+  // Stability (o75bp's rule, applied to the newly registered sources): unrelated line
+  // shifts in a registered source must not invalidate its resolved anchors.
+  const shifted = new Map([
+    ["extension/lib/system-prompts.js", "\n".repeat(40) + read("extension/lib/system-prompts.js")],
+  ]);
+  assertLiveRouteCitations(model, pure, worker, undefined, shifted);
 });
