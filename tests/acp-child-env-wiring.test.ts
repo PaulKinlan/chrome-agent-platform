@@ -369,7 +369,9 @@ Deno.test("5x2rz: the fixture pollers swallow only not-written-yet — a corrupt
   // back as a bare null — the exact cryptic 'Values are not equal: null / true' e18f3
   // removed for fixtureRowSeen. Same contract, pinned for the two siblings: NotFound
   // waits; anything else throws in milliseconds.
-  const dir = await Deno.makeTempDir();
+  // chrome-agent-platform-5x2rz + the durable-root guard: scratch lives under the
+  // durable root, never bare /tmp (the tmpdir guard reds a bare makeTempDir).
+  const dir = await Deno.makeTempDir({ dir: durableDir("scratch"), prefix: "cap-acp-poller-contract-" });
   const corrupt = `${dir}/corrupt.jsonl`;
   await Deno.writeTextFile(corrupt, "{not json\n");
   const missing = `${dir}/never-written.jsonl`;
