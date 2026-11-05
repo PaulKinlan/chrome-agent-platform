@@ -156,6 +156,37 @@ function mcpGuardedTransportWiring(ast: unknown): string[] {
   return wired.sort();
 }
 
+function identifierUseLines(ast: unknown, name: string, callsOnly: boolean): number[] {
+  const lines: number[] = [];
+  const visit = (node: unknown) => {
+    if (!node || typeof node !== "object") return;
+    const type = (node as any).type;
+    if (type === "ImportSpecifier" || type === "ImportDefaultSpecifier" || type === "ImportNamespaceSpecifier") return;
+    if (callsOnly) {
+      if (type === "CallExpression") {
+        const callee = (node as any).callee;
+        if ((callee?.type === "Identifier" && callee.name === name) ||
+          (callee?.type === "MemberExpression" && !callee.computed &&
+            callee.property?.type === "Identifier" && callee.property.name === name)) {
+          lines.push((node as any).loc.start.line);
+        }
+      }
+    } else if (type === "Identifier" && (node as any).name === name) {
+      lines.push((node as any).loc.start.line); // import specifiers never reach here
+    }
+    for (const [key, value] of Object.entries(node)) {
+      if (key === "start" || key === "end" || key === "loc") continue;
+      // A declaration's own id is not a USE of the name.
+      if ((type === "VariableDeclarator" || type === "FunctionDeclaration" || type === "ClassDeclaration") &&
+        key === "id" && (value as any)?.type === "Identifier" && (value as any).name === name) continue;
+      if (Array.isArray(value)) value.forEach(visit);
+      else if (value && typeof value === "object") visit(value);
+    }
+  };
+  visit(ast);
+  return lines.sort((a, b) => a - b);
+}
+
 function assertLiveRouteCitations(model: string, pure: string, worker: string,
   register = read("docs/RISK-REGISTER.md"), extraSources: Map<string, string> = new Map()): void {
   // chrome-agent-platform-atxc6: extracted route modules are anchorable sources too — a citation must
@@ -186,6 +217,13 @@ function assertLiveRouteCitations(model: string, pure: string, worker: string,
     ["extension/lib/owner-approval.js", read("extension/lib/owner-approval.js")],
     ["extension/lib/acp-model-host.js", read("extension/lib/acp-model-host.js")],
     ["extension/lib/emscripten-host.js", read("extension/lib/emscripten-host.js")],
+    // vuhqh: files whose enforcement CALLS are censused below — registered here so the
+    // same fail-closed rule applies (a census file that vanishes fails the gate).
+    ["extension/lib/runtime-context.js", read("extension/lib/runtime-context.js")],
+    ["extension/lib/tool-summary.js", read("extension/lib/tool-summary.js")],
+    ["extension/shared/components-hub.js", read("extension/shared/components-hub.js")],
+    ["extension/background/routes/kv.js", read("extension/background/routes/kv.js")],
+    ["extension/lib/owner-approval.js", read("extension/lib/owner-approval.js")],
   ]);
   for (const [path, source] of extraSources) sources.set(path, source);
   const parsed = new Map<string, unknown>();
@@ -301,6 +339,38 @@ function assertLiveRouteCitations(model: string, pure: string, worker: string,
       wired.length === 2,
     "both MCP transports must receive the guarded fetch (StreamableHTTPClientTransport, " +
       `SSEClientTransport); wired: ${JSON.stringify(wired)}`);
+
+  // vuhqh: declaration presence is not enforcement. The remaining call/wiring controls get
+  // the same census style the MCP transports got: the symbol must still be CALLED (or, for
+  // the DESTRUCTIVE_ACTIONS set, REFERENCED by the approval flow) in the file that documents
+  // the enforcement. Deleting a call site while keeping its declaration reds here, naming
+  // the invariant. Import-specifier mentions and declaration ids never count as use, and a
+  // census file missing from the registry above fails closed.
+  const astOf = (path: string): any => {
+    const source = sources.get(path);
+    assert(source !== undefined, `call-site census source ${path} is not registered`);
+    if (!parsed.has(path)) parsed.set(path, acorn.parse(source, {
+      ecmaVersion: "latest", sourceType: "module", locations: true,
+    }));
+    return parsed.get(path);
+  };
+  const REQUIRED_CALL_SITES: Array<[string, string, boolean, string]> = [
+    ["extension/lib/skill-import.js", "wrapUntrustedContent", true, "INV-7 (import-time fence)"],
+    ["extension/lib/runtime-context.js", "isReservedMasterKey", true, "INV-9 (digest filter)"],
+    ["extension/lib/memory.js", "isReservedMasterKey", true, "INV-9 (write gate)"],
+    ["extension/lib/browser-tools.js", "webDestination", true, "INV-11 (destination checks)"],
+    ["extension/lib/owner-approval.js", "DESTRUCTIVE_ACTIONS", false, "INV-8 (approval keys on the set)"],
+    ["extension/lib/tool-summary.js", "redactSecrets", true, "INV-6 (tool-summary surface)"],
+    ["extension/shared/components-hub.js", "redactSecrets", true, "INV-6 (hub surface)"],
+    ["extension/background/routes/kv.js", "redactSecrets", true, "INV-6 (kv route)"],
+    ["extension/background/service-worker.js", "redactSecrets", true, "INV-6 (service-worker surface)"],
+  ];
+  for (const [path, symbol, callsOnly, why] of REQUIRED_CALL_SITES) {
+    const uses = identifierUseLines(astOf(path), symbol, callsOnly);
+    assert(uses.length >= 1,
+      `the ${why} enforcement is gone: ${path} no longer ${callsOnly ? "calls" : "references"} ${symbol}` +
+        ` (a live declaration is not a live control)`);
+  }
 
   // Assert containment (hf1u0): PAGE_ALLOWED_ROUTES.has must lie within the chrome.runtime.onMessage.addListener callback
   const swAst = parsed.get("extension/background/service-worker.js");
@@ -541,4 +611,61 @@ Deno.test("of68a: documented control anchors resolve to live declarations — de
     ["extension/lib/system-prompts.js", "\n".repeat(40) + read("extension/lib/system-prompts.js")],
   ]);
   assertLiveRouteCitations(model, pure, worker, undefined, shifted);
+});
+
+Deno.test("vuhqh: deleting a documented enforcement CALL SITE reds, not just deleting the declaration", () => {
+  // The reviewer's exact repro: the INV-7 import-time fence call is replaced with a
+  // passthrough while wrapUntrustedContent stays declared — the gate must red naming
+  // the invariant (declaration presence is not enforcement).
+  const model = read("THREAT_MODEL.md");
+  const pure = read("extension/lib/pure.js");
+  const worker = read("extension/background/service-worker.js");
+  const skillImport = read("extension/lib/skill-import.js");
+  assert(skillImport.includes("return wrapUntrustedContent(str, token);"),
+    "the census's own fixture must match the live fence call in skill-import.js");
+  assertThrows(() =>
+    assertLiveRouteCitations(model, pure, worker, undefined, new Map([
+      ["extension/lib/skill-import.js",
+        skillImport.replace("return wrapUntrustedContent(str, token);", "return str;")],
+    ])),
+    Error, "INV-7 (import-time fence)", "unfencing the import path must fail the call-site census");
+
+  // INV-9: the digest filter stops consulting isReservedMasterKey (the lx7en wiring).
+  const runtimeContext = read("extension/lib/runtime-context.js");
+  assertThrows(() =>
+    assertLiveRouteCitations(model, pure, worker, undefined, new Map([
+      ["extension/lib/runtime-context.js",
+        runtimeContext.replace("return DIGEST_ADDITIONAL_SKIP_KEYS.has(k) || isReservedMasterKey(k);",
+          "return DIGEST_ADDITIONAL_SKIP_KEYS.has(k);")],
+    ])),
+    Error, "INV-9 (digest filter)", "narrowing the digest filter past reserved keys must fail");
+
+  // INV-8: the approval flow stops keying on DESTRUCTIVE_ACTIONS — a bare declaration
+  // id and import mentions must NOT satisfy the census.
+  const ownerApproval = read("extension/lib/owner-approval.js");
+  assertThrows(() =>
+    assertLiveRouteCitations(model, pure, worker, undefined, new Map([
+      ["extension/lib/owner-approval.js",
+        ownerApproval
+          .replace("if (!store?.approvals || !DESTRUCTIVE_ACTIONS.has(action)) return { ok: false, error: \"operation is not approvable\" };",
+            "if (!store?.approvals) return { ok: false, error: \"operation is not approvable\" };")
+          .replace("if (typeof action !== \"string\" || !DESTRUCTIVE_ACTIONS.has(action)) return null;",
+            "if (typeof action !== \"string\") return null;")],
+    ])),
+    Error, "INV-8 (approval keys on the set)", "a set that nothing keys on is not enforcement");
+
+  // INV-6: one redaction caller surface loses its redactSecrets call.
+  const kv = read("extension/background/routes/kv.js");
+  const firstKvCall = kv.match(/redactSecrets\(/);
+  assert(firstKvCall, "the kv route fixture must find a live redactSecrets call");
+  assertThrows(() =>
+    assertLiveRouteCitations(model, pure, worker, undefined, new Map([
+      ["extension/background/routes/kv.js", kv.replace(/redactSecrets\(/, "retiredRedact(")],
+    ])),
+    Error, "INV-6 (kv route)", "dropping a redaction caller surface must fail");
+
+  // Stability: line shifts in a census file never invalidate a live call site.
+  assertLiveRouteCitations(model, pure, worker, undefined, new Map([
+    ["extension/lib/runtime-context.js", "\n".repeat(30) + runtimeContext],
+  ]));
 });
