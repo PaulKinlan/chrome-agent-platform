@@ -45,7 +45,10 @@ export function allNamedChecksPass(checks: Check[]): boolean {
 }
 
 export function allNamedSettingsChecksPass(checks: Check[]): boolean {
-  return checks.length >= SETTINGS_CHECKS.length &&
+  // chrome-agent-platform-1pxog: exact length, like its full-mode sibling —
+  // extra rows (even all-FAIL Activity rows appended by a future caller) must
+  // fail closed, never satisfy a length>=.
+  return checks.length === SETTINGS_CHECKS.length &&
     SETTINGS_CHECKS.every((name, i) => checks[i]?.name === name && checks[i]?.verdict === "PASS");
 }
 

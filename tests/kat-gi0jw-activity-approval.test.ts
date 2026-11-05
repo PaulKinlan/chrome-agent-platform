@@ -22,6 +22,15 @@ Deno.test("focused approval KAT supports --settings-only mode and allNamedSettin
   assert(!allNamedSettingsChecksPass(settingsGreen.slice(0, -1)), "missing settings check must fail");
   assert(!allNamedSettingsChecksPass(settingsGreen.map((row, i) => i === 0 ? { ...row, verdict: "FAIL" as const } : row)), "failed settings check must fail");
   assert(!allNamedChecksPass(settingsGreen), "settings-only green checks do NOT satisfy full 12-check requirement");
+  // chrome-agent-platform-1pxog: extra rows must fail CLOSED — the sibling
+  // predicate requires exact length, and a length>= would let extra (even
+  // all-FAIL) Activity rows satisfy the settings-only verdict.
+  const sixPassPlusSixFail = [
+    ...SETTINGS_CHECKS.map((name) => ({ name, verdict: "PASS" as const })),
+    ...ACTIVITY_CHECKS.map((name) => ({ name, verdict: "FAIL" as const })),
+  ];
+  assert(!allNamedSettingsChecksPass(sixPassPlusSixFail),
+    "extra (even all-FAIL) Activity rows must NOT satisfy the settings-only predicate");
 });
 
 Deno.test("focused acceptance verdict seam exits nonzero for incomplete, failed, or thrown drives", async () => {
