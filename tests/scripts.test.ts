@@ -217,3 +217,84 @@ Deno.test("runFetch rejects credentials + non-GET methods", async () => {
   assert(post.ok === false, "non-GET/HEAD methods must be rejected");
   delete (globalThis as any).chrome;
 });
+
+// ── chrome-agent-platform-nv5lt: the unscoped direct fallback's boundary, mechanised ──
+// INV-5 covers BROKER-MEDIATED fetches; script-host's direct fallback (te1pu/oe4nz) is
+// the ONE sanctioned direct site, reachable only when chrome.runtime is ABSENT and the
+// call carries NO run id. That confinement was comment-enforced only, so nothing could
+// falsify a widened fallback — a future edit dropping the runId guard or the runtime
+// precondition would regress egress policy with every gate green. These pins mechanise
+// the boundary; THREAT_MODEL.md's INV-5 now carves the fallback out explicitly and
+// cites this block.
+
+Deno.test("runFetch (nv5lt): a registered run is REFUSED, never direct-fetched, when the broker is unavailable", async () => {
+  const { runFetch } = await import("../extension/lib/script-host.js");
+  const originalChrome = (globalThis as any).chrome;
+  const originalFetch = globalThis.fetch;
+  const directCalls: string[] = [];
+  try {
+    delete (globalThis as any).chrome;
+    globalThis.fetch = async (input: any) => {
+      directCalls.push(String(input));
+      return new Response("should never be read", { status: 200 });
+    };
+    const res = await runFetch({ url: "https://example.com/exfil", opts: {} }, "run-1");
+    assertEquals(res.ok, false, "a registered run without the broker must fail closed");
+    assertEquals(String((res as any).error).includes("brokered service worker route unavailable"), true,
+      "the refusal must name the brokered-route confinement");
+    assertEquals(directCalls.length, 0,
+      "dropping the runId guard would turn broker failure into unbrokered egress — the direct fetch must never run");
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalChrome === undefined) delete (globalThis as any).chrome;
+    else (globalThis as any).chrome = originalChrome;
+  }
+});
+
+Deno.test("runFetch (nv5lt): broker FAILURE never widens the fallback — direct fetch needs chrome.runtime ABSENT", async () => {
+  const { runFetch } = await import("../extension/lib/script-host.js");
+  const originalChrome = (globalThis as any).chrome;
+  const originalFetch = globalThis.fetch;
+  const directCalls: string[] = [];
+  try {
+    // The runtime is PRESENT; the broker route itself throws (SW gone, port closed).
+    (globalThis as any).chrome = {
+      runtime: { sendMessage: async () => { throw new Error("port closed"); } },
+    };
+    globalThis.fetch = async (input: any) => {
+      directCalls.push(String(input));
+      return new Response("should never be read", { status: 200 });
+    };
+    const res = await runFetch({ url: "https://example.com/exfil", opts: {} });
+    assertEquals(res.ok, false, "a broker failure in an extension context must fail closed");
+    assertEquals(directCalls.length, 0,
+      "the fallback's precondition is the runtime being ABSENT, not the broker failing");
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalChrome === undefined) delete (globalThis as any).chrome;
+    else (globalThis as any).chrome = originalChrome;
+  }
+});
+
+Deno.test("runFetch (nv5lt): the direct fallback fires exactly in the unscoped shape (no runtime, no runId)", async () => {
+  const { runFetch } = await import("../extension/lib/script-host.js");
+  const originalChrome = (globalThis as any).chrome;
+  const originalFetch = globalThis.fetch;
+  const directCalls: string[] = [];
+  try {
+    delete (globalThis as any).chrome;
+    globalThis.fetch = async (input: any) => {
+      directCalls.push(String(input));
+      return new Response("fallback body", { status: 200 });
+    };
+    const res = await runFetch({ url: "https://example.com/data", opts: {} });
+    assertEquals(res.ok, true, "the sanctioned unscoped fallback must still work");
+    assertEquals(directCalls.length, 1, "exactly one direct fetch, for the unscoped call only");
+    assertEquals(String(directCalls[0]).includes("example.com/data"), true, "and it fetches the requested URL");
+    assertEquals((res as any).untrusted, true, "the fallback result is tagged untrusted like the broker's");
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalChrome === undefined) delete (globalThis as any).chrome;
+    else (globalThis as any).chrome = originalChrome;
+  }
+});
