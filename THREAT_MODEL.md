@@ -2,8 +2,14 @@
 
 **Bead:** `chrome-agent-platform-oa3o` · **Created:** 2026-10-06 · **Re-read:** 2026-10-08
 
-**Current audit pin:** `origin/main@28c7189d` (extension `0.3.593`) for the
-component map, TB2, S1/S6, T2/T4/T11/T18 and INV-1/2/4/15 revised here.
+**Current audit pin:** `origin/main@fe4926a72` (extension `0.3.739`) for the
+component map, TB2, S1/S6–S6g/S15–S18, T2/T4/T6/T7/T10/T11/T18 and
+INV-1/2/4/6/15 revised here (refresh `chrome-agent-platform-n2dlo`: the previous
+pin was 146 releases stale and the inventory omitted the credential- and
+parser-bearing subsystems landed after it — thread/artifact export, the SW-side
+OOXML readers, attached WebMCP, Emscripten staging/custody, tool-stream staging,
+table extraction, the settings session, the wasm-stream owner codec and the
+vendored acorn admission audit).
 Other threat and register entries retain their own historical pins until separately
 re-read; named symbols are anchors and line numbers are locators, not authority.
 `docs/RISK-REGISTER.md` uses the same convention for entries it added after its base pin.
@@ -45,7 +51,7 @@ http(s) page) and it acts on two different untrusted feeds at once: web page con
 and model output.
 
 Component map, with the file that owns each surface:
-- **Offscreen-inventory evidence pin: `origin/main@28c7189d`.** The dispatch census and `tests/sw-dispatch-authority-census.test.ts` assert 299 registered routes on this branch; that earlier main pin had fewer routes. The offscreen host inventory below is taken from the actual `register*Host()` calls and listeners in `extension/offscreen/offscreen.js`, not inferred from the incomplete onMessage-only census §6.2. Re-read named symbols at a newer tree; line numbers are locators.
+- **Offscreen-inventory evidence pin: `origin/main@fe4926a72`.** The dispatch census and `tests/sw-dispatch-authority-census.test.ts` assert 299 registered routes at this pin. The offscreen host inventory below is taken from the actual `register*Host()` calls and listeners in `extension/offscreen/offscreen.js`, not inferred from the incomplete onMessage-only census §6.2. Re-read named symbols at a newer tree; line numbers are locators.
 
 | Component | Where | Notes |
 |---|---|---|
@@ -53,15 +59,25 @@ Component map, with the file that owns each surface:
 | Route modules | `extension/background/routes/` | dispatched through `mergeRouteMaps` (census §2) |
 | New-tab hub / Settings / side panel | `extension/ntp/`, `extension/options/`, `extension/sidepanel/` | extension documents; principal `extension` / `owner-options` |
 | Offscreen document | `extension/offscreen/offscreen.js` | single runtime host: 12 `register*Host()` calls (ACP model, agent worker, Python, Wasm stream, call-export, Emscripten scalar, Emscripten staging, WASI job, table worker, owner-uploaded Wasm, SVG rasterise, on-device text), plus the script-sandbox and clipboard listeners; reclaim can interrupt in-flight work across those lanes (R12) |
-| Sandboxed pages (opaque origin) | `extension/manifest.json:108-113` | `sandbox/script-sandbox.html`, `sandbox/artifact-preview.html` |
-| Content scripts | `extension/manifest.json:127-152` | MAIN-world detector + ISOLATED-world relay |
-| OPFS memory | `extension/lib/memory.js` | ONE OPFS root, origin-keyed by path (`canonicalOrigin` at `extension/lib/memory.js:308`) |
-| Providers | `extension/lib/provider.js`, `extension/lib/provider-server-tools.js` | the two provider paths (boundary TB4) |
-| MCP | `extension/lib/mcp-config.js:113`, `extension/lib/mcp-client-core.js:99` | owner-registered external servers |
-| WebMCP site tools | `extension/lib/webmcp-authority.js`, `extension/lib/tools.js:511` | page-declared tools, owner-enrolled |
-| ACP bridge (host-side) | `scripts/acp-bridge.ts:52`, `:785` | loopback WebSocket in front of a shell-capable harness |
+| Sandboxed pages (opaque origin) | `extension/manifest.json:109-114` | `sandbox/script-sandbox.html`, `sandbox/artifact-preview.html` |
+| Content scripts | `extension/manifest.json:128-153` | MAIN-world detector + ISOLATED-world relay |
+| OPFS memory | `extension/lib/memory.js` | ONE OPFS root, origin-keyed by path (`extension/lib/memory.js#canonicalOrigin`) |
+| Providers | `extension/lib/provider.js`, `extension/lib/provider-server-tools.js` | the two provider paths (boundary TB3) |
+| MCP | `extension/lib/mcp-config.js#normalizeMcpServerList`, `extension/lib/mcp-client-core.js:99` | owner-registered external servers |
+| WebMCP site tools | `extension/lib/webmcp-authority.js`, `extension/lib/tools.js#isApproved` | page-declared tools, owner-enrolled |
+| ACP bridge (host-side) | `scripts/acp-bridge.ts` | loopback WebSocket in front of a shell-capable harness (TB5) |
+| Thread/artifact HTML export | `extension/background/service-worker.js#threadExportRoute` → `extension/lib/thread-export-route.js#createThreadExportRoute`, `thread-export-html.js`, `thread-export-redact.js`, `extension/shared/thread-export-preview.js` | owner-page egress SINK: the SW materialises raw vault/provider secrets in memory to scrub them from exported static HTML (S15, T7) |
+| OOXML document readers (SW-side) | `extension/lib/python-documents-bundle.js#executeReadSpreadsheet`, `#executeReadDocument` (routes `document.read_spreadsheet`, `document.read_document`) | attacker-supplied Office bytes parsed by Pyodide wheels INSIDE the service worker — not inside `registerPythonHost` (S16) |
+| Tool-stream routes | `extension/background/routes/tool-stream.js` (`tool-stream.input.*`, `.run`, `.output.*`, `.stage-attachment`, `.stage-asset`, `.promote-output`, `.discard`, `.tabular-transform`) | attachment/asset bytes staged into the Wasm-stream OPFS root (S17) |
+| Attached WebMCP (unenrolled) | `extension/lib/attached-webmcp-declared.js#readDeclaredWebmcpFromPage`, `attached-webmcp-invocation.js#invokeAttachedDeclaredFromPage`, `attached-webmcp-attestation.js#attestCurrentAttachedWebmcpTab` (routes `agent.attached-webmcp-document`, `attached-webmcp.invoke`) | owner-attached tabs declare and run page tools WITHOUT origin enrolment (S18, T10) |
+| Ephemeral site-tool consent | `extension/lib/ephemeral-site-tool-consent.js#createEphemeralSiteToolConsentStore` | run-scoped in-process consent for unenrolled site tools; never persists (S18) |
+| Settings session | `extension/lib/settings-session.js#SETTINGS_SESSION_ROUTES` (routes `settings.session.open`, `settings.session.close`) | in-hub session tokens narrow scope but share the hub document (T20) |
+| Page table extraction | `extension/lib/table-extractor.js#injectedTableExtractor` | parses attacker-authored `<table>`/`role="grid"` DOM into canonical JSON under `TABLE_EXTRACTOR_LIMITS` (S1) |
+| Emscripten custody/staging modules | `extension/lib/emscripten-custody.js`, `emscripten-stage-protocol.js`, `emscripten-sw-stage.js`, `emscripten-run-fence.js`, `emscripten-host-writer.js`, `emscripten-host-binary-runner.js`, `emscripten-host-evidence.js`, `emscripten-staging-authority.js` | the custody/intent/fence chain behind `registerEmscriptenBinaryStagingHost` (S6c/S6g, T18) |
+| Emscripten JS capability audit | `extension/lib/emscripten-js-capability-audit.js#auditEmscriptenJsCapabilities` with vendored `extension/lib/vendor/acorn.mjs` | admitted glue JS is AST-PARSED, never eval'd, to reject OPFS/network capability before staging (INV-4) |
+| Wasm-stream owner codec | `extension/lib/wasm-stream-owner-codec.js` | injective `agent:v2:<len>:<runId><agentId>` owner grammar; legacy owner strings fail closed (T18, INV-15) |
 
-**Offscreen host inventory (authority for register R12; `origin/main@28c7189d`).**
+**Offscreen host inventory (authority for register R12; `origin/main@fe4926a72`).**
 The single `extension/offscreen/offscreen.js` document registers these **12**
 `register*Host()` calls, plus two listeners. “SW-only” means the receiver
 checks a browser-attested service-worker sender, not just the extension ID;
@@ -102,17 +118,22 @@ inventory and the sender/inventory guard described in INV-15.
   of the code/UI boundary. Everything that loads from a web origin — the page's own
   scripts, the MAIN-world detector's peer, iframes the page embeds — is on the hostile
   side. The boundary is the browser's origin + process split, evidenced by the
-  manifest's `content_scripts` split at `extension/manifest.json:127-152` and the
-  sandbox page list at `extension/manifest.json:108-113`.
+  manifest's `content_scripts` split at `extension/manifest.json:128-153` and the
+  sandbox page list at `extension/manifest.json:109-114`.
 - **TB2 — The service worker is the privileged broker.** No other component may reach
-  storage, OPFS, providers or browser control directly: the content-script realm may
+  providers, browser control or `chrome.storage` directly. ONE qualified exception,
+  re-read at this pin: the offscreen document reads and writes the single OPFS root
+  itself for its Wasm-stream and Emscripten-staging lanes
+  (`extension/lib/wasm-stream-host.js#removePartialOutput`,
+  `extension/lib/wasm-stream-files.js#streamsRoot`) — the same path-keyed root as
+  TB6/R1, never a second store. The content-script realm may
   reach exactly seven routes (`PAGE_ALLOWED_ROUTES` in `extension/lib/pure.js#PAGE_ALLOWED_ROUTES`),
   and every other route is refused by `chrome.runtime.onMessage.addListener` at
   `extension/background/service-worker.js#chrome.runtime.onMessage.addListener`
   (check: `extension/background/service-worker.js#PAGE_ALLOWED_ROUTES.has`).
   The receiver derives the origin from the BROWSER-ATTESTED `sender` in that listener,
   never the message body.
-- **Evidence pin: `origin/main@28c7189d`.** The cited symbols and closed set were re-read at this tree; line numbers are locators.
+- **Evidence pin: `origin/main@fe4926a72`.** The cited symbols and closed set were re-read at this tree; line numbers are locators.
 - **TB3 — The two provider paths.** Path A sends the conversation from the service
   worker directly to a hosted provider host, listed exhaustively in `OUTBOUND_HOSTS`
   (`extension/lib/provider-catalog.js:111`, pinned by `tests/privacy-statement.test.ts`);
@@ -198,11 +219,11 @@ the platform, and each has a mechanical check:
 
 Ordered by how much authority sits behind them. Every row is an entry point an auditor
 should reason about; the threats that use them are in sections 5 and 6.
-- **Evidence pin: `origin/main@28c7189d` for S1 and S6–S6f.** Re-read the named symbols at this tree; line numbers are locators.
+- **Evidence pin: `origin/main@fe4926a72` for S1, S6–S6g and S15–S18.** Re-read the named symbols at this tree; line numbers are locators.
 
 | ID | Surface | Where it enters | What is hostile about it |
 |---|---|---|---|
-| S1 | Page content and page messages | `chrome.runtime.onMessage.addListener` at `extension/background/service-worker.js#chrome.runtime.onMessage.addListener`; `PAGE_ALLOWED_ROUTES` at `extension/lib/pure.js#PAGE_ALLOWED_ROUTES` | a page's content script may call only the seven page-allowed routes for its OWN origin, and may put anything in the message body |
+| S1 | Page content and page messages | `chrome.runtime.onMessage.addListener` at `extension/background/service-worker.js#chrome.runtime.onMessage.addListener`; `PAGE_ALLOWED_ROUTES` at `extension/lib/pure.js#PAGE_ALLOWED_ROUTES` | a page's content script may call only the seven page-allowed routes for its OWN origin, and may put anything in the message body; page DOM is also parsed structurally by the table extractor (`extension/lib/table-extractor.js#injectedTableExtractor`, bounded by `TABLE_EXTRACTOR_LIMITS`) |
 | S2 | WebMCP tool descriptors and tool results | `extension/lib/tools.js:511`, `extension/lib/webmcp-authority.js:68` | a site authors its own tool schema and result text |
 | S3 | Model output (tool calls and prose) | `extension/lib/lazy-tool-protocol.js:1`, `extension/lib/untrusted-fence.js:59` | a steered model calls real tools |
 | S4 | Tool results rendered into the transcript | `extension/shared/components.js:566` (`renderHtmlFrame`) | an artifact body or fetched body is untrusted HTML |
@@ -213,6 +234,7 @@ should reason about; the threats that use them are in sections 5 and 6.
 | S6d | Bundled WASI job modules | `registerWasmJobHost` in `extension/offscreen/offscreen.js`; `extension/lib/wasm-job-host.js` | non-stream bundled tools run after manifest/CAS re-validation; an untrusted caller must not forge the job |
 | S6e | SVG rasterise requests | `registerSvgRasteriseHost` in `extension/offscreen/offscreen.js`; `extension/lib/svg-rasterise-host.js` | untrusted SVG is rendered by the browser; this is a document/renderer lane, not Wasm execution |
 | S6f | On-device text requests | `registerOnDeviceTextHost` in `extension/offscreen/offscreen.js`; `extension/lib/on-device-text-host.js` | untrusted inputs reach browser-provided Summarizer/LanguageDetector/Translator APIs in the offscreen document, not a Wasm worker |
+| S6g | Emscripten binary staging commands | `registerEmscriptenBinaryStagingHost` in `extension/offscreen/offscreen.js`; `extension/lib/emscripten-host-stage-route.js` (SW-sender gate BEFORE lazy import), `extension/lib/emscripten-host-stage.js` (exact request/identity/operation key sets) | sealed run-owned inputs and exact asset hashes; the lane cannot seal, publish or delete, and termination is reported UNKNOWN |
 | S7 | Imported archives | `extension/lib/archive-target-registry.js:375`, `:427` | a file the owner restores carries attacker-chosen keys and values |
 | S8 | MCP server output | `extension/lib/mcp-client-core.js:99` | a registered server returns arbitrary text and tool results |
 | S9 | Provider responses and provider errors | `extension/lib/pure.js:1034`, `:1102` | an endpoint can echo a credential back into a log or a card |
@@ -220,6 +242,10 @@ should reason about; the threats that use them are in sections 5 and 6.
 | S11 | Owner-supplied local folders (fs grants) | `extension/lib/fs-grants.js:47`, `:130` | path strings the owner grants are still resolved by the extension |
 | S12 | Hook event payloads | `extension/lib/hooks.js:494`, `:550` | a hook body is serialized into a model INSTRUCTION position |
 | S14 | Model-authored user-script and content-script registration | `extension/lib/browser-tools.js:6345`, `:6484` | a model registers persistent JavaScript (up to 32 KiB) to execute across web origins via chrome.userScripts.register or chrome.scripting.registerContentScripts |
+| S15 | Thread/artifact static HTML export | route `thread-export.html` → `extension/background/service-worker.js#threadExportRoute` → `extension/lib/thread-export-route.js#createThreadExportRoute` | an owner-page egress SINK: the SW materialises EVERY raw vault secret and provider key in memory to scrub them (`extension/lib/thread-export-redact.js#collectProfileSecrets`) out of untrusted conversation history; a secret whose exact value AND shape both evade the scrubbers leaves the machine inside a saved/shared HTML file (T7, INV-6) |
+| S16 | Office-document (OOXML) readers | routes `document.read_spreadsheet` / `document.read_document` at `extension/background/service-worker.js#document.read_spreadsheet` → `extension/lib/python-documents-bundle.js#executeReadSpreadsheet`, `#executeReadDocument` | attacker-supplied .xlsx/.docx/.pptx bytes are parsed by Pyodide wheels INSIDE the service worker (not `registerPythonHost`): zip-bomb, XML-entity and malformed-document payloads hit the SW under the readers' own budgets — the host-side budget seam is bead `chrome-agent-platform-01d0r` |
+| S17 | Tool-stream attachment/asset staging | `extension/background/routes/tool-stream.js` (`tool-stream.stage-attachment`, `tool-stream.stage-asset`, `tool-stream.promote-output`) | model/tool-context bytes are staged into the Wasm-stream OPFS root and later promoted; staging callers are extension principals, the BYTES remain attacker-influenced |
+| S18 | Attached unenrolled WebMCP | routes `agent.attached-webmcp-document` / `attached-webmcp.invoke` at `extension/background/service-worker.js#attached-webmcp.invoke`; `extension/lib/attached-webmcp-declared.js#readDeclaredWebmcpFromPage`, `attached-webmcp-invocation.js#invokeAttachedDeclaredFromPage` | an owner-attached page authors tool schemas and executes tool logic in its own main world WITHOUT origin enrolment: Chrome top-frame attestation, schema/argument validation and fenced disclosure are the whole boundary (T10) |
 
 ---
 
@@ -248,7 +274,7 @@ consequences are carried by the matching register entry where one exists.
   origin comes from the sender, never from the body; a claimed-origin mismatch is
   refused. **Live proof:** `scripts/security-suite.ts:307-308` (a page MAIN world has no
   `chrome.runtime` at all) and `docs/CONSTITUTION.md:17`.
-- **Evidence pin: `origin/main@28c7189d` for TB2/T2.** The sender-derived origin and page-route allowlist were re-read at the symbols in TB2; older T2 line locators are historical.
+- **Evidence pin: `origin/main@fe4926a72` for TB2/T2.** The sender-derived origin and page-route allowlist were re-read at the symbols in TB2; older T2 line locators are historical.
 
 ### T3. Sender-classifier default: an out-of-spec sender is classified as an extension document
 
@@ -288,7 +314,7 @@ consequences are carried by the matching register entry where one exists.
 - **Boundary:** TB4. **Evidence:** `extension/lib/fetch-policy.js#isPrivateOrLoopbackHost`,
   `#checkFetchPolicy`, `#extractFetchHosts`; shared by `checkPythonNetworkRequest`
   (`extension/lib/python-network.js#checkPythonNetworkRequest`), the enclave proxy
-  (`extension/background/routes/enclave-proxy.js#enclaveProxy`), and skill import
+  (`extension/background/routes/enclave-proxy.js#createEnclaveProxyRoutes`), and skill import
   (`extension/lib/skill-import.js#validateHttpUrl`, `#fetchWithSafeRedirects`, `#fetchGitHubSkill`,
   `#discoverRepoSkillsAndCommands`, `#installBatchSkillsAndCommands`); SW routes at
   `extension/background/service-worker.js#cap:fetch` (`cap:fetch`),
@@ -319,11 +345,21 @@ consequences are carried by the matching register entry where one exists.
 
 ### T7. Credential exfiltration into hook prompts, logs and errors
 
-- **Boundary:** S12 / S9. **Evidence:** `extension/lib/pure.js:959` (`SECRET_KEY_RE`),
-  `:1114` (`redactSecrets`), `:1034` (`redactSecretText`), `:1102` (`safeProviderError`).
+- **Boundary:** S12 / S9 / S15. **Evidence:** `extension/lib/pure.js#SECRET_KEY_RE`,
+  `#redactSecrets`, `#redactSecretText`, `#safeProviderError`.
   **Tests:** `tests/security.test.ts:79-99`, `tests/secret-redaction.test.ts:10-40`.
   The historical shape — the `storage.onChanged` hook forwarded `providerConfig.apiKey` —
-  is the reason this module exists (`extension/lib/pure.js:952-958`).
+  is the reason this module exists.
+  **Export sink (landed after the previous pin):** the thread/artifact export route
+  materialises EVERY raw vault secret and provider key in service-worker memory to
+  scrub them from untrusted conversation history before the HTML leaves the machine
+  (S15; `extension/background/service-worker.js#threadExportRoute` →
+  `extension/lib/thread-export-route.js#createThreadExportRoute`,
+  `extension/lib/thread-export-redact.js#collectProfileSecrets`). Its scrubbers are
+  exact-value, URL-userinfo/query, bare-shape and local-path based; extending the
+  canonical key-shape rule to structured export payloads is bead
+  `chrome-agent-platform-qfu7k`, in flight at this pin. **Test:**
+  `tests/thread-export-html.test.ts`.
 
 ### T8. Credential smuggling and prototype pollution through an imported archive
 
@@ -346,15 +382,31 @@ consequences are carried by the matching register entry where one exists.
 
 ### T10. WebMCP tool invocation beyond the consent the owner gave
 
-- **Boundary:** S2. **Evidence:** `extension/lib/tools.js:511` (`isApproved`), the
+- **Boundary:** S2 / S18. **Evidence:** `extension/lib/tools.js#isApproved`, the
   authority evaluation at `extension/lib/webmcp-authority.js:68` and the dispatch gate at
   `:163`; enrolment-derived tool directory and per-tool consent generations. The
   residual question (does enrolment alone consent to a MUTATING tool?) is register R9.
+  **Attached unenrolled WebMCP (landed after the previous pin, S18):** an
+  owner-ATTACHED tab may declare tools via `document.modelContext.getTools()` and
+  answer invocations in its own main world without origin enrolment. The consent is
+  run-scoped and in-process: Chrome top-frame attestation
+  (`extension/lib/attached-webmcp-attestation.js#attestCurrentAttachedWebmcpTab`),
+  page-declared schemas read and validated before use
+  (`extension/lib/attached-webmcp-declared.js#readDeclaredWebmcpFromPage`), caller
+  arguments validated against the page's own schema
+  (`extension/lib/attached-webmcp-authority.js#validateAttachedDeclaredArgs`), and
+  untrusted tool names/descriptions fenced on the way into the prompt
+  (`extension/lib/attached-webmcp-disclosure.js#formatAttachedDeclaredContext`).
+  Enrolment is therefore no longer the ONLY consent path (§7 item 4 amended).
+  Residual: a hostile page in an attached tab still authors both the schema and the
+  result text — T9 fencing applies — and the ephemeral site-tool consent store
+  (`extension/lib/ephemeral-site-tool-consent.js#createEphemeralSiteToolConsentStore`)
+  never persists beyond the run.
 
 ### T11. Broad host access and the universal extension fingerprint
 
-- **Boundary:** TB1 → page. **Evidence:** `extension/manifest.json:124-126`
-  (`host_permissions: ["<all_urls>"]`) and `:127-152` (two content scripts at
+- **Boundary:** TB1 → page. **Evidence:** `extension/manifest.json:125-127`
+  (`host_permissions: ["<all_urls>"]`) and `:128-153` (two content scripts at
   `document_start`); the MAIN-world probe sets `window.__cap_webmcp_detect` at
   `extension/content/webmcp-detect-main.js:5` with an HMAC tag minted at `:33-41`. **Answer:**
   the relay derives the origin from its OWN `location.origin`
@@ -462,14 +514,24 @@ consequences are carried by the matching register entry where one exists.
   share the extension message bus. A same-extension document or content script
   must not submit `cap:user-wasm-run`, `cap:emscripten-run`, `cap:wasm-wasi-job-run`
   or the other host job types as though it were the privileged broker.
-  **Controls:** `isTrustedServiceWorkerSender` (`extension/lib/pure.js:959`) checks
+  **Controls:** `isTrustedServiceWorkerSender`
+  (`extension/lib/pure.js#isTrustedServiceWorkerSender`) checks
   the extension ID, absent tab/document identities and exact background bundle URL;
-  user-Wasm, WASI-job, Emscripten, SVG and on-device text listeners gate their
-  respective commands before execution. The ACP model host uses `onConnect`,
+  ALL twelve §1 host lanes gate their respective commands before execution, including
+  the two newest command sets: `cap:table-worker-run`/`cap:table-worker-cancel`
+  (`extension/lib/table-worker-host.js#TABLE_WORKER_RUN_TYPE`) and
+  `cap:emscripten-host-stage-only`
+  (`extension/lib/emscripten-stage-protocol.js#EMSCRIPTEN_HOST_STAGE_TYPE`). The ACP model host uses `onConnect`,
   not the onMessage census, and validates the port sender's ID, absent tab and
   exact background URL (`extension/lib/acp-model-host.js:5-13`). The Emscripten
   request uses an exact-key envelope (`extension/lib/emscripten-host.js:30-54`,
   `:110`) and checks each asset's size and SHA-256 before a fresh worker (:168).
+  The staging host gates the SW sender BEFORE its lazy import
+  (`extension/lib/emscripten-host-stage-route.js#registerEmscriptenBinaryStagingHost`)
+  and validates exact request/identity/operation key sets
+  (`extension/lib/emscripten-host-stage.js`); Wasm-stream owner identity uses the
+  injective length-prefixed grammar of `extension/lib/wasm-stream-owner-codec.js`
+  (`agent:v2:<len>:<runId><agentId>`; legacy owner strings fail closed).
   **Residual:** the listener inventory in
   `tests/onmessage-sender-guard.test.ts` is a syntactic scan of
   `runtime.onMessage.addListener` registrations. It resolves simple aliases of
@@ -544,7 +606,7 @@ and each names the executable check that would catch a regression.
   (browser sender classification and derived-origin overwrite inside that listener);
   `scripts/security-suite.ts:307-308`. A new route that reads an origin, tab id or
   document id out of the message body breaks this.
-- **Evidence pin: `origin/main@28c7189d` for INV-1/2.** The sender/allowlist symbols were re-read at this tree; other invariant citations retain their own historical context.
+- **Evidence pin: `origin/main@fe4926a72` for INV-1/2.** The sender/allowlist symbols were re-read at this tree; other invariant citations retain their own historical context.
 - **INV-2 — The page-reachable route set is closed and tiny.**
   `PAGE_ALLOWED_ROUTES` at `extension/lib/pure.js#PAGE_ALLOWED_ROUTES`, pinned by
   `tests/internal-sender-contract-audit.test.ts` (closed-page-route assertion).
@@ -555,17 +617,27 @@ and each names the executable check that would catch a regression.
   that adds either one REOPENS R22.
 - **INV-4 — Ordinary extension JS has no dynamic `eval` / `new Function`.**
   The manifest sandbox page is the explicit JS-eval exemption
-  (`extension/manifest.json:108-117`). This does **not** mean no code executes:
-  the extension-pages CSP permits `'wasm-unsafe-eval'` (manifest :115), and
+  (`extension/manifest.json:109-118`). This does **not** mean no code executes:
+  the extension-pages CSP permits `'wasm-unsafe-eval'` (manifest :116), and
   the offscreen workers execute admitted Wasm/Emscripten/Python through the
-  lanes in S6–S6d. A new JS-eval site in `extension/lib/` breaks the invariant.
+  lanes in S6–S6g. The Emscripten admission audit PARSES glue JS with the vendored
+  `extension/lib/vendor/acorn.mjs`
+  (`extension/lib/emscripten-js-capability-audit.js#auditEmscriptenJsCapabilities`) —
+  parsing is not evaluation, and audited code never executes during the audit — while
+  the SW-side OOXML readers (S16) execute no JS at all. A new JS-eval site in
+  `extension/lib/` breaks the invariant.
 - **INV-5 — Every broker-mediated fetch applies the private-address deny list AND the
   per-run host allow-list, with no credentials and no redirect following.**
   `extension/lib/fetch-policy.js:135`; `extension/background/service-worker.js#cap:fetch`,
   `extension/background/service-worker.js#python.fetch`. A new egress helper that calls `fetch` directly breaks this.
-- **INV-6 — A credential-shaped key never reaches a prompt, a log, a receipt or an error
-  string.** `extension/lib/pure.js:959`, `:1114`; `tests/security.test.ts:79-99`,
-  `tests/secret-redaction.test.ts`.
+- **INV-6 — A credential-shaped key never reaches a prompt, a log, a receipt, an error
+  string or an export.** `extension/lib/pure.js#SECRET_KEY_RE`, `#redactSecrets`;
+  the thread/artifact export scrubbers extend the same duty to the exported-HTML sink
+  (S15; `extension/lib/thread-export-redact.js#collectProfileSecrets`,
+  `#redactExportText`; key-shape parity for structured payloads is bead
+  `chrome-agent-platform-qfu7k`, in flight at this pin);
+  `tests/security.test.ts:79-99`, `tests/secret-redaction.test.ts`,
+  `tests/thread-export-html.test.ts`.
 - **INV-7 — Untrusted content reaches the model only inside a per-assembly random
   boundary, and the model is told that fenced text is data.**
   `extension/lib/untrusted-fence.js:46-96`; `extension/lib/system-prompts.js:763-773`;
@@ -598,12 +670,17 @@ and each names the executable check that would catch a regression.
   `tests/acp-loopback-optout.test.ts`.
 - **INV-15 — Every new offscreen execution host must authenticate the service
   worker before handling a job.** `isTrustedServiceWorkerSender` at
-  `extension/lib/pure.js:959` is the common onMessage predicate; the ACP model
+  `extension/lib/pure.js#isTrustedServiceWorkerSender` is the common onMessage
+  predicate; the ACP model
   host validates its `onConnect` sender separately (`extension/lib/acp-model-host.js:5-13`).
   An extension ID alone does not establish the SW principal because documents
   and content scripts share it. Validate each host's exact job envelope and
   asset identity as appropriate (`extension/lib/emscripten-host.js:30-54`,
-  `:110`, `:168`). The existing onMessage sender guard does not yet prove
+  `:110`, `:168`; the staging host's SW-sender-before-lazy-import gate at
+  `extension/lib/emscripten-host-stage-route.js#registerEmscriptenBinaryStagingHost`
+  with the exact key sets of `extension/lib/emscripten-host-stage.js`; and the
+  injective stream-owner grammar of `extension/lib/wasm-stream-owner-codec.js`).
+  The existing onMessage sender guard does not yet prove
   inventory completeness; adding a new registration without updating this
   model and its guard must be treated as an unreviewed change.
 
@@ -629,7 +706,10 @@ decision and, where one exists, the trigger that would reopen it.
    web-platform primitive yet that enforces data/code separation at the model boundary.
    Register R4.
 4. **Enrolment is the consent for an origin's tools (T10).** Accepted for reading tools;
-   the mutating-tool question stays open in register R9.
+   the mutating-tool question stays open in register R9. Since the attached-WebMCP lane
+   (S18), an owner-ATTACHED tab may also grant run-scoped, in-process consent to its OWN
+   declared tools without enrolment; that consent never reaches other origins and never
+   persists (`extension/lib/ephemeral-site-tool-consent.js#createEphemeralSiteToolConsentStore`).
 5. **No application-level byte ceiling (T16).** Chromium's native OPFS quota is the
    operative ceiling since directive `dptw`. Register R5.
 6. **The 60-second approval TTL (T17).** Accepted; the correct behaviour is an honest
