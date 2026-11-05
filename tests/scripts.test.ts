@@ -298,3 +298,41 @@ Deno.test("runFetch (nv5lt): the direct fallback fires exactly in the unscoped s
     else (globalThis as any).chrome = originalChrome;
   }
 });
+
+Deno.test("runFetch (nv5lt): chrome.runtime PRESENT without a sendMessage route FAILS CLOSED — an absent broker is not permission to bypass the broker", async () => {
+  // The review-FAIL boundary (nv5lt): the documented carve-out says the direct
+  // fetch is reachable only when chrome.runtime is ABSENT and there is no run
+  // id, but the broker condition tested `chrome.runtime?.sendMessage` — so a
+  // runtime that EXISTS without sendMessage used to fall through to the direct
+  // fetch for unscoped calls. The guard now refuses every runtime-present shape
+  // with no usable route; this pin mechanises that boundary.
+  const { runFetch } = await import("../extension/lib/script-host.js");
+  const originalChrome = (globalThis as any).chrome;
+  const originalFetch = globalThis.fetch;
+  const directCalls: string[] = [];
+  try {
+    // Runtime object PRESENT, no sendMessage — e.g. a context where the
+    // extension API surface is partially torn down or mocked.
+    (globalThis as any).chrome = { runtime: { id: "present-but-routeless" } };
+    globalThis.fetch = async (input: any) => {
+      directCalls.push(String(input));
+      return new Response("must never be fetched", { status: 200 });
+    };
+    // The unscoped shape — exactly what the old code let through to fetch().
+    const res = await runFetch({ url: "https://example.com/exfil", opts: {} });
+    assertEquals(res.ok, false, "a runtime present without sendMessage must fail closed, scoped or not");
+    assertEquals(String((res as any).error).includes("refusing rather than bypassing the broker"), true,
+      "the refusal must name the bypass refusal, not a generic fetch failure");
+    assertEquals(directCalls.length, 0,
+      "the direct fetch must NEVER run while chrome.runtime exists — that is the documented INV-5 carve-out boundary");
+    // The scoped shape in the same context fails closed too (guard fires
+    // before the runId confinement, both refuse).
+    const scoped = await runFetch({ url: "https://example.com/exfil", opts: {} }, "run-9");
+    assertEquals(scoped.ok, false, "a registered run in a routeless runtime context must also fail closed");
+    assertEquals(directCalls.length, 0, "no direct egress in either shape");
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalChrome === undefined) delete (globalThis as any).chrome;
+    else (globalThis as any).chrome = originalChrome;
+  }
+});

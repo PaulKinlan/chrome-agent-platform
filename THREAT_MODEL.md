@@ -573,9 +573,11 @@ and each names the executable check that would catch a regression.
   `extension/background/service-worker.js#python.fetch`. A new egress helper that calls `fetch` directly breaks this.
   The ONE sanctioned direct site is script-host's unscoped fallback
   (`extension/lib/script-host.js#runFetch`, te1pu/oe4nz): reachable only when `chrome.runtime` is
-  ABSENT and the call carries no run id; a registered run is refused there, and broker failure never
-  widens the fallback. Both boundaries are mechanised in `tests/scripts.test.ts` (nv5lt) — dropping
-  either precondition, or adding a second direct site, breaks this invariant.
+  ABSENT and the call carries no run id; a registered run is refused there, broker failure never
+  widens the fallback, and a runtime PRESENT without a usable `sendMessage` route is refused rather
+  than bypassed — an absent broker is not permission to bypass the broker. All three boundaries are
+  mechanised in `tests/scripts.test.ts` (nv5lt) — dropping any precondition, weakening the
+  route-less-runtime guard, or adding a second direct site, breaks this invariant.
 - **INV-6 — A credential-shaped key never reaches a prompt, a log, a receipt or an error
   string.** `extension/lib/pure.js#SECRET_KEY_RE` classifies the credential-shaped keys that
   `extension/lib/pure.js#redactSecrets` strips recursively (`redactSecretText` and

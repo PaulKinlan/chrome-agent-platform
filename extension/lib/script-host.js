@@ -62,6 +62,15 @@ export async function runFetch(payload, runId = null) {
       return { ok: false, error: `fetch failed: ${e?.message ?? e}` };
     }
   }
+  // nv5lt: chrome.runtime PRESENT without a usable sendMessage route means the
+  // broker is missing, NOT absent — an absent broker is not permission to bypass
+  // the broker. The direct-fetch fallback below is reachable only when the
+  // extension runtime is absent altogether (the unscoped non-extension host, per
+  // THREAT_MODEL.md INV-5's carve-out); every runtime-present shape fails closed,
+  // scoped or not.
+  if (typeof chrome !== "undefined" && chrome.runtime && typeof chrome.runtime.sendMessage !== "function") {
+    return { ok: false, error: "fetch failed: chrome.runtime exposes no sendMessage broker route — refusing rather than bypassing the broker" };
+  }
   // Confine direct-fetch fallback (te1pu/oe4nz): a registered run must never bypass
   // the brokered route. Direct fetch is allowed strictly in unscoped contexts (runId == null).
   if (runId != null) {
