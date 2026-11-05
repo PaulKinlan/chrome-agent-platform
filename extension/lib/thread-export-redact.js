@@ -5,7 +5,7 @@
 // (API keys, bearer tokens, passwords, headers, session cookies, HMACs) across arbitrary text,
 // plus URL query stripping, shape masking, and local path sanitization.
 
-import { BARE_SECRET_SHAPES } from "./pure.js";
+import { BARE_SECRET_SHAPES, SECRET_KEY_RE } from "./pure.js";
 
 /** Escape a literal string for safe use in RegExp. */
 function escapeRegex(s) {
@@ -314,7 +314,9 @@ export function redactExportText(text, { knownSecrets = [], scrubUrls = true, sc
 
 /**
  * Deeply redact any structured JSON/object value intended for export.
- * Drops internal security fields (approvalHmac, nonce, sessionToken) and
+ * Drops internal security fields (approvalHmac, nonce, sessionToken),
+ * replaces every key matching the canonical SECRET_KEY_RE (pure.js) with
+ * "[REDACTED]" (qfu7k parity with redactSecrets/cap-log/lazy-tool-protocol), and
  * redacts all strings.
  *
  * @param {any} value
@@ -344,6 +346,17 @@ export function redactExportValue(value, options = {}, depth = 0, seen = new Wea
       for (const [k, v] of Object.entries(value)) {
         // Discard approval HMACs and security token internal fields directly
         if (/^(approvalHmac|hmac|nonce|sessionToken|internalSecret|sig|signature)$/i.test(k)) {
+          continue;
+        }
+        // chrome-agent-platform-qfu7k: apply the CANONICAL key-shape rule
+        // (pure.js SECRET_KEY_RE — the same locator redactSecrets, cap-log and
+        // lazy-tool-protocol use). Before this, nested credential keys carried
+        // raw values into the export whenever the VALUE matched no bare-secret
+        // shape (e.g. password: "hunter2"): the drop-list above only covered
+        // internal security fields, so this second sanitizer never reached
+        // parity with the canonical filter on structured payloads.
+        if (SECRET_KEY_RE.test(k)) {
+          out[k] = "[REDACTED]";
           continue;
         }
         out[k] = redactExportValue(v, options, depth + 1, seen);

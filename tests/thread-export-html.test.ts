@@ -143,6 +143,63 @@ Deno.test("redactExportValue: fail-closed drops approval HMACs and security fiel
   assertEquals(redacted.nested.payload, "safe data");
 });
 
+// qfu7k: the export sanitizer must apply the CANONICAL key-shape rule
+// (pure.js SECRET_KEY_RE) to structured payloads — parity with redactSecrets,
+// cap-log and lazy-tool-protocol. Test shape reused from
+// tests/secret-redaction.test.ts's leading-boundary case (d8qsc/nn9sr class).
+Deno.test("redactExportValue: canonical key-shape rule redacts nested credential keys (qfu7k)", () => {
+  const payload = {
+    config: {
+      api_key: "real-one",
+      password: "hunter2", // no bare-secret SHAPE — only the key rule catches this value
+      authorization: "Basic dXNlcjpwYXNz",
+      mytoken: "abc", // keyword INSIDE a word: survives (canonical boundary)
+      notasecret: "xyz",
+      label: "safe",
+    },
+    servers: [{ token: "t0k", name: "ok" }],
+  };
+  const out = redactExportValue(payload, { knownSecrets: [] });
+  assertEquals(out.config.api_key, "[REDACTED]", "a real credential key is redacted");
+  assertEquals(out.config.password, "[REDACTED]", "password key redacted regardless of value shape");
+  assertEquals(out.config.authorization, "[REDACTED]", "authorization key redacted");
+  assertEquals(out.config.mytoken, "abc", "mytoken (keyword INSIDE a word) survives");
+  assertEquals(out.config.notasecret, "xyz", "notasecret survives");
+  assertEquals(out.config.label, "safe");
+  assertEquals(out.servers[0].token, "[REDACTED]", "credential keys inside arrays are redacted");
+  assertEquals(out.servers[0].name, "ok");
+});
+
+Deno.test("redactExportValue: key-shape decisions match the canonical redactSecrets locator (qfu7k parity)", async () => {
+  const { redactSecrets } = await import("../extension/lib/pure.js");
+  // Drop-listed internal fields are excluded: the export sanitizer DROPS them
+  // (stronger than redaction), so they legitimately differ in mechanism.
+  const keys = ["api_key", "apiKey", "token", "access_key", "accessKey", "bearer", "credential",
+    "secret", "password", "authorization", "mytoken", "notasecret", "session", "label", "apiKeyId"];
+  for (const key of keys) {
+    const exportOut = redactExportValue({ [key]: "v" }, { knownSecrets: [] })[key];
+    const canonicalOut = redactSecrets({ [key]: "v" })[key];
+    assertEquals(
+      exportOut === "[REDACTED]",
+      canonicalOut === "[REDACTED]",
+      `key '${key}' must mask identically in the export sanitizer and the canonical filter`,
+    );
+  }
+});
+
+Deno.test("redactExportText: JSON-looking payloads get the same canonical key rule (qfu7k)", () => {
+  const out = redactExportText('{"apiKey": "hunter2", "keep": "safe"}', { knownSecrets: [] });
+  assert(!out.includes("hunter2"), "the nested credential value never survives the JSON path");
+  assertStringIncludes(out, '"[REDACTED]"');
+  assertStringIncludes(out, '"safe"');
+});
+
+Deno.test("redactExportValue: internal security fields stay DROPPED, not merely redacted (qfu7k precedence)", () => {
+  const out = redactExportValue({ sessionToken: "abc123", nested: { approvalHmac: "hm4c" } }, { knownSecrets: [] });
+  assert(!("sessionToken" in out), "drop-list wins over the key-shape rule: sessionToken is removed entirely");
+  assert(!("approvalHmac" in out.nested), "nested drop-listed field removed entirely");
+});
+
 // ── Part 2: HTML Generator & Poisoned Fixture Acceptance ────────────────────
 
 Deno.test("renderThreadToHtml: exports canonical messages projection with ALL seeded secrets strictly absent", () => {
