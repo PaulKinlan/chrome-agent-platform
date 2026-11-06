@@ -146,3 +146,91 @@ Deno.test("j7k25: a getter that MUTATES the input mid-walk is caught by the boun
   });
   expectSeedFail({ files: [row("scratch/proto.bin", proto)] }, "mid-walk prototype swap");
 });
+
+// --- b4pei round 2: the residuals the exported contract lists are EXECUTABLE bounds -------------
+//
+// The reviewer's FAILED verdict on round 1: the prose claimed "exactly three
+// bounded residuals" and "extra own symbols fail", but a getter could add a
+// SYMBOL after the pre-walk check (live repro: accepted, output pure). Round 2
+// closes that hole in code (a post-walk own-symbols re-check) and pins every
+// residual behaviourally, so code drift away from the documented bound reds
+// this suite instead of silently falsifying the contract text.
+
+Deno.test("b4pei r2: a getter that adds a PERSISTENT symbol mid-walk is refused by the post-walk symbol re-check", () => {
+  // The reviewer's repro: accepted on main at the round-1 tip, must now fail.
+  const arr = [1, 2, 3];
+  let ran = false;
+  Object.defineProperty(arr, 0, {
+    get() {
+      if (!ran) { ran = true; (arr as any)[Symbol("late")] = 9; }
+      return 1;
+    },
+    enumerable: true,
+    configurable: true,
+  });
+  expectSeedFail({ files: [row("scratch/late-symbol.bin", arr)] }, "getter-added persistent symbol");
+});
+
+Deno.test("b4pei r2 residual 4: a symbol added AND removed inside the walk is accepted and inert", () => {
+  const arr = [1, 2, 3];
+  const sym = Symbol("transient");
+  let added = false;
+  Object.defineProperty(arr, 0, {
+    get() {
+      if (!added) { added = true; (arr as any)[sym] = 9; }
+      return 1;
+    },
+    enumerable: true,
+    configurable: true,
+  });
+  Object.defineProperty(arr, 2, {
+    get() { delete (arr as any)[sym]; return 3; },
+    enumerable: true,
+    configurable: true,
+  });
+  const ok = validateWorkspaceSeed({ files: [row("scratch/transient-symbol.bin", arr)] });
+  assertEquals([...ok.files[0].bytes], [1, 2, 3], "the dense output is exactly the snapshot bytes");
+  assertEquals(Object.getOwnPropertySymbols(ok.files[0].bytes).length, 0, "the frozen output cannot carry the transient symbol");
+});
+
+Deno.test("b4pei r2 residual 3: an enumerable key added by a getter AFTER the key-set proof is accepted and inert", () => {
+  // The original b4pei CASE C repro, now an executable pin of the documented
+  // residual instead of a prose claim: the key proof is not re-run, and the
+  // smuggled key never reaches the frozen output.
+  const arr = [1, 2, 3];
+  let ran = false;
+  Object.defineProperty(arr, 0, {
+    get() {
+      if (!ran) {
+        ran = true;
+        Object.defineProperty(arr, "evil", { value: 7, enumerable: true, configurable: true });
+      }
+      return 1;
+    },
+    enumerable: true,
+    configurable: true,
+  });
+  const ok = validateWorkspaceSeed({ files: [row("scratch/late-key.bin", arr)] });
+  assertEquals([...ok.files[0].bytes], [1, 2, 3]);
+  assert(Object.prototype.hasOwnProperty.call(arr, "evil"), "the INPUT keeps the smuggled key (the documented accepted residual)");
+  assert(!("evil" in ok.files[0].bytes), "the frozen output cannot carry it");
+});
+
+Deno.test("b4pei r2 source pin: the post-walk re-check re-runs the symbol proof (the guarantee is code, not prose)", async () => {
+  const source = await Deno.readTextFile(new URL("../extension/lib/wasm-sync-workspace.js", import.meta.url));
+  const blockStart = source.indexOf("function exactDenseByteArray");
+  const blockEnd = source.indexOf("function classForPath", blockStart);
+  assert(blockStart >= 0 && blockEnd > blockStart, "the byte validator exists");
+  const block = source.slice(blockStart, blockEnd);
+  const postWalk = block.slice(block.indexOf("Bounded post-walk re-check"));
+  assert(postWalk.length > 0, "the post-walk re-check comment anchors the tail of the validator");
+  assert(
+    postWalk.includes("getOwnPropertySymbols"),
+    "the post-walk re-check must re-run the own-symbols proof (b4pei round 2): a getter-added symbol fails",
+  );
+  assertEquals(
+    (block.match(/Object\.getOwnPropertySymbols\(value\)\.length !== 0/g) || []).length,
+    2,
+    "the zero-symbol proof runs exactly twice: before the walk and after it",
+  );
+});

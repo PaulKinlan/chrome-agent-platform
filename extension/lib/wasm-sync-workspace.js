@@ -185,13 +185,26 @@ function exactDenseArrayValues(value, maxLength) {
 // neither can reach the output:
 //   1. An own ENUMERABLE index accessor whose getter returns valid bytes is
 //      snapshotted, not rejected: the getter runs exactly once, its value is
-//      byte-checked and frozen into the fresh dense result, and the input is
-//      never read again — so a differing second answer cannot exist downstream.
+//      byte-checked and frozen into the fresh dense result, and the input's
+//      BYTE VALUES are never read again — the only post-walk reads are the
+//      prototype, `length` descriptor and own-symbols re-check below — so a
+//      differing second answer cannot exist downstream.
 //      Every accessor shape that is observable in bounded time still fails
 //      (nonenumerable: count; getter-less setter or invalid return: byte check).
 //   2. An extra NONENUMERABLE own string key is invisible to the enumerable
 //      count; it can never enter the dense output. Extra ENUMERABLE keys of any
-//      shape still fail, extra own symbols fail the bounded symbol check.
+//      shape still fail, and extra own symbols fail the bounded symbol check —
+//      which runs BOTH before and after the walk (b4pei round 2), so a symbol
+//      added mid-walk fails too.
+//   3. An extra ENUMERABLE string key ADDED by an index getter's side effect
+//      after the bounded key-set proof has run is accepted and inert: the
+//      proof is not re-run, and the fresh dense output cannot carry the key.
+//   4. A symbol added AND removed entirely between the two symbol checks is
+//      accepted and inert: it is never read, and the fresh dense output cannot
+//      carry it. This is the narrowest window and, like (3), an epistemic
+//      limit of bounded checking — not an output-purity one. Each residual is
+//      pinned behaviourally in tests/wasm-sync-workspace-validator-walk.test.ts,
+//      so code drift away from these bounds reds a suite, not just this text.
 // A getter mutating the input mid-walk is re-checked at bounded cost: after the
 // walk the prototype and the `length` descriptor must be unchanged, and every
 // byte in the result passed its own range check at its own single Get.
@@ -220,6 +233,15 @@ function exactDenseByteArray(value, maxLength) {
   if (Object.getPrototypeOf(value) !== Array.prototype) seedFail();
   const afterDescriptor = Object.getOwnPropertyDescriptor(value, "length");
   if (!afterDescriptor || !("value" in afterDescriptor) || afterDescriptor.value !== length) seedFail();
+  // chrome-agent-platform-b4pei round 2 (reviewer's live repro): the pre-walk
+  // zero-symbol proof can be defeated by an index getter's side effect adding
+  // a symbol mid-walk. A symbol present after the walk fails too, so the
+  // "extra own symbols fail" guarantee covers late additions; only a symbol
+  // added AND removed entirely inside the walk survives (residual 4) — it is
+  // never read and cannot reach the dense output. gOPS on a dense array is
+  // O(symbol count), so unlike an Object.keys re-enumeration this does NOT
+  // reintroduce the O(n) reflective pass j7k25 removed.
+  if (Object.getOwnPropertySymbols(value).length !== 0) seedFail();
   return dense;
 }
 
@@ -238,21 +260,37 @@ function classForPath(path) {
 // contract used to promise "no getters / no extra string or symbol keys"
 // outright, which the j7k25 bytes rewrite made false in one direction while
 // tightening another - the honest guarantee is per layer):
-// - The outer/files/row layers (exactOwnDataValues) keep the strict promise:
-//   only the exact OWN DATA properties, any accessor or extra key fails.
+// - The outer object and the path/bytes ROW layers (exactOwnDataValues) keep
+//   the strict promise: only the exact OWN DATA properties, any accessor or
+//   extra key fails. The FILES ARRAY layer is proved by exactDenseArrayValues,
+//   not exactOwnDataValues - the same promise with a different proof shape:
+//   exactly `length`+1 own string keys (one `length` plus dense indexes), any
+//   accessor or extra key fails.
 // - The BYTES layer (exactDenseByteArray, j7k25: bounded key-set proof + one
-//   Get walk instead of two reflective passes per byte) accepts exactly two
+//   Get walk instead of two reflective passes per byte) accepts exactly four
 //   bounded residuals, documented at the function and repeated here because
 //   they are part of THIS exported contract: (1) an own ENUMERABLE index
 //   accessor whose getter returns valid bytes is snapshotted once - the getter
 //   runs exactly once, its value is byte-checked and frozen into the fresh
-//   dense output, and the input is never read again; (2) an extra
-//   NONENUMERABLE own string key is inert - it can never enter the dense
-//   output. Every other accessor shape still fails (nonenumerable index:
+//   dense output; after the walk the input is re-read ONLY for the bounded
+//   prototype + `length` + own-symbols re-check, never for byte values;
+//   (2) an extra NONENUMERABLE own string key is inert - it can never enter
+//   the dense output; (3) an extra ENUMERABLE string key ADDED by an index
+//   getter's side effect after the bounded key-set proof has run is accepted
+//   and inert - the proof is not re-run and the fresh dense output cannot
+//   carry it; (4) a symbol added AND removed entirely between the two symbol
+//   checks (before the walk and after it) is accepted and inert - it is never
+//   read and the dense output cannot carry it.
+//   Every other accessor shape still fails (nonenumerable index:
 //   count; getter-less setter or invalid return: byte check), every extra
-//   ENUMERABLE string key fails, extra own symbols fail the bounded symbol
-//   check, and nonenumerable index DATA now fails - a deliberate tightening
-//   of the pre-j7k25 ownKeys shape, not a relaxation.
+//   ENUMERABLE string key PRESENT WHEN THE KEY-SET PROOF RUNS fails, extra own
+//   symbols fail the bounded symbol check at EITHER of its two runs (a symbol
+//   added mid-walk and still present afterwards fails), and nonenumerable
+//   index DATA now fails - a deliberate tightening of the pre-j7k25 ownKeys
+//   shape, not a relaxation. Each residual has a behavioural pin in
+//   tests/wasm-sync-workspace-validator-walk.test.ts; the per-layer function
+//   attributions in this paragraph are prose (no executable census pins them
+//   to the code yet).
 //
 // Paths are
 // unique relative `inputs/<file>` OR `scratch/<file>` rows (mixed classes are
