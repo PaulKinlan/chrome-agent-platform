@@ -1521,6 +1521,33 @@ export class ServiceWorkerTargetTimeoutError extends Error {
   }
 }
 
+/**
+ * Injectable clock/timer seam (chrome-agent-platform-ilhra). Tests drive the discovery loop on
+ * VIRTUAL time with it: the resilience suite's absolute wall-clock timers (a 250ms stall vs a 50ms
+ * per-call budget, 300ms deadlines vs attempt counts, a duration<2500ms rail) each collapsed under
+ * >200ms scheduler slips because they compared wall sleeps against each other. Production callers
+ * pass no clock and get REAL_CLOCK — the exact Date.now/setTimeout behaviour this loop always had.
+ *
+ * `timer()` is the cancellable form: withTimeoutViaSleep cancels the race timer the moment the
+ * call settles (mirroring withTimeout's clearTimeout), so losing timers cannot linger — on a
+ * virtual clock a lingering timer would FIRE and drag virtual time forward between polls.
+ */
+export interface WaitClock {
+  now(): number;
+  sleep(ms: number): Promise<void>;
+  timer(ms: number): { promise: Promise<void>; cancel(): void };
+}
+
+export const REAL_CLOCK: WaitClock = {
+  now: () => Date.now(),
+  sleep: (ms) => new Promise<void>((r) => setTimeout(r, ms)),
+  timer(ms) {
+    let handle: ReturnType<typeof setTimeout> | undefined;
+    const promise = new Promise<void>((r) => { handle = setTimeout(r, ms); });
+    return { promise, cancel: () => { if (handle !== undefined) clearTimeout(handle); } };
+  },
+};
+
 export interface WaitForServiceWorkerOpts {
   /** Overall deadline budget for the service worker discovery loop (default 15000ms). */
   timeoutMs?: number;
@@ -1534,6 +1561,8 @@ export interface WaitForServiceWorkerOpts {
   measureVerdict?: () => Promise<EvaluateTimeoutVerdict>;
   /** Test seam: override live Chrome process count. */
   countLiveChrome?: () => number;
+  /** Test seam (chrome-agent-platform-ilhra): injectable clock/timer pair; default is the real one. */
+  clock?: WaitClock;
 }
 
 /**
@@ -1560,7 +1589,10 @@ export async function waitForServiceWorker(
   const totalTimeoutMs = opts.timeoutMs ?? 15000;
   const callTimeoutMs = opts.callTimeoutMs ?? Math.min(5000, totalTimeoutMs);
   const intervalMs = opts.intervalMs ?? 250;
-  const deadline = Date.now() + totalTimeoutMs;
+  // ilhra: every time read and every timer in this loop goes through the injected clock when one
+  // is present; REAL_CLOCK is the exact real-clock behaviour this function always had.
+  const clock = opts.clock ?? REAL_CLOCK;
+  const deadline = clock.now() + totalTimeoutMs;
   const match = opts.match ?? SW_MATCH;
 
   let attempts = 0;
@@ -1569,9 +1601,9 @@ export async function waitForServiceWorker(
 
   for (;;) {
     attempts++;
-    const now = Date.now();
-    if (now >= deadline) break;
-    const remaining = deadline - now;
+    const nowT = clock.now();
+    if (nowT >= deadline) break;
+    const remaining = deadline - nowT;
     const thisCallBudget = Math.min(callTimeoutMs, Math.max(1, remaining));
 
     let res: any = null;
@@ -1580,7 +1612,7 @@ export async function waitForServiceWorker(
       const callPromise = send("Target.getTargets");
       // Prevent unhandled rejection if callPromise times out and later rejects
       callPromise.catch(() => {});
-      res = await withTimeout(callPromise, thisCallBudget);
+      res = await withTimeoutViaSleep(callPromise, thisCallBudget, clock);
     } catch (err) {
       if (isTerminalTransportError(err)) {
         // A closed CDP socket cannot recover on subsequent calls; fail immediately
@@ -1609,8 +1641,8 @@ export async function waitForServiceWorker(
       if (found) return found;
     }
 
-    if (Date.now() >= deadline) break;
-    await new Promise((r) => setTimeout(r, intervalMs));
+    if (clock.now() >= deadline) break;
+    await clock.sleep(intervalMs);
   }
 
   // If deadline was exhausted and we encountered any call timeouts / errors:
@@ -1766,6 +1798,23 @@ export function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
     const t = setTimeout(() => reject(new Error("deadline")), ms);
     p.then((v) => { clearTimeout(t); resolve(v); }, (e) => { clearTimeout(t); reject(e); });
   });
+}
+
+/**
+ * withTimeout over an injectable clock (chrome-agent-platform-ilhra): the same 'deadline'
+ * contract, but the timer comes from clock.timer() and is CANCELLED the moment the race settles
+ * (mirroring withTimeout's clearTimeout) — on a virtual clock an uncancelled losing timer would
+ * fire later and drag virtual time forward. The losing timer's rejection is pre-caught so a
+ * settled race can never surface as unhandled.
+ */
+export function withTimeoutViaSleep<T>(p: Promise<T>, ms: number, clock: WaitClock): Promise<T> {
+  if (ms <= 0) return Promise.reject(new Error("deadline"));
+  const t = clock.timer(ms);
+  const timer = t.promise.then((): T => {
+    throw new Error("deadline");
+  });
+  timer.catch(() => {});
+  return Promise.race([p, timer]).finally(() => t.cancel());
 }
 
 /**
