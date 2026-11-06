@@ -75,7 +75,7 @@ Store-target bundle sizes from a fresh `npm run build:production` (measured 2026
 `origin/main` b6389708, v0.3.712). The reference sizes come from `STORE_SW_BUDGET_BYTES` and
 `STORE_BUNDLE_BUDGETS` in `scripts/bundle-budget.mjs`, the source of truth; this table is a dated
 snapshot, so re-measure rather than trusting it. Only store `offscreen.bundle.js` has an enforced
-per-bundle ceiling (258,000 bytes, ratcheted from 250,000 by bwxf); the other twelve are reported, not enforced:
+per-bundle ceiling (259,000 bytes, ratcheted from 250,000 by bwxf, then by hvd4s); the other twelve are reported, not enforced:
 
 | Surface | Size | Ceiling | Headroom |
 | --- | ---: | ---: | ---: |
@@ -89,14 +89,18 @@ per-bundle ceiling (258,000 bytes, ratcheted from 250,000 by bwxf); the other tw
 | artifact.bundle.js | 138,122 B | 200,000 B | 61,878 B |
 | directory.bundle.js | 61,788 B | 65,000 B | 3,212 B |
 | privacy.bundle.js | 63,912 B | 65,000 B | 1,088 B |
-| offscreen.bundle.js | 245,796 B | 258,000 B | 12,204 B |
+| offscreen.bundle.js | 245,796 B | 259,000 B | 13,204 B |
 | settings-view.bundle.js | 85,847 B | 120,000 B | 34,153 B |
 | chunks aggregate (7 chunks) | 556,793 B | 750,000 B | 193,207 B |
 
 Every store budget passes and none was relaxed. Five bundles sit under 5% headroom (diff-core
-377 B, privacy 1,088 B, options 5,473 B, offscreen 12,204 B, directory 3,212 B): that thin margin is
+377 B, privacy 1,088 B, options 5,473 B, offscreen 706 B after the hvd4s bridge ratchet, directory 3,212 B): that thin margin is
 the pattern chrome-agent-platform-3rryv tracks, not a single over-budget bundle. Note that the offscreen
-table row records the pre-wave 245,796 B snapshot against the ratcheted 258,000 B ceiling; the post-bwxf
+table row records the pre-wave 245,796 B snapshot; the ceiling cell tracks the enforced 259,000 B figure,
+ratcheted from the bwxf-era value by hvd4s as an explicitly tracked bridge authorised by the hub (the P2
+unbounded-streaming-read security fix measured +374 B at its shrunk floor against a pristine 80 B headroom
+floor); the x2ux1 offscreen bundle split structurally removes the need for it, and the ceiling is re-set from
+measurement when that lands (see scripts/bundle-budget.mjs); the post-bwxf
 wave-2 admission measured 255,306 B (2,694 B / ~1.0% headroom against the enforced ceiling), so active
 operational slack is narrower. The per-bundle
 ceilings quoted here earlier in this file (options 900,000, ntp 920,000, sidepanel 700,000, with

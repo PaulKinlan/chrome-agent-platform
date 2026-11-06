@@ -44,7 +44,22 @@ export const STORE_BUNDLE_BUDGETS = Object.freeze({
   // identities: xxhash64/xxhash3/xxhash128/crc64) measured 255,306 bytes at
   // the old ceiling (~1,300 B of descriptor data per admitted tool). The
   // ~1% headroom convention matches the descriptor-module ratchet.
-  "offscreen.bundle.js": 258_000,
+  // hvd4s (2026-11-06): 258_000 -> 259_000, an EXPLICIT TRACKED BRIDGE authorised
+  // by the hub (relayed via coord, 2026-11-06), not a landing detail.
+  // WHY the number moved: the P2 unbounded-streaming-read security fix (stream
+  // responses with an exact byte ceiling + cancel instead of buffering whole
+  // bodies) adds lib/fetch-body-bound.js to script-host.js, which ships inside
+  // this bundle. Measured at the pristine baseline origin/main 4eaf536a0:
+  // 257,920 bytes - only 80 B of headroom, so ANY script-host-touching security
+  // fix of this shape trips the ceiling. The helper was shrunk to its floor
+  // first (no exported constant, no bytesRead API, no releaseLock finally,
+  // fire-and-forget cancel, exact-cap chunk slicing): measured 258,294, a
+  // +374 B delta that cannot fit in 80 B.
+  // WHAT removes the need: chrome-agent-platform-x2ux1, the offscreen bundle
+  // split, fast-tracked by the same hub decision - dedupe shared weight, then
+  // a deliberate ceiling with stated slack, then the split. When x2ux1 lands,
+  // re-set this ceiling from measurement; do not ratchet again.
+  "offscreen.bundle.js": 259_000,
   "user-wasm-store-client.bundle.js": 10_000,
   "settings-view.bundle.js": 120_000,
 });

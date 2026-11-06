@@ -28,9 +28,11 @@
 //     script-host's fallback catches it to empty text. Never a silent partial
 //     body.
 //   - Kept deliberately minimal: this module ships inside the store offscreen
-//     bundle, whose enforced byte ceiling has only tens of bytes of headroom
-//     (coord, 2026-11-06: the budget protects offscreen startup; shrinking is
-//     the fix, not raising it).
+//     bundle, whose enforced byte ceiling had only 80 bytes of headroom at the
+//     pristine baseline. The hub authorised 259,000 as an explicit TRACKED
+//     BRIDGE for this fix (measured +374 B at this helper's shrunk floor);
+//     the x2ux1 offscreen split removes the need, and until it lands every
+//     byte here stays argued for - shrinking is still the first move.
 
 /**
  * Read a Response body as text, bounded at the stream level.
