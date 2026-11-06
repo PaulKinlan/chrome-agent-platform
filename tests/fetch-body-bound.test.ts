@@ -9,7 +9,7 @@
 // same landing.
 // @ts-nocheck
 import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
-import { readResponseTextBounded, FETCH_TEXT_MAX_BYTES } from "../extension/lib/fetch-body-bound.js";
+import { readResponseTextBounded } from "../extension/lib/fetch-body-bound.js";
 
 function streamResponse(chunks: Uint8Array[], opts: { onCancel?: () => void } = {}) {
   let i = 0;
@@ -35,18 +35,17 @@ function streamResponse(chunks: Uint8Array[], opts: { onCancel?: () => void } = 
   };
 }
 
-Deno.test("hvd4s: a huge body is NEVER fully read — the stream is cancelled at the ceiling", async () => {
+Deno.test("hvd4s: a huge body is NEVER fully read — the final chunk is sliced to the EXACT cap and the stream cancelled", async () => {
   const chunk = new Uint8Array(64 * 1024).fill(0x61); // 64 KB of 'a'
   const chunks = Array.from({ length: 200 }, () => chunk); // 12.8 MB total
   const { res, state } = streamResponse(chunks);
   const out = await readResponseTextBounded(res);
-  assertEquals(out.text.length, FETCH_TEXT_MAX_BYTES, "the text bound is exactly the ceiling");
+  assertEquals(out.text.length, 1_000_000, "exact-cap retention: the ceiling is absolute, not per-chunk-granular");
   assertEquals(out.truncated, true);
-  assert(state.cancelled, "the reader was CANCELLED — the rest of the body never entered the worker");
-  // 1,000,000 bytes / 65,536 per chunk = 16 chunks — versus the 200 (12.8 MB)
-  // the old `await res.text()` would have swallowed whole.
-  assert(state.chunksRead <= 17, `only ${state.chunksRead} of ${state.totalChunks} chunks were read`);
-  assert(out.bytesRead >= FETCH_TEXT_MAX_BYTES && out.bytesRead <= 17 * 64 * 1024, "bytesRead is honest about what was metered");
+  assert(state.cancelled, "the reader was CANCELLED at the cap — no further chunks are even delivered");
+  // 1,000,000 bytes / 65,536 per chunk = 15 full chunks + 1 sliced — versus
+  // the 200 (12.8 MB) the old `await res.text()` would have swallowed whole.
+  assertEquals(state.chunksRead, 16, "exactly the chunks needed to reach the cap were read");
 });
 
 Deno.test("hvd4s: a small body reads completely and decodes correctly across chunk boundaries, including a split multi-byte character", async () => {
@@ -65,7 +64,6 @@ Deno.test("hvd4s: a body-less response (HEAD shape / stream-less mock) yields th
   const out = await readResponseTextBounded({ body: null }, 1_000_000);
   assertEquals(out.text, "");
   assertEquals(out.truncated, false);
-  assertEquals(out.bytesRead, 0);
 });
 
 Deno.test("hvd4s: a mid-stream read failure PROPAGATES like res.text() did — no silent partial body", async () => {

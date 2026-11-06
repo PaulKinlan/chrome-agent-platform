@@ -6,68 +6,64 @@
 // simply huge response was buffered IN FULL inside the privileged service
 // worker before the bound existed — memory exhaustion with a 10 GB response,
 // while the shipped comments promised "size-bounded". The bound now applies to
-// the READ: the body stream is consumed incrementally and CANCELLED the moment
-// the ceiling is reached, so at most ceiling + one chunk is ever buffered.
+// the READ: the body stream is consumed incrementally, the final chunk is
+// SLICED to the exact remaining budget (retained text never exceeds the
+// ceiling — stronger than per-chunk granularity), and the stream is CANCELLED
+// there, so no further chunks are even delivered.
 //
 // Semantics (documented because they deliberately differ at the edges):
-//   - Reading stops at the FIRST of {maxBytes bytes read, maxBytes decoded
-//     chars}; the returned text is additionally sliced to maxBytes chars.
-//     For ASCII — the common case — the output is identical to the old
-//     buffer-then-slice. For multi-byte bodies the old shape could return up
-//     to 4x maxBytes of buffered bytes' worth of chars; 1 MB of BYTES is the
-//     honest unit for a memory bound, so such bodies now yield fewer chars.
-//   - `truncated` is true whenever the stream was not exhausted OR the decoded
-//     text exceeded the char ceiling — callers may surface it, never guess it.
+//   - The ceiling is in BYTES read; for ASCII — the common case — the output is
+//     identical to the old buffer-then-slice. For multi-byte bodies the old
+//     shape could return up to 4x maxBytes of buffered bytes' worth of chars;
+//     bytes are the honest unit for a memory bound, so such bodies now yield
+//     fewer chars. A sliced final chunk may end mid-character: the decoder
+//     flush renders that as U+FFFD — the honest face of a truncated body.
+//   - `truncated` is true whenever the stream was not exhausted — callers may
+//     surface it, never guess it.
 //   - A body-less response (HEAD, or a stream-less unit-test mock) yields the
 //     empty result: production service-worker responses always expose a body
-//     stream for GET, so the unbuffered shape only survives where the body is
-//     empty by construction.
+//     stream for GET.
 //   - A mid-stream read failure PROPAGATES, exactly like the old `res.text()`
 //     did: the SW broker's route turns it into its honest ok:false error, and
-//     script-host's fallback catches it to empty text like it caught text()
-//     failures before. Never a silent partial body.
-//   - Kept deliberately lean: this module ships inside the store offscreen
-//     bundle, whose byte ceiling is enforced (scripts/bundle-budget.mjs).
-
-/** The brokers' historic 1 MB text ceiling, now applied to the READ. */
-export const FETCH_TEXT_MAX_BYTES = 1_000_000;
+//     script-host's fallback catches it to empty text. Never a silent partial
+//     body.
+//   - Kept deliberately minimal: this module ships inside the store offscreen
+//     bundle, whose enforced byte ceiling has only tens of bytes of headroom
+//     (coord, 2026-11-06: the budget protects offscreen startup; shrinking is
+//     the fix, not raising it).
 
 /**
  * Read a Response body as text, bounded at the stream level.
  * @param {Response|{body?:any}} res
- * @param {number} [maxBytes]
- * @returns {Promise<{text: string, truncated: boolean, bytesRead: number}>}
+ * @param {number} [maxBytes] must be > 0 (callers pass an explicit budget)
+ * @returns {Promise<{text: string, truncated: boolean}>}
  */
-export async function readResponseTextBounded(res, maxBytes = FETCH_TEXT_MAX_BYTES) {
-  const cap = maxBytes > 0 ? maxBytes : FETCH_TEXT_MAX_BYTES;
+export async function readResponseTextBounded(res, maxBytes = 1_000_000) {
   const reader = res?.body?.getReader?.();
-  if (!reader) return { text: "", truncated: false, bytesRead: 0 };
+  if (!reader) return { text: "", truncated: false };
   const decoder = new TextDecoder();
   let out = "";
-  let bytesRead = 0;
+  let bytes = 0;
   let truncated = false;
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      bytesRead += value.byteLength;
-      out += decoder.decode(value, { stream: true });
-      if (bytesRead >= cap || out.length >= cap) {
-        // Ceiling reached: CANCEL — the rest of the body is never pulled into
-        // this worker.
-        truncated = true;
-        await reader.cancel().catch(() => {});
-        break;
-      }
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    let chunk = value;
+    if (bytes + chunk.byteLength > maxBytes) {
+      // Exact-cap retention: keep only what fits, then cancel — the rest of
+      // the body is never delivered to this worker at all.
+      chunk = chunk.subarray(0, maxBytes - bytes);
+      truncated = true;
     }
-    // Flush a partial multi-byte sequence at the ceiling (yields U+FFFD for a
-    // genuinely split character — the honest rendering of a truncated body).
-    out += decoder.decode();
-  } finally {
-    try {
-      reader.releaseLock();
-    } catch { /* cancel() already released the lock */ }
+    bytes += chunk.byteLength;
+    out += decoder.decode(chunk, { stream: true });
+    if (truncated) {
+      reader.cancel().catch(() => {});
+      break;
+    }
   }
-  if (out.length > cap) truncated = true;
-  return { text: out.slice(0, cap), truncated, bytesRead };
+  out += decoder.decode();
+  // out.length <= bytes <= maxBytes always (UTF-8 chars never outnumber
+  // bytes; the flush can add at most one U+FFFD within the cap), so no slice.
+  return { text: out, truncated };
 }

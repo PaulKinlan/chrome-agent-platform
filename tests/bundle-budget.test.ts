@@ -9,8 +9,7 @@
 // and a measured 3.0 MB store SW reference (advisory since 2026-10-05).
 // rmoh8 enforces only the offscreen store ceiling (250000 at rmoh8, ratcheted
 // to 258000 by bwxf's wave-2 admission: 4 new manifest identities measured
-// 255306 bytes; to 259000 by hvd4s's bounded-read helper: baseline measured
-// 257920 with only 80 B headroom, +459 B after shrinking the helper).
+// 255306 bytes).
 //
 // Falsification: a synthetic 258001-byte offscreen bundle fails naming its
 // source and top contributors. The order pin (scrub BEFORE
@@ -249,7 +248,7 @@ Deno.test("0kdsc / ug95c / k3vrl / akoxt / 324tz / rjvdp / h2c0e / tgff6 / benkb
     () =>
       verifyEnforcedOffscreenCeilingDocs({
         ...docs,
-        acpHarness: docs.acpHarness + "\nThe offscreen.bundle.js ceiling is 259,000 B.\n\nThat limit may grow to 300,000 B next wave.\n",
+        acpHarness: docs.acpHarness + "\nThe offscreen.bundle.js ceiling is 258,000 B.\n\nThat limit may grow to 300,000 B next wave.\n",
       }, offscreenCeiling),
     Error,
   );
@@ -297,11 +296,11 @@ Deno.test("0kdsc / ug95c / k3vrl / akoxt / 324tz / rjvdp / h2c0e / tgff6 / benkb
   // 5h7mi positive checks: unit-equivalent expressions pass
   verifyEnforcedOffscreenCeilingDocs({
     ...docs,
-    acpHarness: docs.acpHarness + "\nThe enforced offscreen.bundle.js ceiling is 259,000B for all store surfaces.\n",
+    acpHarness: docs.acpHarness + "\nThe enforced offscreen.bundle.js ceiling is 258,000B for all store surfaces.\n",
   }, offscreenCeiling);
   verifyEnforcedOffscreenCeilingDocs({
     ...docs,
-    acpHarness: docs.acpHarness + "\nThe enforced offscreen.bundle.js ceiling is 259 KB for all store surfaces.\n",
+    acpHarness: docs.acpHarness + "\nThe enforced offscreen.bundle.js ceiling is 258 KB for all store surfaces.\n",
   }, offscreenCeiling);
 
   // Case I: conflicting figure with no unit
@@ -319,7 +318,7 @@ Deno.test("0kdsc / ug95c / k3vrl / akoxt / 324tz / rjvdp / h2c0e / tgff6 / benkb
     () =>
       verifyEnforcedOffscreenCeilingDocs({
         ...docs,
-        acpHarness: docs.acpHarness + "\nThe offscreen.bundle.js ceiling is 259,000 B.\n\nThat limit may grow to 300,000 B next wave.\n",
+        acpHarness: docs.acpHarness + "\nThe offscreen.bundle.js ceiling is 258,000 B.\n\nThat limit may grow to 300,000 B next wave.\n",
       }, offscreenCeiling),
     Error,
   );
@@ -377,14 +376,14 @@ Deno.test("bundle budget: sizes return measured bytes; an over-reference bundle 
 
 Deno.test("rmoh8: a synthetic offscreen bundle over the enforced ceiling fails with typed measured-source evidence", () => {
   const ceiling = STORE_BUNDLE_BUDGETS["offscreen.bundle.js"];
-  assertEquals(ceiling, 259_000, "the store table is the single ceiling source (bwxf→hvd4s ratchet)");
+  assertEquals(ceiling, 258_000, "the store table is the single ceiling source (bwxf ratchet)");
   assertEquals(assertBundleBudget({ label: "offscreen.bundle.js", bytes: ceiling, budgetBytes: ceiling }), ceiling);
   const failure = assertThrows(() => assertBundleBudget({ label: "offscreen.bundle.js",
     bytes: ceiling + 1, budgetBytes: ceiling,
     metafile: { inputs: { "stage-host.js": { bytes: ceiling + 1 } } },
   }));
   assertEquals(failure.code, "cap_offscreen_bundle_ceiling_exceeded");
-  for (const fact of ["offscreen.bundle.js", "259001 bytes", "259000", "scripts/bundle-budget.mjs", "stage-host.js"]) {
+  for (const fact of ["offscreen.bundle.js", "258001 bytes", "258000", "scripts/bundle-budget.mjs", "stage-host.js"]) {
     assertStringIncludes(failure.message, fact);
   }
 });
@@ -606,7 +605,7 @@ Deno.test("9epn.4 bundle budget: dist.complete records every generated bundle, r
     assertEquals(size, (await Deno.stat(`extension/dist/${path}`)).size, `${path}: the recorded size is the shipped file's size`);
   }
   if (marker.target !== "store") return; // developer build: unminified by design; the references measure the store bytes
-  // All entries are reported; offscreen also has a hard ceiling (259000 since hvd4s).
+  // All entries are reported; offscreen also has a hard ceiling (258000 since bwxf).
   // A store build above it must fail before publication (rmoh8).
   for (const [path, budget] of Object.entries(STORE_BUNDLE_BUDGETS)) {
     const size = sizeOf.get(path);
@@ -1142,8 +1141,8 @@ Deno.test("9epn.5 bundle budget: offscreen.bundle.js <= 258 KB minified and all 
   try {
     const stat = await Deno.stat(offscreenBundle);
     assert(
-      stat.size <= 259_000,
-      `offscreen.bundle.js must be <= 259 KB minified (actual: ${stat.size} bytes)`,
+      stat.size <= 258_000,
+      `offscreen.bundle.js must be <= 258 KB minified (actual: ${stat.size} bytes)`,
     );
   } catch (e) {
     if (e instanceof Deno.errors.NotFound) {

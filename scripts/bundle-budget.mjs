@@ -44,15 +44,7 @@ export const STORE_BUNDLE_BUDGETS = Object.freeze({
   // identities: xxhash64/xxhash3/xxhash128/crc64) measured 255,306 bytes at
   // the old ceiling (~1,300 B of descriptor data per admitted tool). The
   // ~1% headroom convention matches the descriptor-module ratchet.
-  // hvd4s (2026-11-06): 258_000 -> 259_000. The bounded-read security fix
-  // (stream responses with a byte ceiling + cancel instead of buffering whole
-  // bodies) adds lib/fetch-body-bound.js to script-host.js, which ships inside
-  // this bundle. Measured: baseline at origin/main 4eaf536a0 = 257,920 (only
-  // 80 B of headroom - the next script-host-touching change would have tripped
-  // the ceiling regardless); +459 B after shrinking the helper to its
-  // stream-only core (mock fallback removed, callers keep their own error
-  // contracts). The ratchet is deliberate and minimal, not slack.
-  "offscreen.bundle.js": 259_000,
+  "offscreen.bundle.js": 258_000,
   "user-wasm-store-client.bundle.js": 10_000,
   "settings-view.bundle.js": 120_000,
 });
