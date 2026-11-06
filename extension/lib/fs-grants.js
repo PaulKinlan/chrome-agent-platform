@@ -745,12 +745,125 @@ export async function readFsGrantFile(
   return out;
 }
 
+// chrome-agent-platform-coz19: interim bounds on model-supplied regex grep,
+// until tmdm admits the managed rregex Wasm tool (a guaranteed linear-time
+// engine). V8 backtracks, and a single catastrophic re.test() is
+// UNINTERRUPTIBLE in-process — one nested-quantifier pattern over a large line
+// freezes the entire privileged service worker — so unsafe shapes are refused
+// BEFORE compilation rather than raced with a deadline (which cannot fire
+// mid-match anyway). The bound is a conservative syntactic admission, NOT a
+// linearity proof:
+//   - REFUSED: a quantifier applied to a group whose body contains a quantifier
+//     or an alternation AT ANY DEPTH — the canonical exponential classes
+//     ((a+)+, (a*)*, (a|b)+, ([a-z]+)*, (x(a|b)y)+, x(?=(a+)+b)) — and
+//     backreferences (\1..\9, \k<name>), which are NP-hard alongside
+//     quantifiers and unsupported by rregex anyway, so the interim admitted
+//     language is a subset of what the eventual linear-time engine can run.
+//   - ADMITTED: quantifier-free, alternation-free groups under quantifiers
+//     ((ab)+ — fixed-string repetition, linear) and the polynomial ambiguity
+//     classes a static bound cannot exclude (a+a+); those are contained by the
+//     CONTENT bounds at the match site instead (MAX_REGEX_LINE_CHARS per line,
+//     MAX_REGEX_SCAN_CHARS cumulative per call — both honestly reported).
+// Scanning is escape- and character-class-aware; group prefixes ((?:, (?=,
+// (?<=, (?<name>...) are consumed so their '?' is never mistaken for a
+// quantifier. A literal '{' counts as a quantifier (conservative).
+/** Per-line cap for regex matching; longer lines are skipped and counted. */
+export const MAX_REGEX_LINE_CHARS = 8192;
+/** Cumulative chars one grep call may feed to re.test(); hitting it stops the
+ * scan with truncated=true and regexBounds.scanBudgetHit=true. */
+export const MAX_REGEX_SCAN_CHARS = 4_000_000;
+
+/**
+ * Conservative syntactic complexity bound for model-supplied grep patterns.
+ * Returns null when the pattern is admitted, or a human/model-actionable
+ * reason string when refused. Pure and synchronous — testable without a grant.
+ * @param {string} src the raw pattern source (without flags)
+ * @returns {string | null}
+ */
+export function regexComplexityViolation(src) {
+  const s = String(src ?? "");
+  // One frame per open group; the root frame never closes and is never refused.
+  const stack = [{ risky: false }];
+  let inClass = false;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (inClass) {
+      if (c === "\\") { i++; continue; }
+      if (c === "]") inClass = false;
+      continue;
+    }
+    if (c === "\\") {
+      const n = s[++i];
+      if (n === undefined) break;
+      if ((n >= "1" && n <= "9") || n === "k") {
+        return `backreference \\${n} is not admitted in grep regex mode — backreferences are NP-hard alongside quantifiers and unsupported by the ReDoS-safe engine (tmdm); restructure the pattern or use literal search`;
+      }
+      continue;
+    }
+    if (c === "[") { inClass = true; continue; }
+    if (c === "(") {
+      // Consume the group prefix so its '?' never reads as a quantifier.
+      if (s[i + 1] === "?") {
+        if (s[i + 2] === "<" && (s[i + 3] === "=" || s[i + 3] === "!")) i += 3; // (?<= (?<!
+        else if (s[i + 2] === "=" || s[i + 2] === "!" || s[i + 2] === ":" || s[i + 2] === "#") i += 2; // (?= (?! (?: (?#
+        else if (s[i + 2] === "<") { // (?<name>
+          const end = s.indexOf(">", i + 3);
+          i = end === -1 ? i + 2 : end;
+        } else if (s[i + 2] === "P" && s[i + 3] === "<") { // (?P<name>
+          const end = s.indexOf(">", i + 4);
+          i = end === -1 ? i + 3 : end;
+        } else {
+          i += 1; // unknown (?... construct: skip the '?' only, stay conservative
+        }
+      }
+      stack.push({ risky: false });
+      continue;
+    }
+    if (c === ")") {
+      // Structural invalidity is RegExp's own verdict (fs_grep_invalid_regex),
+      // never the bound's — stop scanning and admit; compilation refuses it.
+      if (stack.length === 1) return null;
+      const top = stack.pop();
+      const next = s[i + 1];
+      const quantified = next === "*" || next === "+" || next === "?" || next === "{";
+      if (quantified && top.risky) {
+        return "a quantified group whose body contains a quantifier or an alternation is not admitted in grep regex mode — that shape backtracks exponentially in V8 and one catastrophic match freezes the whole service worker; simplify the group (quantifier-free bodies like (ab)+ are fine), use literal search, or wait for the ReDoS-safe engine (tmdm)";
+      }
+      const parent = stack[stack.length - 1];
+      // The closed group's risky contents — and the group quantifier itself —
+      // are now part of the parent body's risk.
+      if (parent && (quantified || top.risky)) parent.risky = true;
+      continue;
+    }
+    if (c === "|") {
+      const top = stack[stack.length - 1];
+      if (top) top.risky = true;
+      continue;
+    }
+    if (c === "*" || c === "+" || c === "?" || c === "{") {
+      const top = stack[stack.length - 1];
+      if (top) top.risky = true;
+      continue;
+    }
+  }
+  // Unclosed groups/classes and dangling escapes are structural problems:
+  // admitted here so new RegExp produces the genuine fs_grep_invalid_regex.
+  return null;
+}
+
 /**
  * Recursive, bounded content search (grep) over a granted directory handle.
  * Returns matching lines as `{ path, line, text }` — a real grep, never a
  * silent empty result. Binary and oversized files are skipped. `regex` opts
  * into RegExp matching (allowed under MV3 CSP — RegExp is not eval/new
- * Function); the default is a literal substring match, which cannot ReDoS.
+ * Function); chrome-agent-platform-coz19: a model-supplied pattern is
+ * COMPLEXITY-BOUNDED before compilation (regexComplexityViolation refuses the
+ * nested-quantifier and backreference classes whose single catastrophic
+ * re.test() is uninterruptible and would freeze the whole privileged service
+ * worker) and CONTENT-BOUNDED during the scan (per-line cap + cumulative
+ * budget, both honestly reported via regexBounds and the truncated flag). The
+ * default remains a literal substring match, which cannot ReDoS. The managed
+ * ReDoS-safe engine (guaranteed linear time) is tmdm.
  * @param {string} grantId
  * @param {{ query?: string, relativePath?: string, regex?: boolean, ignoreCase?: boolean, maxMatches?: number | null, maxDepth?: number | null }} [options]
  * @param {{ customIdb?: any }} [dbOptions]
@@ -773,8 +886,17 @@ export async function grepFsGrant(
 
   // Build the line matcher. RegExp is CSP-safe (unlike eval/new Function). A
   // literal substring is the default so a model-supplied pattern cannot ReDoS.
+  // coz19: regex mode IS model-supplied and V8 backtracks, so the pattern is
+  // complexity-bounded BEFORE compilation and the content is bounded during
+  // the scan — a single catastrophic re.test() is uninterruptible, and the
+  // blast radius is the entire service worker.
   let matcher;
+  let regexBounds = null;
   if (regex) {
+    const violation = regexComplexityViolation(q);
+    if (violation) {
+      return { ok: false, error: "fs_grep_regex_too_complex", detail: violation };
+    }
     let re;
     try {
       re = new RegExp(q, ignoreCase ? "i" : "");
@@ -782,6 +904,7 @@ export async function grepFsGrant(
       return { ok: false, error: "fs_grep_invalid_regex", detail: String(err?.message || err) };
     }
     matcher = (line) => re.test(line);
+    regexBounds = { skippedLongLines: 0, scanBudgetHit: false, charsTested: 0 };
   } else {
     const needle = ignoreCase ? q.toLowerCase() : q;
     matcher = (line) => (ignoreCase ? line.toLowerCase() : line).includes(needle);
@@ -797,7 +920,10 @@ export async function grepFsGrant(
   let filesScanned = 0;
   let truncated = false;
   // dptw: no match/file-scan ceilings and no per-file skip — an explicit
-  // maxMatches is a window request, honored exactly.
+  // maxMatches is a window request, honored exactly. (coz19 adds a SAFETY
+  // budget to REGEX mode only — a cumulative scanned-char cap reported via
+  // regexBounds.scanBudgetHit and the truncated flag; it bounds adversarial
+  // work, never the caller's requested window, and it is never silent.)
   const effectiveMax = Number.isFinite(Number(maxMatches)) && Number(maxMatches) > 0 ? Math.trunc(Number(maxMatches)) : Infinity;
   const effectiveDepth = Number.isFinite(Number(maxDepth)) && Number(maxDepth) > 0 ? Math.trunc(Number(maxDepth)) : Infinity;
 
@@ -832,6 +958,23 @@ export async function grepFsGrant(
         return;
       }
       let line = lines[i];
+      if (regexBounds) {
+        // coz19 content bounds (defense in depth for the polynomial classes a
+        // static bound cannot exclude, e.g. a+a+): cap what one re.test() can
+        // be asked to swallow, and cap the cumulative regex work per call.
+        // Both are honest: skips and the budget hit are counted and reported,
+        // and the budget sets the existing truncated flag — never a silent drop.
+        if (line.length > MAX_REGEX_LINE_CHARS) {
+          regexBounds.skippedLongLines += 1;
+          continue;
+        }
+        if (regexBounds.charsTested + line.length > MAX_REGEX_SCAN_CHARS) {
+          regexBounds.scanBudgetHit = true;
+          truncated = true;
+          return;
+        }
+        regexBounds.charsTested += line.length;
+      }
       if (matcher(line)) {
         matches.push({ path, line: i + 1, text: line });
       }
@@ -874,7 +1017,7 @@ export async function grepFsGrant(
 
   if (grant.kind === "file") {
     await scanFile(grant.handle, grant.name);
-    return { ok: true, grantId, query: q, matches, filesScanned, matchCount: matches.length, truncated };
+    return { ok: true, grantId, query: q, matches, filesScanned, matchCount: matches.length, truncated, ...(regexBounds ? { regexBounds } : {}) };
   }
 
   // Optionally scope the grep to a subdirectory of the granted folder.
@@ -892,7 +1035,7 @@ export async function grepFsGrant(
 
   await walk(startDir, segments.join("/"), 1);
 
-  return { ok: true, grantId, query: q, matches, filesScanned, matchCount: matches.length, truncated };
+  return { ok: true, grantId, query: q, matches, filesScanned, matchCount: matches.length, truncated, ...(regexBounds ? { regexBounds } : {}) };
 }
 
 /**
