@@ -89,8 +89,9 @@ export async function runFetch(payload, runId = null) {
   }
   // chrome-agent-platform-hvd4s: bound the READ itself. Pre-fix this fallback
   // buffered the whole body — and, unlike the SW broker, returned it with NO
-  // slice at all. The helper streams with the 1 MB ceiling and never throws.
-  const bounded = await readResponseTextBounded(res);
+  // slice at all. The helper streams with the 1 MB ceiling; a mid-stream
+  // failure degrades to empty text, exactly as the old text() catch did.
+  const bounded = await readResponseTextBounded(res).catch(() => ({ text: "" }));
   return tagUntrusted({ ok: true, status: res.status, url: res.url, text: bounded.text });
 }
 

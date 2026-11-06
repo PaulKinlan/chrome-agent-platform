@@ -18,38 +18,31 @@
 //     honest unit for a memory bound, so such bodies now yield fewer chars.
 //   - `truncated` is true whenever the stream was not exhausted OR the decoded
 //     text exceeded the char ceiling — callers may surface it, never guess it.
-//   - A stream-less response (unit-test mocks, exotic runtimes) falls back to
-//     text()+slice: production service-worker responses always expose a body
-//     stream, so the unbuffered shape only survives where the body is
-//     bounded by construction.
-//   - This helper NEVER throws: a mid-stream read failure returns what was
-//     decoded (the brokers' own error paths handle the fetch itself).
+//   - A body-less response (HEAD, or a stream-less unit-test mock) yields the
+//     empty result: production service-worker responses always expose a body
+//     stream for GET, so the unbuffered shape only survives where the body is
+//     empty by construction.
+//   - A mid-stream read failure PROPAGATES, exactly like the old `res.text()`
+//     did: the SW broker's route turns it into its honest ok:false error, and
+//     script-host's fallback catches it to empty text like it caught text()
+//     failures before. Never a silent partial body.
+//   - Kept deliberately lean: this module ships inside the store offscreen
+//     bundle, whose byte ceiling is enforced (scripts/bundle-budget.mjs).
 
 /** The brokers' historic 1 MB text ceiling, now applied to the READ. */
 export const FETCH_TEXT_MAX_BYTES = 1_000_000;
 
 /**
  * Read a Response body as text, bounded at the stream level.
- * @param {Response|{body?:any, text?:()=>Promise<string>}} res
+ * @param {Response|{body?:any}} res
  * @param {number} [maxBytes]
  * @returns {Promise<{text: string, truncated: boolean, bytesRead: number}>}
- *   bytesRead is -1 on the stream-less fallback path (nothing was metered).
  */
 export async function readResponseTextBounded(res, maxBytes = FETCH_TEXT_MAX_BYTES) {
-  const cap = Number.isFinite(maxBytes) && maxBytes > 0 ? maxBytes : FETCH_TEXT_MAX_BYTES;
-  const body = res?.body;
-  if (!body || typeof body.getReader !== "function") {
-    // Stream-less fallback (mocks): one text() read, then the char slice.
-    let text = "";
-    try {
-      text = await res.text();
-    } catch {
-      text = "";
-    }
-    return { text: text.slice(0, cap), truncated: text.length > cap, bytesRead: -1 };
-  }
-  const reader = body.getReader();
-  const decoder = new TextDecoder("utf-8", { fatal: false });
+  const cap = maxBytes > 0 ? maxBytes : FETCH_TEXT_MAX_BYTES;
+  const reader = res?.body?.getReader?.();
+  if (!reader) return { text: "", truncated: false, bytesRead: 0 };
+  const decoder = new TextDecoder();
   let out = "";
   let bytesRead = 0;
   let truncated = false;
@@ -57,28 +50,24 @@ export async function readResponseTextBounded(res, maxBytes = FETCH_TEXT_MAX_BYT
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
-      const chunk = value instanceof Uint8Array ? value : new Uint8Array(value ?? []);
-      bytesRead += chunk.byteLength;
-      out += decoder.decode(chunk, { stream: true });
+      bytesRead += value.byteLength;
+      out += decoder.decode(value, { stream: true });
       if (bytesRead >= cap || out.length >= cap) {
         // Ceiling reached: CANCEL — the rest of the body is never pulled into
-        // this worker. cancel() is best-effort; some mocks reject it.
+        // this worker.
         truncated = true;
-        try {
-          await reader.cancel("response body exceeded the bounded-read ceiling");
-        } catch { /* already closed/released in some runtimes */ }
+        await reader.cancel().catch(() => {});
         break;
       }
     }
     // Flush a partial multi-byte sequence at the ceiling (yields U+FFFD for a
     // genuinely split character — the honest rendering of a truncated body).
     out += decoder.decode();
-  } catch {
-    // Mid-stream read failure: keep what was decoded; never throw.
   } finally {
     try {
       reader.releaseLock();
     } catch { /* cancel() already released the lock */ }
   }
-  return { text: out.slice(0, cap), truncated: truncated || out.length > cap, bytesRead };
+  if (out.length > cap) truncated = true;
+  return { text: out.slice(0, cap), truncated, bytesRead };
 }

@@ -8,7 +8,7 @@
 // ceiling, on both broker paths, with the docs/description corrected in the
 // same landing.
 // @ts-nocheck
-import { assert, assertEquals } from "jsr:@std/assert@1";
+import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
 import { readResponseTextBounded, FETCH_TEXT_MAX_BYTES } from "../extension/lib/fetch-body-bound.js";
 
 function streamResponse(chunks: Uint8Array[], opts: { onCancel?: () => void } = {}) {
@@ -61,18 +61,14 @@ Deno.test("hvd4s: a small body reads completely and decodes correctly across chu
   assertEquals(state.cancelled, false, "an exhausted stream needs no cancel");
 });
 
-Deno.test("hvd4s: stream-less mocks fall back to text()+slice; a throwing text() degrades to empty, never throws", async () => {
-  const big = "x".repeat(2_500_000);
-  const out = await readResponseTextBounded({ body: null, text: async () => big }, 1_000_000);
-  assertEquals(out.text.length, 1_000_000);
-  assertEquals(out.truncated, true);
-  assertEquals(out.bytesRead, -1, "the fallback path meters nothing");
-  const boom = await readResponseTextBounded({ body: null, text: async () => { throw new Error("nope"); } }, 10);
-  assertEquals(boom.text, "");
-  assertEquals(boom.truncated, false);
+Deno.test("hvd4s: a body-less response (HEAD shape / stream-less mock) yields the empty result, never throws", async () => {
+  const out = await readResponseTextBounded({ body: null }, 1_000_000);
+  assertEquals(out.text, "");
+  assertEquals(out.truncated, false);
+  assertEquals(out.bytesRead, 0);
 });
 
-Deno.test("hvd4s: a mid-stream read failure never throws — what was decoded survives", async () => {
+Deno.test("hvd4s: a mid-stream read failure PROPAGATES like res.text() did — no silent partial body", async () => {
   let n = 0;
   const poisoned = {
     body: {
@@ -87,8 +83,9 @@ Deno.test("hvd4s: a mid-stream read failure never throws — what was decoded su
       }),
     },
   };
-  const out = await readResponseTextBounded(poisoned, 1000);
-  assertEquals(out.text, "partial ");
+  // The SW broker's route turns this into its honest ok:false error; the
+  // script-host fallback catches it to empty text (pinned at the source below).
+  await assertRejects(() => readResponseTextBounded(poisoned, 1000), Error, "network went away");
 });
 
 Deno.test("hvd4s source pins: BOTH brokers read through the helper; no unbounded res.text() remains in them", async () => {
@@ -112,7 +109,7 @@ Deno.test("hvd4s source pins: BOTH brokers read through the helper; no unbounded
   const rfStart = host.indexOf("export async function runFetch");
   assert(rfStart >= 0, "runFetch exists");
   const rfRegion = host.slice(rfStart, rfStart + 5000);
-  assert(rfRegion.includes("const bounded = await readResponseTextBounded(res);"), "the runFetch fallback reads through the helper");
+  assert(rfRegion.includes("const bounded = await readResponseTextBounded(res).catch(() => ({ text: \"\" }));"), "the runFetch fallback reads through the helper and degrades a read failure to empty text");
   assert(!rfRegion.includes("await res.text()"), "the fallback contains no unbounded full-body read");
   assert(rfRegion.includes("text: bounded.text"), "the fallback returns the bounded text");
   // and the promise in the JSDoc is now precise rather than stale
