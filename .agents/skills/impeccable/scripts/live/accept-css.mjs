@@ -332,8 +332,30 @@ function isToggleOn(value) {
  *   otherwise the selector with the attribute test removed and any emptied
  *   :global() wrappers cleaned up.
  */
+// chrome-agent-platform-gx7n2: the attribute-selector RegExp depends only on
+// the parameter id, but it was recompiled for EVERY selector — a bake over a
+// large stylesheet pays one compilation per selector per parameter. Memoised
+// per id following the sibling segmentPatternCache pattern (context.mjs:786,
+// wdfe2 family). The /g flag is safe to share HERE because the instance is
+// only ever used with String.replace, which resets lastIndex per call by
+// spec; the 'must stay per-call for /g state' note from the nightly delta
+// concerns .test()/.exec() iteration sites elsewhere, not this one. Bounded
+// like the sibling.
+const paramSelectorPatternCache = new Map();
+const PARAM_SELECTOR_PATTERN_CACHE_LIMIT = 512;
+
+export function paramAttrPattern(id) {
+  let re = paramSelectorPatternCache.get(id);
+  if (!re) {
+    if (paramSelectorPatternCache.size >= PARAM_SELECTOR_PATTERN_CACHE_LIMIT) paramSelectorPatternCache.clear();
+    re = new RegExp(`\\[data-p-${escapeRegExp(id)}(?:=(["'])(.*?)\\1)?\\]`, 'g');
+    paramSelectorPatternCache.set(id, re);
+  }
+  return re;
+}
+
 export function stripParamSelector(selector, id, kind, chosenValue) {
-  const attrRe = new RegExp(`\\[data-p-${escapeRegExp(id)}(?:=(["'])(.*?)\\1)?\\]`, 'g');
+  const attrRe = paramAttrPattern(id);
   let drop = false;
   let out = String(selector).replace(attrRe, (_m, _q, expected) => {
     if (kind === 'steps') {
