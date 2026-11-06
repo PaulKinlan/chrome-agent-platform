@@ -114,9 +114,13 @@ export async function defaultPidState(
 }
 
 async function sweepStaleOrphanDirs(
-  { pidState = defaultPidState }: { pidState?: (pid: number) => Promise<PidState> } = {},
+  { pidState = defaultPidState, root = durableRoot() }: {
+    pidState?: (pid: number) => Promise<PidState>;
+    /** The directory to sweep. Defaults to durableRoot() (the real sweep's job); the FIXTURE
+     *  tests pass their own per-run subroot - see perRunSweepRoot (njzk9). */
+    root?: string;
+  } = {},
 ) {
-  const root = durableRoot();
   try {
     for await (const entry of Deno.readDir(root)) {
       if (entry.isDirectory && entry.name.startsWith("1k2a-parallel-")) {
@@ -144,6 +148,27 @@ async function sweepStaleOrphanDirs(
   } catch {}
 }
 
+/**
+ * chrome-agent-platform-njzk9: a PER-RUN sweep root for the fixture tests.
+ *
+ * The 5xg1w matched-load A/B proved the defect: two copies of this file running
+ * concurrently on one VM (different worktrees, one shared ~/cap-evidence)
+ * reddened 43e7a. The cause was not the fixture NAME, it was the sweep's SCOPE -
+ * every copy swept the shared durableRoot(), so copy A's injected probe
+ * (deadOnEveryPlatform answers DEAD for every pid) deleted copy B's live
+ * fixture, and each copy's `finally` deleted the other's directory mid-assertion.
+ * Uniquifying the trailing 8-hex cannot fix that: the fake pid VALUE is what the
+ * probes answer for, and it must stay fixed (2147483644-46 are the load-bearing
+ * dead-looking-but-live values). Each fixture test therefore owns a subroot and
+ * sweeps only that. This is the fleet's test-independence rule (docs/speed.md):
+ * no fixture may touch machine state a concurrent run can reach.
+ */
+async function perRunSweepRoot(): Promise<string> {
+  return await durableDir(`1k2a-parallel-sweep-${Deno.pid}-${crypto.randomUUID().slice(0, 8)}`);
+}
+
+// The sweep's real job - stale 1k2a-parallel-* dirs left by a SIGKILLed run -
+// still runs once here against the true durableRoot().
 await sweepStaleOrphanDirs();
 
 Deno.test("2jjit: the sweep never deletes a LIVE pid's directory (multi-segment label included)", async () => {
@@ -151,7 +176,7 @@ Deno.test("2jjit: the sweep never deletes a LIVE pid's directory (multi-segment 
   // labels, /proc/NaN never stats, and the liveness gate read "dead" — the sweep
   // would have deleted a LIVE pid's directory. A genuinely LIVE pid (a sleeping
   // child) with a real fixture shape must survive the sweep.
-  const root = durableRoot();
+  const root = await perRunSweepRoot(); // njzk9: sweep scope is OURS, not the shared durableRoot()
   const child = new Deno.Command("sh", { args: ["-c", "sleep 30"] }).spawn();
   const livePid = child.pid;
   const multi = `${root}/1k2a-parallel-orphan-test-${livePid}-deadbeef`;
@@ -159,7 +184,7 @@ Deno.test("2jjit: the sweep never deletes a LIVE pid's directory (multi-segment 
   await Deno.mkdir(multi, { recursive: true });
   await Deno.mkdir(single, { recursive: true });
   try {
-    await sweepStaleOrphanDirs();
+    await sweepStaleOrphanDirs({ root });
     assertEquals(await Deno.stat(multi).then(() => true, () => false), true,
       `a LIVE pid's multi-segment directory must NEVER be swept: ${multi}`);
     assertEquals(await Deno.stat(single).then(() => true, () => false), true,
@@ -167,8 +192,7 @@ Deno.test("2jjit: the sweep never deletes a LIVE pid's directory (multi-segment 
   } finally {
     child.kill("SIGKILL");
     await child.status;
-    await Deno.remove(multi, { recursive: true }).catch(() => {});
-    await Deno.remove(single, { recursive: true }).catch(() => {});
+    await Deno.remove(root, { recursive: true }).catch(() => {});
   }
 });
 
@@ -176,7 +200,7 @@ Deno.test("2jjit: names that are not this suite's fixture shape are never swept"
   // The prefix alone must not authorize deletion: a directory that carries the
   // 1k2a-parallel- prefix but no -<pid>-<8hex> tail (an unrelated lane's
   // directory, or prose) is not this suite's fixture and must survive.
-  const root = durableRoot();
+  const root = await perRunSweepRoot(); // njzk9: own sweep scope
   const strangers = [
     `${root}/1k2a-parallel-not-a-fixture`,
     `${root}/1k2a-parallel-`,
@@ -184,13 +208,13 @@ Deno.test("2jjit: names that are not this suite's fixture shape are never swept"
   ];
   for (const dir of strangers) await Deno.mkdir(dir, { recursive: true });
   try {
-    await sweepStaleOrphanDirs();
+    await sweepStaleOrphanDirs({ root });
     for (const dir of strangers) {
       assertEquals(await Deno.stat(dir).then(() => true, () => false), true,
         `a non-fixture name must never be swept: ${dir}`);
     }
   } finally {
-    for (const dir of strangers) await Deno.remove(dir, { recursive: true }).catch(() => {});
+    await Deno.remove(root, { recursive: true }).catch(() => {});
   }
 });
 
@@ -201,7 +225,7 @@ Deno.test("t4uvt: the stale-orphan sweep matches the REAL orphan shape, multi-se
   // left behind was never swept, while a synthetic single-segment dir was. A
   // genuinely dead pid (a child that has already exited) is the sweep's only
   // removal authority; a live pid's dir is never touched.
-  const root = durableRoot();
+  const root = await perRunSweepRoot(); // njzk9: own sweep scope
   const child = new Deno.Command("sh", { args: ["-c", "exit 0"] }).spawn();
   const deadPid = child.pid;
   await child.status;
@@ -210,14 +234,13 @@ Deno.test("t4uvt: the stale-orphan sweep matches the REAL orphan shape, multi-se
   await Deno.mkdir(multi, { recursive: true });
   await Deno.mkdir(single, { recursive: true });
   try {
-    await sweepStaleOrphanDirs();
+    await sweepStaleOrphanDirs({ root });
     assertEquals(await Deno.stat(multi).then(() => false, () => true), true,
       `the multi-segment orphan shape must be swept: ${multi}`);
     assertEquals(await Deno.stat(single).then(() => false, () => true), true,
       `the single-segment shape must still be swept: ${single}`);
   } finally {
-    await Deno.remove(multi, { recursive: true }).catch(() => {});
-    await Deno.remove(single, { recursive: true }).catch(() => {});
+    await Deno.remove(root, { recursive: true }).catch(() => {});
   }
 });
 
@@ -248,21 +271,20 @@ Deno.test("j2isq: the sweep PRESERVES a fixture directory whenever the probe can
   // deletion authority: an unreadable /proc (EACCES/EPERM, hidepid) or a
   // missing/empty `ps` deleted a directory whose pid might be perfectly alive.
   // Uncertainty must preserve; only proof of death may delete.
-  const root = durableRoot();
+  const root = await perRunSweepRoot(); // njzk9: own sweep scope - a concurrent copy's sweep cannot reach these
   const unknownDir = `${root}/1k2a-parallel-orphan-test-2147483646-deadbeef`;
   const deadDir = `${root}/1k2a-parallel-residual-test-2147483645-deadbeef`;
   await Deno.mkdir(unknownDir, { recursive: true });
   await Deno.mkdir(deadDir, { recursive: true });
   try {
-    await sweepStaleOrphanDirs({ pidState: unknownOnEveryPlatform });
+    await sweepStaleOrphanDirs({ root, pidState: unknownOnEveryPlatform });
     assertEquals(await Deno.stat(unknownDir).then(() => true, () => false), true,
       `an UNKNOWN liveness answer must PRESERVE the directory: ${unknownDir}`);
-    await sweepStaleOrphanDirs({ pidState: deadOnEveryPlatform });
+    await sweepStaleOrphanDirs({ root, pidState: deadOnEveryPlatform });
     assertEquals(await Deno.stat(deadDir).then(() => false, () => true), true,
       `positive proof of death must still authorize deletion: ${deadDir}`);
   } finally {
-    await Deno.remove(unknownDir, { recursive: true }).catch(() => {});
-    await Deno.remove(deadDir, { recursive: true }).catch(() => {});
+    await Deno.remove(root, { recursive: true }).catch(() => {});
   }
 });
 
@@ -270,11 +292,12 @@ Deno.test("43e7a: with NO /proc mounted the sweep PRESERVES — a missing mount 
   // Without this distinction every /proc lookup returns ENOENT on a container
   // that never mounted /proc, so EVERY pid read as dead and every directory —
   // live pids included — was deleted. The mount must be proved usable first.
-  const root = durableRoot();
+  const root = await perRunSweepRoot(); // njzk9: OWN scope - this is the test the shared root reddened
   const liveLookingDir = `${root}/1k2a-parallel-orphan-test-2147483644-deadbeef`;
   await Deno.mkdir(liveLookingDir, { recursive: true });
   try {
     await sweepStaleOrphanDirs({
+      root,
       pidState: (pid) =>
         defaultPidState(pid, {
           // On Linux: every stat fails, including the mount probe.
@@ -286,7 +309,7 @@ Deno.test("43e7a: with NO /proc mounted the sweep PRESERVES — a missing mount 
     assertEquals(await Deno.stat(liveLookingDir).then(() => true, () => false), true,
       `an unusable /proc mount must PRESERVE every fixture directory: ${liveLookingDir}`);
   } finally {
-    await Deno.remove(liveLookingDir, { recursive: true }).catch(() => {});
+    await Deno.remove(root, { recursive: true }).catch(() => {});
   }
 });
 
