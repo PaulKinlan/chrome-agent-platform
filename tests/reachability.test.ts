@@ -135,12 +135,12 @@ Deno.test("reachability: stale RETAINED lines are reported (missing file, reache
   const result = await run(`${REPO}/extension`, {
     ...RETAINED,
     "lib/no-such-module.js": "a reason for a file that does not exist",
-    "lib/pure.js": "already reached from the service worker",
+    "lib/pure-webmcp.js": "already reached from the service worker",
     "lib/profile-store.js": "",
   });
   assert(result.staleRetained.some((v) => v.startsWith("lib/no-such-module.js: RETAINED but no such shipped file")));
   assert(result.staleRetained.some((v) => v.startsWith("lib/profile-store.js: RETAINED without a reason")));
-  assert(result.retainedReachable.some((v) => v.startsWith("lib/pure.js: RETAINED but already reached")));
+  assert(result.retainedReachable.some((v) => v.startsWith("lib/pure-webmcp.js: RETAINED but already reached")));
 });
 
 Deno.test("reachability: edges come from string tokens, never comments; dist bundles map to their source", async () => {
