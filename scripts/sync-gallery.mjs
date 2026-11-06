@@ -42,6 +42,16 @@ const FILES = [
   ["extension/shared/tool-tree.js", "docs/tool-tree.js"],
   // The canonical secret matcher (tool-tree.js imports it — the gallery must resolve it).
   ["extension/lib/pure.js", "docs/pure.js"],
+  // chrome-agent-platform-ux4ud: docs/pure.js is a BARREL, so every seam it
+  // re-exports must be synced beside it or the gallery's module graph cannot resolve
+  // (tests/gallery-imports.test.ts walks exactly that graph).
+  ["extension/lib/pure-schema.js", "docs/pure-schema.js"],
+  ["extension/lib/pure-hash.js", "docs/pure-hash.js"],
+  ["extension/lib/pure-text.js", "docs/pure-text.js"],
+  ["extension/lib/pure-redact.js", "docs/pure-redact.js"],
+  ["extension/lib/pure-trust.js", "docs/pure-trust.js"],
+  ["extension/lib/pure-webmcp.js", "docs/pure-webmcp.js"],
+  ["extension/lib/pure-tabs.js", "docs/pure-tabs.js"],
   // The human tool-summary renderer (components.js imports it).
   ["extension/lib/tool-summary.js", "docs/tool-summary.js"],
   // Attachment classification/encoding used by the composer's /files flow.

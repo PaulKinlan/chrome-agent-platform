@@ -41,7 +41,8 @@
 // existing bodies (valid-body identity — never resurrects stale metadata).
 
 import { masterMemory, siteMemory, canonicalOrigin } from "./memory.js";
-import { newId, sha256Hex } from "./pure.js";
+import { sha256Hex } from "./pure-hash.js";
+import { newId } from "./pure-text.js";
 // The ONE diff core (jsdiff via ./shared/diff-core.js).
 import { lineDiffSummary } from "../shared/diff-core.js";
 

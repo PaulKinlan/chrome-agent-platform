@@ -16,7 +16,7 @@
 // PURE: no chrome.*, no kv, no DOM. `fetchLiveModels` is the only network
 // function and it never throws into the UI (any failure → []).
 
-import { safeProviderError } from "./pure.js";
+import { safeProviderError } from "./pure-redact.js";
 
 import { capLog } from "./cap-log.js";
 

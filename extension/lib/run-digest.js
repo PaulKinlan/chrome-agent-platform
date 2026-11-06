@@ -31,7 +31,8 @@
 //
 // Pure: no chrome.*, no DOM. The agent loop wires it; the tests drive it alone.
 
-import { redactSecretText, redactToolArgs, truncateUtf8, utf8ByteLength } from "./pure.js";
+import { redactSecretText, redactToolArgs } from "./pure-redact.js";
+import { truncateUtf8, utf8ByteLength } from "./pure-text.js";
 import { isUntrustedToken, mintUntrustedToken, untrustedClose, untrustedOpen } from "./untrusted-fence.js";
 
 export const RUN_DIGEST_BOUNDS = Object.freeze({

@@ -21,7 +21,7 @@ import {
   revalidateAuditedMemory,
 } from "./wasi-preview1-runtime.js";
 import { WasiProcExit } from "./wasm-host-types.js";
-import { newId } from "./pure.js";
+import { newId } from "./pure-text.js";
 import { auditWasmBinary, WASM_PACKAGE_LIMITS } from "./wasm-package-authority.js";
 import { createSyncWorkspace, validateWorkspaceSeed } from "./wasm-sync-workspace.js";
 import { TRANSPORT_MESSAGE_TYPES } from "./wasm-executor.js";

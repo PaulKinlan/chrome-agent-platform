@@ -7,7 +7,7 @@
 // embedded fonts), and external hrefs are NEVER fetched (honest local
 // broken-image placeholder, zero network requests).
 
-import { isTrustedServiceWorkerSender } from "./pure.js";
+import { isTrustedServiceWorkerSender } from "./pure-trust.js";
 
 export const SVG_RASTERISE_RUN_TYPE = "cap:svg-rasterise-run";
 export const SVG_RASTERISE_WALL_MS = 8000;

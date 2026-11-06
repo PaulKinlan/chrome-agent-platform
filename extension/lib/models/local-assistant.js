@@ -42,7 +42,7 @@
 
 // The strict HTML escaper (single-sourced in lib/pure.js — dependency-free, so
 // it loads in the agent worker where the components module cannot).
-import { escapeHtml } from "../pure.js";
+import { escapeHtml } from "../pure-text.js";
 
 export const LOCAL_ASSISTANT_MODEL_ID = "local-assistant";
 

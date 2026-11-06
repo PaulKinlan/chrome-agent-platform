@@ -14,7 +14,7 @@
 // serialized (the same discipline as the enrollment registry).
 
 import { kvGet, kvSet } from "./kv.js";
-import { sleep } from "./pure.js";
+import { sleep } from "./pure-text.js";
 import { GEMINI_IMAGE_MODEL } from "./model-catalog.js";
 import { isReservedKey, namedAgentMemory, purgeStoreDir } from "./memory.js";
 import { deleteAgentPromptOverride } from "./system-prompts.js";

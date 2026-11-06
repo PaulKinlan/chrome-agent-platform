@@ -4,7 +4,8 @@
 // mutate source stores, request permissions, or create grants. The index is
 // rebuilt from the canonical catalog whenever its generation changes.
 
-import { redactSecretText, utf8ByteLength } from "./pure.js";
+import { redactSecretText } from "./pure-redact.js";
+import { utf8ByteLength } from "./pure-text.js";
 import { cosineSimilarity, embedTokens } from "./tool-vectors.js";
 
 // 4kl: semantic tier tuning. The cosine floor keeps pure-semantic recall honest

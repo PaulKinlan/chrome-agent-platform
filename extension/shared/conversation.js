@@ -13,7 +13,7 @@
 // The container is an <agent-conversation> element (the Web Component that owns
 // the message rendering: markdown, code blocks, tool cards, thinking traces).
 
-import { newId } from "../lib/pure.js";
+import { newId } from "../lib/pure-text.js";
 import { send } from "../lib/messages.js";
 import { requestAcpPermission } from "../lib/acp-runner.js";
 import { summarizeToolResult, toolResultTruncationNote } from "../lib/tool-summary.js";

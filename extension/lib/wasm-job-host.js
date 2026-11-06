@@ -9,7 +9,7 @@
 // or capabilities ever ride the request (toolId/args/stdin only).
 
 import { executeBundledWasiJob } from "./tool-exec-preview.js";
-import { isTrustedServiceWorkerSender } from "./pure.js";
+import { isTrustedServiceWorkerSender } from "./pure-trust.js";
 
 export const WASI_JOB_RUN_TYPE = "cap:wasm-wasi-job-run";
 

@@ -10,7 +10,7 @@
 //   - Pure and verifiable: testable with mock or real storage backends.
 
 import { kvClear, kvGet, storageAvailable } from "./kv.js";
-import { sleep } from "./pure.js";
+import { sleep } from "./pure-text.js";
 
 export const FACTORY_RESET_STORAGE_CLASSES = Object.freeze([
   "chrome.storage.local",

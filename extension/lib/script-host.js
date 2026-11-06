@@ -15,7 +15,7 @@ import {
   resolveScriptModules,
 } from "./script-sandbox-modules.js";
 import { tagUntrusted } from "./untrusted-fence.js";
-import { isTrustedServiceWorkerSender } from "./pure.js";
+import { isTrustedServiceWorkerSender } from "./pure-trust.js";
 import { readResponseTextBounded } from "./fetch-body-bound.js";
 
 

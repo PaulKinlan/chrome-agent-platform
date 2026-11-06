@@ -19,7 +19,7 @@ import {
   rehydratePreviewStdin,
   rehydratePreviewWasmBytes,
 } from "./tool-exec-preview.js";
-import { isTrustedServiceWorkerSender } from "./pure.js";
+import { isTrustedServiceWorkerSender } from "./pure-trust.js";
 
 /** The production module loaders (runtime-URL dynamic imports). Tests inject
  * fakes; the shipped wiring uses chrome.runtime.getURL. */

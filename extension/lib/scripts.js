@@ -16,7 +16,7 @@
 // under `script:<id>`; a lightweight reserved INDEX `scripts` lists the metadata
 // so list_scripts never reads every body.
 
-import { newId } from "./pure.js";
+import { newId } from "./pure-text.js";
 import { masterMemory, siteMemory, canonicalOrigin } from "./memory.js";
 
 const INDEX_KEY = "scripts"; // reserved authority key (see memory.js)

@@ -6,7 +6,7 @@
 // pulled into the service-worker bundle.
 
 import { decodeTarStream } from "./tar-stream.js";
-import { newId, sleep } from "./pure.js";
+import { newId, sleep } from "./pure-text.js";
 import {
   createOpfsAdapter,
   createChromeAlarmsAdapter,

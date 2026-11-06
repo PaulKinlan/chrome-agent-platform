@@ -3,7 +3,8 @@
 // explicit user grant (a chrome.storage flag the hub sets when the user opts
 // in), so a page's untrusted text can never drive arbitrary tab control.
 
-import { newId, sha256Hex } from "./pure.js";
+import { sha256Hex } from "./pure-hash.js";
+import { newId } from "./pure-text.js";
 import { tool } from "ai";
 import { z } from "zod";
 import { scheduleTask } from "./scheduler.js";

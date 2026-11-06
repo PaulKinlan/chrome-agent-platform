@@ -16,7 +16,7 @@ import { auditWasmBinary } from "./wasm-package-authority.js";
 import { BUNDLED_INVENTORY } from "./bundled-inventory-data.js";
 import { BUNDLED_TOOL_PACKAGE_ROWS } from "./bundled-tool-packages.data.js";
 import { WasmPackageAuthority } from "./wasm-package-authority.js";
-import { isTrustedServiceWorkerSender } from "./pure.js";
+import { isTrustedServiceWorkerSender } from "./pure-trust.js";
 
 export const CALLEXPORT_RUN_TYPE = "cap:wasm-callexport-run";
 export const CALLEXPORT_LIMITS = Object.freeze({
