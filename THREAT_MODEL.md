@@ -106,7 +106,7 @@ inventory and the sender/inventory guard described in INV-15.
   sandbox page list at `extension/manifest.json:108-113`.
 - **TB2 — The service worker is the privileged broker.** No other component may reach
   storage, OPFS, providers or browser control directly: the content-script realm may
-  reach exactly seven routes (`PAGE_ALLOWED_ROUTES` in `extension/lib/pure.js#PAGE_ALLOWED_ROUTES`),
+  reach exactly seven routes (`PAGE_ALLOWED_ROUTES` in `extension/lib/pure-webmcp.js#PAGE_ALLOWED_ROUTES`),
   and every other route is refused by `chrome.runtime.onMessage.addListener` at
   `extension/background/service-worker.js#chrome.runtime.onMessage.addListener`
   (check: `extension/background/service-worker.js#PAGE_ALLOWED_ROUTES.has`).
@@ -249,7 +249,7 @@ should reason about; the threats that use them are in sections 5 and 6.
 
 | ID | Surface | Where it enters | What is hostile about it |
 |---|---|---|---|
-| S1 | Page content and page messages | `chrome.runtime.onMessage.addListener` at `extension/background/service-worker.js#chrome.runtime.onMessage.addListener`; `PAGE_ALLOWED_ROUTES` at `extension/lib/pure.js#PAGE_ALLOWED_ROUTES` | a page's content script may call only the seven page-allowed routes for its OWN origin, and may put anything in the message body |
+| S1 | Page content and page messages | `chrome.runtime.onMessage.addListener` at `extension/background/service-worker.js#chrome.runtime.onMessage.addListener`; `PAGE_ALLOWED_ROUTES` at `extension/lib/pure-webmcp.js#PAGE_ALLOWED_ROUTES` | a page's content script may call only the seven page-allowed routes for its OWN origin, and may put anything in the message body |
 | S2 | WebMCP tool descriptors and tool results | `extension/lib/tools.js:511`, `extension/lib/webmcp-authority.js:68` | a site authors its own tool schema and result text |
 | S3 | Model output (tool calls and prose) | `extension/lib/lazy-tool-protocol.js:1`, `extension/lib/untrusted-fence.js:59` | a steered model calls real tools |
 | S4 | Tool results rendered into the transcript | `extension/shared/components.js:566` (`renderHtmlFrame`) | an artifact body or fetched body is untrusted HTML |
@@ -287,11 +287,11 @@ consequences are carried by the matching register entry where one exists.
 ### T2. Sender-origin spoofing by a content script
 
 - **Boundary:** TB2. **Evidence:** `authorizeToolReport` at
-  `extension/lib/pure.js#authorizeToolReport` (the classifier), the dispatcher's admission gate
-  `extension/lib/pure.js#isOwnExtensionSender` (cac6c r3/1fn9j: sender.id must equal the runtime
+  `extension/lib/pure-trust.js#authorizeToolReport` (the classifier), the dispatcher's admission gate
+  `extension/lib/pure-trust.js#isOwnExtensionSender` (cac6c r3/1fn9j: sender.id must equal the runtime
   id, refused with the identical generic reply ahead of route resolution — census-clean per
   `docs/INTERNAL-SENDER-CONTRACT-AUDIT.md` §4), `PAGE_ALLOWED_ROUTES` at
-  `extension/lib/pure.js#PAGE_ALLOWED_ROUTES`, and the central listener at
+  `extension/lib/pure-webmcp.js#PAGE_ALLOWED_ROUTES`, and the central listener at
   `extension/background/service-worker.js#chrome.runtime.onMessage.addListener`
   (page-route check: `extension/background/service-worker.js#PAGE_ALLOWED_ROUTES.has`;
   browser-derived `message.origin` overwrite immediately after). **Answer:** the
@@ -302,7 +302,7 @@ consequences are carried by the matching register entry where one exists.
 
 ### T3. Sender-classifier default: an out-of-spec sender is classified as an extension document
 
-- **Boundary:** TB2. **Evidence:** `extension/lib/pure.js:934` — when a sender is not a
+- **Boundary:** TB2. **Evidence:** `extension/lib/pure-trust.js:123` — when a sender is not a
   content script and has no tab URL, the classifier returns `{ kind: "extension" }`.
   **Adjudication:** ADJUDICATED AND WITHHELD. There is no known producer for the
   browser-attested tabless/opaque sender shape:
@@ -373,11 +373,11 @@ consequences are carried by the matching register entry where one exists.
 
 ### T7. Credential exfiltration into hook prompts, logs and errors
 
-- **Boundary:** S12 / S9. **Evidence:** `extension/lib/pure.js:959` (`SECRET_KEY_RE`),
-  `:1114` (`redactSecrets`), `:1034` (`redactSecretText`), `:1102` (`safeProviderError`).
+- **Boundary:** S12 / S9. **Evidence:** `extension/lib/pure-redact.js:12` (`SECRET_KEY_RE`),
+  `:514` (`redactSecrets`), `:87` (`redactSecretText`), `:155` (`safeProviderError`).
   **Tests:** `tests/security.test.ts:79-99`, `tests/secret-redaction.test.ts:10-40`.
   The historical shape — the `storage.onChanged` hook forwarded `providerConfig.apiKey` —
-  is the reason this module exists (`extension/lib/pure.js:952-958`).
+  is the reason this module exists (`extension/lib/pure-redact.js:1-12`).
 
 ### T8. Credential smuggling and prototype pollution through an imported archive
 
@@ -520,7 +520,7 @@ consequences are carried by the matching register entry where one exists.
   share the extension message bus. A same-extension document or content script
   must not submit `cap:user-wasm-run`, `cap:emscripten-run`, `cap:wasm-wasi-job-run`
   or the other host job types as though it were the privileged broker.
-  **Controls:** `isTrustedServiceWorkerSender` (`extension/lib/pure.js:959`) checks
+  **Controls:** `isTrustedServiceWorkerSender` (`extension/lib/pure-trust.js:148`) checks
   the extension ID, absent tab/document identities and exact background bundle URL;
   user-Wasm, WASI-job, Emscripten, SVG and on-device text listeners gate their
   respective commands before execution. The ACP model host uses `onConnect`,
@@ -610,7 +610,7 @@ These are the properties a change must not break. Each is stated so it can be fa
 and each names the executable check that would catch a regression.
 
 - **INV-1 — Authority is derived from the browser-attested sender, never from the body.**
-  `authorizeToolReport` at `extension/lib/pure.js#authorizeToolReport` and the central listener at
+  `authorizeToolReport` at `extension/lib/pure-trust.js#authorizeToolReport` and the central listener at
   `extension/background/service-worker.js#chrome.runtime.onMessage.addListener`
   (browser sender classification and derived-origin overwrite inside that listener);
   since cac6c r3 the listener first enforces `extension/lib/pure.js#isOwnExtensionSender`
@@ -621,7 +621,7 @@ and each names the executable check that would catch a regression.
   document id out of the message body breaks this.
 - **Evidence pin: `origin/main@28c7189d` for INV-1/2.** The sender/allowlist symbols were re-read at this tree; other invariant citations retain their own historical context.
 - **INV-2 — The page-reachable route set is closed and tiny.**
-  `PAGE_ALLOWED_ROUTES` at `extension/lib/pure.js#PAGE_ALLOWED_ROUTES`, pinned by
+  `PAGE_ALLOWED_ROUTES` at `extension/lib/pure-webmcp.js#PAGE_ALLOWED_ROUTES`, pinned by
   `tests/internal-sender-contract-audit.test.ts` (closed-page-route assertion).
   An admin route appearing in that set breaks this.
 - **INV-3 — No external messaging channel exists.** No `externally_connectable`, no
@@ -646,8 +646,8 @@ and each names the executable check that would catch a regression.
   mechanised in `tests/scripts.test.ts` (nv5lt) — dropping any precondition, weakening the
   route-less-runtime guard, or adding a second direct site, breaks this invariant.
 - **INV-6 — A credential-shaped key never reaches a prompt, a log, a receipt or an error
-  string.** `extension/lib/pure.js#SECRET_KEY_RE` classifies the credential-shaped keys that
-  `extension/lib/pure.js#redactSecrets` strips recursively (`redactSecretText` and
+  string.** `extension/lib/pure-redact.js#SECRET_KEY_RE` classifies the credential-shaped keys that
+  `extension/lib/pure-redact.js#redactSecrets` strips recursively (`redactSecretText` and
   `safeProviderError` cover the text and provider-error surfaces; the caller surfaces whose
   `redactSecrets` calls are censused live are `extension/lib/tool-summary.js`,
   `extension/shared/components-hub.js`, `extension/background/routes/kv.js` and
@@ -695,7 +695,7 @@ and each names the executable check that would catch a regression.
   `tests/acp-loopback-optout.test.ts`.
 - **INV-15 — Every new offscreen execution host must authenticate the service
   worker before handling a job.** `isTrustedServiceWorkerSender` at
-  `extension/lib/pure.js#isTrustedServiceWorkerSender` is the common onMessage predicate; the ACP model
+  `extension/lib/pure-trust.js#isTrustedServiceWorkerSender` is the common onMessage predicate; the ACP model
   host validates its `onConnect` sender separately (`extension/lib/acp-model-host.js#registerAcpModelHost`).
   An extension ID alone does not establish the SW principal because documents
   and content scripts share it. Validate each host's exact job envelope and
@@ -790,7 +790,7 @@ one implies. `docs/CHROME-TEST-CONTRACT.md` §5 and the "Test honesty" section o
 2. **A fail-open default on an out-of-spec input.** A classifier that names a default for
    "I could not tell" rather than refusing. *Verification:* feed the classifier the
    degenerate sender (no tab, no url, no document id) and read what it returns.
-   Live instance: `extension/lib/pure.js:934` (T3).
+   Live instance: `extension/lib/pure-trust.js:123` (T3).
 3. **A pin satisfied by the wrong occurrence.** A substring or import that exists in a
    comment, an import specifier or a log line pins nothing about execution.
    *Verification:* delete the construct and leave the import — does the pin fail?
