@@ -112,8 +112,10 @@ Deno.test("cap:fetch untrusted tagging (INV-7): returns tagUntrusted and product
   const swSrc = await Deno.readTextFile(join(root, "extension/background/service-worker.js"));
 
   // 1. Verify service-worker.js cap:fetch route wraps return in tagUntrusted
+  // (hvd4s: the 1 MB bound is now on the READ itself — streamed and cancelled
+  // at the ceiling — so the return carries the already-bounded text.)
   assert(
-    swSrc.includes("return tagUntrusted({ ok: true, status: res.status, url: res.url, text: text.slice(0, MAX) })"),
+    swSrc.includes("return tagUntrusted({ ok: true, status: res.status, url: res.url, text })"),
     "service-worker.js cap:fetch route must return tagUntrusted({ ok: true, ... })",
   );
 

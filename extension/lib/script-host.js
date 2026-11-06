@@ -16,6 +16,7 @@ import {
 } from "./script-sandbox-modules.js";
 import { tagUntrusted } from "./untrusted-fence.js";
 import { isTrustedServiceWorkerSender } from "./pure.js";
+import { readResponseTextBounded } from "./fetch-body-bound.js";
 
 
 /** Validate a fetch URL: http/https only, no credentials. */
@@ -35,7 +36,11 @@ function validateUrl(url) {
   return { ok: true, url: u.href };
 }
 
-/** The read-only fetch capability (GET/HEAD, size-bounded). Routed through the
+/** The read-only fetch capability (GET/HEAD, size-bounded — and since hvd4s
+ * the bound is on the READ itself: the response stream is consumed with a
+ * 1 MB byte ceiling and cancelled at the ceiling (lib/fetch-body-bound.js),
+ * on the brokered route AND on the direct fallback; never buffer-then-slice).
+ * Routed through the
  * SERVICE WORKER (chrome.runtime `cap:fetch`) so the cross-origin fetch carries
  * the extension's host permission — a DIRECT fetch from the NTP/offscreen page
  * is CORS-blocked for a cross-origin page with no Access-Control-Allow-Origin. */
@@ -82,15 +87,11 @@ export async function runFetch(payload, runId = null) {
   } catch (e) {
     return { ok: false, error: `fetch failed: ${e?.message ?? e}` };
   }
-  let text = "";
-  try {
-    // Response bodies are one-shot streams: cache the single read before
-    // bounding it (arrayBuffer() followed by text() throws in Chrome).
-    text = await res.text();
-  } catch {
-    text = "";
-  }
-  return tagUntrusted({ ok: true, status: res.status, url: res.url, text });
+  // chrome-agent-platform-hvd4s: bound the READ itself. Pre-fix this fallback
+  // buffered the whole body — and, unlike the SW broker, returned it with NO
+  // slice at all. The helper streams with the 1 MB ceiling and never throws.
+  const bounded = await readResponseTextBounded(res);
+  return tagUntrusted({ ok: true, status: res.status, url: res.url, text: bounded.text });
 }
 
 /**
