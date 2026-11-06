@@ -1,6 +1,6 @@
 // extension/options/panels/about.js — About section panel (Stage 3a, 8v5l.1).
 
-import { DEVELOPER_FEATURES_KEY } from "../../lib/pure.js";
+import { DEVELOPER_FEATURES_KEY } from "../../lib/pure-trust.js";
 import { isUserFacingEntry, partitionChangelog } from "../changelog-filter.js";
 import { withUnmount, bindPanelCtx } from "../panel-context.js";
 import { devVersionLabel, loadDevBuildIdentity } from "../../lib/dev-build-identity.js";

@@ -4,13 +4,8 @@ const IS_EMBEDDED_SETTINGS = new URLSearchParams(location.search).get("embedded"
 if (IS_EMBEDDED_SETTINGS) document.documentElement.dataset.embedded = "1";
 
 import { registerWasmPreviewHost } from "../lib/wasm-preview-host.js";
-import {
-  SETTINGS_SECTIONS,
-  DEVELOPER_SECTIONS_SET,
-  DEVELOPER_FEATURES_KEY,
-  normalizeSettingsSectionId,
-  sleep,
-} from "../lib/pure.js";
+import { sleep } from "../lib/pure-text.js";
+import { SETTINGS_SECTIONS, DEVELOPER_SECTIONS_SET, DEVELOPER_FEATURES_KEY, normalizeSettingsSectionId } from "../lib/pure-trust.js";
 import { hydrateI18n } from "../shared/i18n.js";
 import { devVersionLabel, loadDevBuildIdentity } from "../lib/dev-build-identity.js";
 import { consumeSiteActivityFocus, normalizeSiteActivityFocus, SITE_ACTIVITY_FOCUS_KEY } from "../lib/site-activity-focus.js";

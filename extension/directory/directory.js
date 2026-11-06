@@ -6,7 +6,7 @@
 // deny, reset, or flip a site's policy.
 
 import { send } from "../lib/messages.js";
-import { discoveredOnly } from "../lib/pure.js";
+import { discoveredOnly } from "../lib/pure-tabs.js";
 import "../shared/components-core.js";
 import "../shared/components-directory.js";
 import { t, hydrateI18n } from "../shared/i18n.js";

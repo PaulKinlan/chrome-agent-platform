@@ -1,7 +1,7 @@
 // extension/background/routes/kv.js — KV store message routes.
 
 import { kvGet, kvSet, kvRemove } from "../../lib/kv.js";
-import { redactSecrets } from "../../lib/pure.js";
+import { redactSecrets } from "../../lib/pure-redact.js";
 import { ATTESTATION_KEY_STORE, PROMPT_OWNED_KEYS } from "../../lib/system-prompts.js";
 import { securityEvent } from "../../lib/diagnostics.js";
 

@@ -1,6 +1,6 @@
 // panels/data.js — Data, memory explorer, run-log retention, backup/restore & factory reset Settings panel module.
 
-import { sleep } from "../../lib/pure.js";
+import { sleep } from "../../lib/pure-text.js";
 import { createOpfsAdapter, createChromeAlarmsAdapter } from "../../lib/data-archive.js";
 import { executeOptionsExport } from "../../lib/backup-export.js";
 import { streamRestoreArchive, createOptionsQuiesce } from "../../lib/backup-restore.js";
