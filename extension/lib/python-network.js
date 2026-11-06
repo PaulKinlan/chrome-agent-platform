@@ -40,6 +40,11 @@
 // script sandbox's "cap:fetch" bridge so the two can never drift apart.
 
 import { checkFetchTarget } from "./fetch-policy.js";
+import { capLog } from "./cap-log.js";
+
+// The sanctioned logger (code-health: no raw console.* outside cap-log.js).
+// The ledger's drop announcements are debug telemetry for the OWNER side.
+const netLog = capLog("python-network");
 
 /** Where the owner's grants persist (kv.js / chrome.storage.local). */
 export const PYTHON_NETWORK_GRANTS_KEY = "cap:pythonNetworkGrants";
@@ -171,9 +176,10 @@ function safeMethodToken(method) {
 
 /** Every writer projects through here BEFORE the marshal. Unknown fields are
  * dropped — including any free-text 'error' — and an errorCode outside the
- * fixed vocabulary collapses to 'fetch_failed'. The drop is announced on a
- * DEBUG-ONLY sink (console.error in the service worker, never part of a
- * record): field NAMES are logged, never values, because values are exactly
+ * fixed vocabulary collapses to 'fetch_failed'. The drop is announced on the
+ * sanctioned debug logger (cap-log — owner-side DevTools and the redacted
+ * ring, never part of a record): field NAMES are logged, never values,
+ * because values are exactly
  * what attacker-shaped input could poison. */
 function projectRecord(partial, where) {
   const out = {};
@@ -233,10 +239,8 @@ function projectRecord(partial, where) {
     }
   }
   if (dropped.length > 0) {
-    // Debug-only, NOT model-visible: names, never values.
-    try {
-      console.error(`python-network ledger (${where}): dropped non-contract field(s): ${dropped.join(", ")}`);
-    } catch { /* hosts without a console lose the debug line only */ }
+    // Debug-only via the sanctioned logger, NOT model-visible: names, never values.
+    netLog.error(`python-network ledger (${where}): dropped non-contract field(s): ${dropped.join(", ")}`);
   }
   return out;
 }

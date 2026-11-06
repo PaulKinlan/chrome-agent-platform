@@ -640,7 +640,7 @@ Deno.test("lrhyl SW source pin: the python.fetch echo strips, the failure return
   assert(sw.includes("return { ok: false, error: code, origin: verdict.origin, hint: PYTHON_FETCH_ERROR_HINTS[code] ?? \"\" };"), "the exception path returns a fixed code + sanitised origin + STATIC hint, never an interpolated message");
   assert(sw.includes("error: verdict.errorCode"), "the policy refusal returns the verdict's code");
   assert(sw.includes("e?.name === \"TimeoutError\""), "the catch maps exception NAMES to codes");
-  assert(sw.includes("console.error(`python.fetch to ${verdict.origin} failed [${code}]: ${e?.message ?? e}`)"), "the raw exception text goes to the DEBUG-ONLY console sink");
+  assert(sw.includes("swLog.error(`python.fetch to ${verdict.origin} failed [${code}]: ${e?.message ?? e}`)"), "the raw exception text goes to the DEBUG-ONLY sanctioned logger sink (code-health: no raw console.* outside cap-log)");
   // discriminating pins on the ledger choke points
   const lib = await Deno.readTextFile(new URL("../extension/lib/python-network.js", import.meta.url));
   assert(!lib.includes("export function scrubUrlQueries"), "the scrubber is deleted from the lib, not kept as bait");

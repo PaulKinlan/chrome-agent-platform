@@ -7860,11 +7860,10 @@ const handlers = mergeRouteMaps(
     } catch (e) {
       // Storage is the grant authority. If it cannot be read we do NOT fall
       // back to "no grants, refuse" quietly, nor to allowing anything — we
-      // refuse with a fixed code (round 6). The raw exception text goes to the
-      // SW console — DEBUG-ONLY, never model-visible.
-      try {
-        console.error(`python.fetch: the grant store failed to read: ${e?.message ?? e}; nothing was sent`);
-      } catch { /* debug sink only */ }
+      // refuse with a fixed code (round 6). The raw exception text goes to
+      // the sanctioned swLog (owner-side DevTools + redacted ring) —
+      // DEBUG-ONLY, never model-visible.
+      swLog.error(`python.fetch: the grant store failed to read: ${e?.message ?? e}; nothing was sent`);
       record({ ok: false, errorCode: "grant_store_failed" });
       return { ok: false, error: "grant_store_failed", hint: PYTHON_FETCH_ERROR_HINTS.grant_store_failed };
     }
@@ -8037,7 +8036,8 @@ const handlers = mergeRouteMaps(
       const wasRevoked = wasAborted && !runSettled;
       // lrhyl round 6: a FIXED CODE replaces the interpolated message. The raw
       // exception text may quote the failed URL with its query — it goes to
-      // the SW console, DEBUG-ONLY, never model-visible. Five review rounds
+      // the SW's sanctioned logger, DEBUG-ONLY, never model-visible. Five
+      // review rounds
       // found five shapes of free-text leak here; the text no longer exists.
       const code = runSettled
         ? "aborted"
@@ -8048,9 +8048,7 @@ const handlers = mergeRouteMaps(
         : e?.name === "AbortError"
         ? "aborted"
         : "fetch_failed";
-      try {
-        console.error(`python.fetch to ${verdict.origin} failed [${code}]: ${e?.message ?? e}`);
-      } catch { /* debug sink only */ }
+      swLog.error(`python.fetch to ${verdict.origin} failed [${code}]: ${e?.message ?? e}`);
       if (inflight) {
         inflight.complete({
           ok: false,
