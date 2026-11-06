@@ -402,8 +402,11 @@ const ALLOWLISTED_SITES = new Map<string, string>([
   [
     // NOTE: this key is line-coupled by design (the guard inventory reports
     // sites by file:line) — edits ABOVE the central dispatcher in
-    // service-worker.js must renumber it. hvd4s moved it 13361 → 13365; ux4ud's seam imports moved it 13365 → 13366.
-    "extension/background/service-worker.js:13366",
+    // service-worker.js must renumber it. It moved twice on ux4ud alone
+    // (13365 → 13366 by the seam imports, then → 13380 by the njzk9 rebase),
+    // so expect renumbering on every landing that touches the SW above the
+    // dispatcher; chrome-agent-platform-ux4ud recorded that tax. hvd4s moved it 13361 → 13365; ux4ud's seam imports moved it 13365 → 13366, and the rebase onto njzk9's landing moved it 13366 → 13380.
+    "extension/background/service-worker.js:13380",
     "central dispatcher: accepts page/content-script senders BY DESIGN; sender classified by authorizeToolReport (lib/pure-trust.js) and route authority enforced per-route (Layers 1-3)",
   ],
   [
