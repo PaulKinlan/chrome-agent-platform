@@ -844,6 +844,7 @@ Deno.test("guh95 SW source pin: python.fetch echoes the PRE-SUBSTITUTION templat
   const sw = await Deno.readTextFile(new URL("../extension/background/service-worker.js", import.meta.url));
   assert(sw.includes("url: urlWithoutQuery(String(url ?? \"\")),"), "the model-readable echo is the template url the model itself wrote");
   assert(!sw.includes("urlWithoutQuery(res.url || u.href)"), "the post-substitution echo (res.url/u.href - both carry substituted vault secrets) is deleted, not commented out");
+});
 // --- j2mff: the truncated flag reaches the PYTHON PROGRAM, not just the SW return ---
 //
 // khwi9's landed claim said "truncation surfaced to the Python program", but
