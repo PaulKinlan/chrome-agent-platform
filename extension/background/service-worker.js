@@ -1312,6 +1312,7 @@ import {
   applyWebmcpLifecycle,
   applyWebmcpPageReport,
   authorizeToolReport,
+  isOwnExtensionSender,
   boundWebmcpError,
   buildWebmcpPageReport,
   hmacSha256Hex,
@@ -13416,21 +13417,39 @@ durableRecoveryReady.then(async () => {
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   routeLog.debug("route", message?.type, sender?.tab?.id != null ? `tab:${sender.tab.id}` : "extension");
-  // cac6c: sender classification runs BEFORE any reply. The old shape answered
-  // the unknown-message case before authorizeToolReport — a reply path ahead
-  // of trust that also echoed the caller's `type` back to any page that could
-  // reach the channel. Unauthorized senders now get SILENCE: the channel
-  // closes with no reply, so a random page cannot fingerprint the router's
-  // existence through a differentiated error.
+  // cac6c r3 (1fn9j): ONE sender decision, ahead of route resolution, and
+  // every refusal of an unauthorised sender takes the identical path —
+  // SILENCE — whether or not the route exists. The r2 shape still leaked
+  // route existence to unauthorised senders (a known route answered with a
+  // differentiated classifier error; an unknown route stayed silent; an
+  // unmatched sender got the generic reply on unknown routes but a
+  // cross-origin diagnosis on known ones) — a route-enumeration oracle. And
+  // a null-origin message threw synchronously here, before any refusal — a
+  // throw on a privileged listener is its own fingerprint and its own bug.
+  // isOwnExtensionSender is the CREDITED ENFORCEMENT predicate (pure.js):
+  // anything that is not this extension is refused at this call site,
+  // uniformly, before the classifier even runs — so the classifier's
+  // absent-tab "extension" label can never admit a foreign sender.
+  if (!isOwnExtensionSender(sender, chrome.runtime.id)) return false;
+  // The classifier only ever sees a string: the caller-supplied origin field
+  // is passed through the guarded typeof-check below, and message?.type
+  // stays optional-chained throughout — a null-origin (or null) message is
+  // refused, never thrown (r3 finding 2).
   const auth = authorizeToolReport(
     sender,
-    message.origin,
+    typeof message?.origin === "string" ? message.origin : "",
     canonicalOrigin,
     chrome.runtime.id,
   );
   if (!handlers[message?.type]) {
-    if (auth.kind === "content-script" && auth.error) return false;
-    sendResponse({ ok: false, error: "unknown message" });
+    // cac6c r3: authorised senders (extension surfaces, content scripts with
+    // a passing origin attestation) learn only the generic shape — the same
+    // reply an unknown route gets on every other path. Hostile senders
+    // (failed attestation, unmatched surface) get silence, exactly like the
+    // foreign refusal above: no branch may differ by route existence.
+    if (auth.kind === "extension" || (auth.kind === "content-script" && !auth.error)) {
+      sendResponse({ ok: false, error: "unknown message" });
+    }
     return true;
   }
 
@@ -13450,12 +13469,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   if (auth.kind === "content-script") {
     if (auth.error) {
-      sendResponse({ ok: false, error: auth.error });
-      return true;
+      // cac6c r3: origin attestation failed — hostile or tampered. SILENCE,
+      // the same uniform refusal a foreign sender gets, on every route: the
+      // r2 shape answered with the differentiated classifier error on known
+      // routes, which let the same unauthorised sender probe route existence.
+      return false;
     }
     if (!PAGE_ALLOWED_ROUTES.has(message.type)) {
       securityEvent("blocked-action", `page route denied: ${message.type}`);
-      sendResponse({ ok: false, error: "not authorized from a page" });
+      // cac6c r3: IDENTICAL to the unknown-route reply. A page must not be
+      // able to distinguish "route exists but is forbidden" from "no such
+      // route" — the forbidden-route reply used to name the policy.
+      sendResponse({ ok: false, error: "unknown message" });
       return true;
     }
     // Derive the origin for every permitted page route — never trust a
@@ -13480,9 +13505,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       },
     };
   } else if (auth.kind === "unmatched") {
-    securityEvent("cross-origin", `sender refused: ${auth.error}`);
-    sendResponse({ ok: false, error: auth.error });
-    return true;
+    securityEvent("cross-origin", "sender refused: surface matched no known principal");
+    // cac6c r3: silence, uniform with the foreign and failed-attestation
+    // refusals. The r2 shape echoed auth.error here — on a known route the
+    // sender got a cross-origin diagnosis, on an unknown one the generic
+    // reply: route existence, leaked through the reply channel.
+    return false;
   }
 
   // Settings-session verification (chrome-agent-platform-8v5l.2): happens BEFORE

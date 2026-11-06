@@ -4,7 +4,8 @@
 // Invariants guarded:
 //   1. Every `chrome.runtime.onMessage.addListener` call in extension/ must accept a `sender` parameter
 //      and validate it by CALLING a vetted production predicate (isTrustedServiceWorkerSender, or —
-//      cac6c — the central dispatcher's sender classifier authorizeToolReport, both lib/pure.js)
+//      cac6c r3/1fn9j — the central dispatcher's ENFORCEMENT predicate isOwnExtensionSender, both
+//      lib/pure.js; the r2 credit of the classifier authorizeToolReport is superseded)
 //      DIRECTLY: the exact imported identifier, unshadowed, not renamed (`as`), not aliased,
 //      not re-exported — or be listed in ALLOWLISTED_SITES with a one-line justification naming
 //      what checks the sender instead. Inline sender checks, however correct, never count
@@ -88,16 +89,20 @@ interface ListenerSite {
 // ACCEPTED RESIDUAL (deliberate, reviewer-acknowledged in round 4): credit is
 // binding-level, not execution-path - an imported vetted call inside an
 // uncalled nested function still counts. Do not re-litigate; pinned by probe18.
-// cac6c adds exactly one vetted predicate: authorizeToolReport (pure.js) — the
-// production sender CLASSIFIER for the central dispatcher, which accepts page
-// senders by design and therefore can never call isTrustedServiceWorkerSender.
-// It derives identity from the browser-attested sender (never the message
-// body) and validates the origin itself. Credit is binding-level like every
-// other vetted call, so the ORDERING (classify before any reply) is pinned
-// separately by the cac6c regression test below — the two together are what
-// the old line-coupled allowlist entry claimed but never enforced.
+// cac6c r3 (1fn9j) adds exactly one vetted predicate: isOwnExtensionSender
+// (pure.js) — the central dispatcher's ENFORCEMENT point, which yields the
+// uniform rejection (silence, ahead of route resolution) AT ITS CALL SITE for
+// anything that is not this extension. The r2 credit of authorizeToolReport is
+// SUPERSEDED: it is a CLASSIFIER of already-admitted senders — absent-tab and
+// non-extension senders could reach kind "extension", and kind "unmatched" was
+// refused only downstream — so crediting it was, in the reviewer's words, an
+// allowlist in a new coat. Credit is binding-level like every other vetted
+// call, so the ORDERING (sender decision and classification before any reply)
+// plus the uniform-refusal contract and the guarded origin dereference are
+// pinned separately by the cac6c regression test below — the two together are
+// what the old line-coupled allowlist entry claimed but never enforced.
 const VETTED_PREDICATE_SOURCES: Record<string, Set<string>> = {
-  "extension/lib/pure.js": new Set(["isTrustedServiceWorkerSender", "authorizeToolReport"]),
+  "extension/lib/pure.js": new Set(["isTrustedServiceWorkerSender", "isOwnExtensionSender"]),
 };
 
 // True iff a binding pattern (const/let/var id, param, catch param,
@@ -1281,12 +1286,44 @@ Deno.test("cac6c regression: the central dispatcher classifies the sender before
   }
   assert(bodyEnd > bodyStart, "the dispatcher listener body must close");
   const body = src.slice(bodyStart, bodyEnd);
+  // cac6c r3 (1fn9j): the SENDER DECISION is the enforcement point and it
+  // runs FIRST — the foreign refusal (silence) precedes the classifier,
+  // which precedes any reply.
+  const ownIdx = body.indexOf("isOwnExtensionSender(sender, chrome.runtime.id)");
+  const foreignRefusalIdx = body.indexOf("if (!isOwnExtensionSender(sender, chrome.runtime.id)) return false;");
   const authIdx = body.indexOf("authorizeToolReport(");
   const replyIdx = body.indexOf("sendResponse(");
-  assert(authIdx > 0, "the dispatcher must classify via authorizeToolReport");
+  assert(ownIdx > 0, "the dispatcher must enforce via the credited isOwnExtensionSender");
+  assert(foreignRefusalIdx > 0 && foreignRefusalIdx < authIdx, "the uniform foreign refusal precedes the classifier");
+  assert(authIdx > 0, "the dispatcher must classify content-script senders via authorizeToolReport (classifier, NOT credited as authoriser)");
   assert(replyIdx > 0, "the dispatcher must have a reply path");
-  assert(authIdx < replyIdx, "NO reply may be emitted before the sender classification runs (cac6c: the unknown-message reply preceded authorizeToolReport)");
+  assert(ownIdx < authIdx && authIdx < replyIdx, "NO reply may be emitted before the sender decision and the sender classification run");
   assert(!body.includes("unknown message: ${"), "the unknown-message reply must not echo the caller-controlled type");
   assert(body.includes('error: "unknown message"'), "the unknown-message reply is the generic shape");
-  assert(body.includes("if (auth.kind === \"content-script\" && auth.error) return false;"), "an unauthorized page sender gets silence: the channel closes with no reply (never a differentiated error confirming the channel exists)");
+  // r3 finding 1 — uniform refusal: no rejection may echo classifier detail
+  // (the r2 shape answered known routes with error: auth.error while unknown
+  // routes stayed silent — a route-existence oracle). Hostile classes get
+  // silence everywhere; authorised classes get the ONE generic shape
+  // everywhere (unknown route AND forbidden page route use the identical
+  // literal).
+  assert(!body.includes("error: auth.error"), "no reply may echo classifier error detail (route oracle, r2 finding)");
+  assert(!body.includes('"not authorized from a page"'), "the page-forbidden reply must be the generic shape, not a policy name");
+  const genericReplies = body.match(/sendResponse\(\{ ok: false, error: "unknown message" \}\)/g) ?? [];
+  assert(genericReplies.length >= 2, "unknown route and forbidden page route must take the IDENTICAL reply path");
+  const csErrorIdx = body.indexOf("if (auth.error) {");
+  assert(csErrorIdx > authIdx, "failed content-script attestation is refused in the dispatcher");
+  const csErrorBlock = body.slice(csErrorIdx, csErrorIdx + 480);
+  assert(csErrorBlock.includes("return false;") && !csErrorBlock.includes("sendResponse"), "failed attestation gets SILENCE — identical to the foreign refusal, on every route");
+  const unmatchedIdx = body.indexOf('auth.kind === "unmatched"');
+  assert(unmatchedIdx > 0, "the unmatched surface class is refused in the dispatcher");
+  const unmatchedBlock = body.slice(unmatchedIdx, unmatchedIdx + 460);
+  assert(unmatchedBlock.includes("return false;") && !unmatchedBlock.includes("sendResponse"), "unmatched senders get SILENCE, not a cross-origin diagnosis");
+  // r3 finding 2 — the classifier must never see a raw dereference: a
+  // null-origin (or null) message used to throw synchronously in this
+  // privileged listener before any refusal. The guarded form is the ONLY
+  // access to message.origin before classification.
+  const guardedOrigin = body.indexOf('typeof message?.origin === "string"');
+  assert(guardedOrigin > 0 && Math.abs(guardedOrigin - authIdx) < 200, "message.origin is dereferenced only through the guarded form at the classifier call");
+  const preAuth = body.slice(0, guardedOrigin);
+  assert(!preAuth.includes("message.origin"), "message.origin must not be dereferenced anywhere before the guarded classifier call");
 });
