@@ -844,4 +844,36 @@ Deno.test("guh95 SW source pin: python.fetch echoes the PRE-SUBSTITUTION templat
   const sw = await Deno.readTextFile(new URL("../extension/background/service-worker.js", import.meta.url));
   assert(sw.includes("url: urlWithoutQuery(String(url ?? \"\")),"), "the model-readable echo is the template url the model itself wrote");
   assert(!sw.includes("urlWithoutQuery(res.url || u.href)"), "the post-substitution echo (res.url/u.href - both carry substituted vault secrets) is deleted, not commented out");
+// --- j2mff: the truncated flag reaches the PYTHON PROGRAM, not just the SW return ---
+//
+// khwi9's landed claim said "truncation surfaced to the Python program", but
+// cap.Response declares __slots__ — and a slots class SILENTLY DISCARDS any
+// attribute not listed. The SW return carried truncated; python-worker.js's
+// Response never copied it, so a >10 MB body was silently partial at the
+// Python surface (the container-not-content pattern: the review read the SW
+// return as the Python surface). These pins hold the CONTENT contract at the
+// Python side: the slots tuple lists the flag, __init__ copies it from the
+// payload under the SAME key the SW writes, and both live in class Response.
+
+Deno.test("j2mff: cap.Response carries truncated - slots list it, __init__ copies it, same key the SW writes", async () => {
+  const worker = await Deno.readTextFile(new URL("../wasm-tools/python/python-worker.js", import.meta.url));
+  assert(
+    worker.includes('__slots__ = ("status", "url", "headers", "text", "bytes", "truncated")'),
+    "cap.Response.__slots__ must list truncated - a slots class silently discards any attribute not listed, which is exactly how khwi9's flag vanished",
+  );
+  assert(
+    worker.includes('self.truncated = bool(payload.get("truncated"))'),
+    "__init__ must copy the flag from the payload as a bool",
+  );
+  const respStart = worker.indexOf("class Response:");
+  const slotsIdx = worker.indexOf('__slots__ = ("status"');
+  const copyIdx = worker.indexOf('self.truncated = bool(payload.get("truncated"))');
+  assert(respStart > 0 && slotsIdx > respStart && copyIdx > slotsIdx, "the slots entry and the init copy live in class Response, slots before the copy");
+  // Cross-surface key contract: the worker reads the same literal key the SW
+  // return writes (khwi9's SW pin covers the write side; this covers the read).
+  assert(worker.includes('payload.get("truncated")'), "the worker reads the key 'truncated' - the same literal the SW's tagUntrusted return writes");
+  // A printed Response announces truncation - silent partiality is the defect.
+  assert(worker.includes('", TRUNCATED at the broker\'s byte cap" if self.truncated else ""'), "__repr__ must announce a truncated body");
+  // The flag is documented where a Python author reads docs: the class docstring.
+  assert(/class Response:[\s\S]{0,400}?truncated/.test(worker), "the Response docstring must mention the truncated flag");
 });

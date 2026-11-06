@@ -315,9 +315,15 @@ class NetworkError(Exception):
 
 
 class Response:
-    """One HTTP response. Bodies are text; use .json() to parse."""
+    """One HTTP response. Bodies are text; use .json() to parse.
 
-    __slots__ = ("status", "url", "headers", "text", "bytes")
+    `truncated` is True when the body exceeded the broker's byte cap (10 MB)
+    and was cut at the stream: `text` and `bytes` describe only the RETAINED
+    portion. A truncated body is never an error - check the flag before
+    treating a partial document as a complete one (j2mff).
+    """
+
+    __slots__ = ("status", "url", "headers", "text", "bytes", "truncated")
 
     def __init__(self, payload):
         self.status = payload.get("status")
@@ -325,6 +331,10 @@ class Response:
         self.headers = dict(payload.get("headers") or {})
         self.text = payload.get("text") or ""
         self.bytes = payload.get("bytes") or 0
+        # j2mff: __slots__ silently discards anything not listed - khwi9 put
+        # the flag on the wire and this class dropped it, so a >10 MB body was
+        # silently partial here. Copy it explicitly, as a bool.
+        self.truncated = bool(payload.get("truncated"))
 
     @property
     def ok(self):
@@ -335,7 +345,12 @@ class Response:
         return _json.loads(self.text)
 
     def __repr__(self):
-        return "<cap.Response %s %s (%s bytes)>" % (self.status, self.url, self.bytes)
+        # j2mff: a truncated body announces itself wherever the object is
+        # printed - silent partiality is the defect this bead exists for.
+        return "<cap.Response %s %s (%s bytes%s)>" % (
+            self.status, self.url, self.bytes,
+            ", TRUNCATED at the broker's byte cap" if self.truncated else "",
+        )
 
 
 async def fetch(url, method="GET", headers=None, body=None):
