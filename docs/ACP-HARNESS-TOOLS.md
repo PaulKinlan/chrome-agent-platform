@@ -101,7 +101,7 @@ ratcheted from the bwxf-era value by hvd4s as an explicitly tracked bridge autho
 unbounded-streaming-read security fix measured +374 B at its shrunk floor against a pristine 80 B headroom
 floor); the x2ux1 offscreen bundle split structurally removes the need for it, and the ceiling is re-set from
 measurement when that lands (see scripts/bundle-budget.mjs); the post-bwxf
-wave-2 admission measured 255,306 B (2,694 B / ~1.0% headroom against the enforced ceiling), so active
+wave-2 admission measured 255,306 B (3,694 B / ~1.4% headroom against the enforced ceiling), so active
 operational slack is narrower. The per-bundle
 ceilings quoted here earlier in this file (options 900,000, ntp 920,000, sidepanel 700,000, with
 matching sizes) predated the 20e2u code-splitting ratchet-down and were wrong on both sides of the

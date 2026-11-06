@@ -13,7 +13,12 @@ import { dirname, join } from "node:path";
 //
 // OWNER DECISION (Paul, 2026-10-05): "The limits make no sense anymore." Bundle
 // sizes are reported, not fatal, EXCEPT the store offscreen bundle's explicit
-// 258000-byte ceiling (250000 at rmoh8, ratcheted to 258000 by bwxf). The integrity invariants below still throw.
+// 259000-byte ceiling (250000 at rmoh8, ratcheted to 258000 by bwxf, then to
+// 259000 by hvd4s as an explicit tracked bridge authorised by the hub - the P2
+// unbounded-streaming-read fix measured +374 B at its shrunk floor over a
+// pristine 80 B headroom floor; the x2ux1 offscreen bundle split removes the
+// need and the ceiling is re-set from measurement when it lands - see the
+// STORE_BUNDLE_BUDGETS entry below). The integrity invariants below still throw.
 // The developer build stays unminified with source maps
 // (CAP-FB-20260826-OBSERVABILITY-01).
 
