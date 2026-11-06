@@ -91,33 +91,15 @@ export function normalizeGrantOrigin(input) {
   return u.port ? `${u.protocol}//${u.hostname}:${u.port}` : `${u.protocol}//${u.hostname}`;
 }
 
-/** chrome-agent-platform-lrhyl: the query string is where credentials live
- * (the '?key=' pattern), and every URL that becomes model-readable — the
- * cap.fetch response echo and the network records carried in the run envelope
- * — must carry ORIGIN+PATH ONLY. A parse failure yields the empty string:
- * fail closed toward saying nothing rather than echoing a raw, possibly
- * secret-carrying string. The REQUEST still fetches the full URL — stripping
- * is for echoes, never for dispatch.
- * CAVEAT (lrhyl r6.1 review): failing closed on opaque schemes is right for
- * the NETWORK LEDGER, but do not reuse this helper where opaque schemes are
- * legitimate (data:, blob:, chrome-extension: URLs) — it would blank them.
- * CAVEAT (guh95): origin+path KEEPS the path. Where secrets can be substituted
- * INTO the path ($VAULT{KEY} substitution scans the whole URL string), this
- * helper does NOT make a post-substitution URL safe to echo — echo the
- * PRE-SUBSTITUTION template instead, as python.fetch's return does. */
-export function urlWithoutQuery(raw) {
-  try {
-    const u = new URL(String(raw ?? ""));
-    // Round 6: only http(s) has a meaningful origin. An opaque-scheme string
-    // ('user:LRHYL@host/path?token=x' PARSES with scheme 'user:') has origin
-    // "null" and keeps its whole credential-bearing body as the path — so a
-    // non-special scheme fails closed to "" exactly like garbage input.
-    if (u.protocol !== "http:" && u.protocol !== "https:") return "";
-    return `${u.origin}${u.pathname}`;
-  } catch {
-    return "";
-  }
-}
+/** 7t2zv: the normaliser now lives in lib/url-echo.js — a shared module the
+ * script-side brokers can import without pulling this ledger into their
+ * bundle. Re-exported here so every existing consumer (the service-worker
+ * import, THREAT_MODEL.md TB4's `python-network.js#urlWithoutQuery` citation,
+ * the tests) keeps working unchanged. The lrhyl contract it implements:
+ * ORIGIN+PATH ONLY for every model-readable echo; fail closed to ""; opaque
+ * schemes blank (the r6.1 caveat lives with the definition in url-echo.js). */
+export { urlWithoutQuery } from "./url-echo.js";
+import { urlWithoutQuery } from "./url-echo.js";
 
 /** lrhyl round 6 (coord's contract narrowing): five review rounds found five
  * leak SHAPES because the surface was any string — a scrubber over arbitrary

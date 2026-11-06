@@ -7770,13 +7770,29 @@ const handlers = mergeRouteMaps(
     // run (no registered run → nothing is allowed). Credentials are never
     // attached and redirects are not followed (a redirect could land on a
     // host the owner never saw).
+    // 7t2zv: the r6 code-contract pattern, folded into the script broker.
+    // cap:fetch returns reach model-authored sandbox code (and through it the
+    // model), so its refusals are FIXED CODES plus static hints — never the
+    // caller's method, the resolved host, or an exception's message. The
+    // codes mirror the python broker's vocabulary where the distinctions are
+    // the same, so one hint language covers both script paths.
+    const SCRIPT_FETCH_ERROR_HINTS = {
+      method_not_allowed: "cap.fetch allows GET and HEAD only.",
+      invalid_url: "The URL was unparseable or not http(s). Use an absolute https:// URL.",
+      forbidden_host: "That host is private, loopback or link-local; script fetches may only reach public approved hosts.",
+      no_active_run: "No approved script run is active, so no fetch is allowed.",
+      host_not_approved: "The host is not on this run's approved list; only hosts extracted from the script source are approved.",
+      host_permission_missing: "The extension lacks host access for that origin; host access is granted at install (<all_urls>) - if Settings -> Permissions shows it missing, reinstall the extension.",
+      redirect_refused: "The response redirected elsewhere; a script fetch may only reach its approved hosts directly.",
+      fetch_failed: "The fetch failed at the network layer. Nothing more is known; the service-worker console has the raw error for debugging.",
+    };
     const m = String(method ?? "GET").toUpperCase();
     if (m !== "GET" && m !== "HEAD") {
-      return { ok: false, error: `method ${m} is not allowed (GET/HEAD only)` };
+      return { ok: false, error: "method_not_allowed", hint: SCRIPT_FETCH_ERROR_HINTS.method_not_allowed };
     }
     const policy = typeof runId === "string" && runId ? scriptRunPolicies.get(runId) : undefined;
     const verdict = checkFetchPolicy(url, policy ?? null);
-    if (!verdict.ok) return { ok: false, error: verdict.error };
+    if (!verdict.ok) return { ok: false, error: verdict.errorCode, hint: SCRIPT_FETCH_ERROR_HINTS[verdict.errorCode] };
     const u = new URL(verdict.url);
     try {
       // The SW fetch only bypasses CORS when the extension holds the host
@@ -7789,12 +7805,12 @@ const handlers = mergeRouteMaps(
       if (hasHost === false) {
         return {
           ok: false,
-          error: `network access to ${u.host} is not granted — host access is granted at install (<all_urls>); if Settings → Permissions shows it missing, reinstall the extension`,
+          error: "host_permission_missing", hint: SCRIPT_FETCH_ERROR_HINTS.host_permission_missing,
         };
       }
       const res = await fetch(u.href, { method: m, credentials: "omit", redirect: "manual" });
       if (res.type === "opaqueredirect" || (res.status >= 300 && res.status < 400)) {
-        return { ok: false, error: `fetch to ${u.host} refused: the response redirected elsewhere; a script fetch may only reach its approved hosts directly` };
+        return { ok: false, error: "redirect_refused", hint: SCRIPT_FETCH_ERROR_HINTS.redirect_refused };
       }
       const MAX = 1_000_000;
       // chrome-agent-platform-hvd4s: bound the READ itself — stream with a byte
@@ -7806,9 +7822,15 @@ const handlers = mergeRouteMaps(
       if (policy) policy.fetched = true;
       // Fetched bodies are untrusted web content: wrap this return in
       // `tagUntrusted(...)` (lib/untrusted-fence.js, INV-7).
-      return tagUntrusted({ ok: true, status: res.status, url: res.url, text });
+      // 7t2zv: origin+path only — the response URL's query is where a
+      // credential lives (the '?key=' pattern), and this return is
+      // model-readable (INV-7). Dispatch above still used the full URL.
+      return tagUntrusted({ ok: true, status: res.status, url: urlWithoutQuery(res.url), text });
     } catch (e) {
-      return { ok: false, error: `fetch failed: ${e?.message ?? e}` };
+      // 7t2zv: the raw exception text may quote the failed URL with its
+      // query — sanctioned logger (debug-only), never model-visible.
+      swLog.error("cap:fetch broker failure:", e?.message ?? e);
+      return { ok: false, error: "fetch_failed", hint: SCRIPT_FETCH_ERROR_HINTS.fetch_failed };
     }
   },
   // ---- Python's permissioned network access (bead chrome-agent-platform-4p7j.2,

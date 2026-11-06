@@ -162,9 +162,17 @@ inventory and the sender/inventory guard described in INV-15.
   scrubber over attacker-shaped text proved unfixable, so the contract no longer admits
   the text. All four writers (begin, complete, record, abortInFlight) project and
   marshal, and take() re-marshals at the observation boundary, so no writer path can
-  smuggle a credential through any field. INV-7 fences
-  the untrusted BODY side of this boundary, and the closed shape closes the REQUEST-echo
-  side for the Python broker.
+  smuggle a credential through any field. The script-side brokers carry the SAME
+  contract (7t2zv, filed as lrhyl's sibling rather than folded into it): `cap:fetch`
+  and script-host's `runFetch` return FIXED codes plus static hints — never an
+  interpolated method, protocol, host or exception message — and every model-readable
+  URL echo, the broker success return and the unscoped direct-fallback return alike,
+  passes the ONE shared normaliser (`extension/lib/url-echo.js`, re-exported by
+  `python-network.js` so every pre-existing consumer and citation keeps working);
+  validator and policy verdict URLs stay dispatch-only and never reach a
+  model-readable return. INV-7 fences
+  the untrusted BODY side of this boundary, and the closed shape plus the shared
+  echo normaliser close the REQUEST-echo side for BOTH brokers.
 - **TB5 — The ACP bridge.** A loopback WebSocket on the host in front of an agent
   harness that can run shell commands and write files
   (`scripts/acp-bridge.ts:52` defaults to `127.0.0.1`, `:785` binds the server;

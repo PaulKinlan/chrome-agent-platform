@@ -113,10 +113,12 @@ Deno.test("cap:fetch untrusted tagging (INV-7): returns tagUntrusted and product
 
   // 1. Verify service-worker.js cap:fetch route wraps return in tagUntrusted
   // (hvd4s: the 1 MB bound is now on the READ itself — streamed and cancelled
-  // at the ceiling — so the return carries the already-bounded text.)
+  // at the ceiling — so the return carries the already-bounded text.
+  // 7t2zv: the echoed url passes the shared origin+path normaliser, so the
+  // INV-7 fence and the lrhyl echo-strip now both hold at this broker.)
   assert(
-    swSrc.includes("return tagUntrusted({ ok: true, status: res.status, url: res.url, text })"),
-    "service-worker.js cap:fetch route must return tagUntrusted({ ok: true, ... })",
+    swSrc.includes("return tagUntrusted({ ok: true, status: res.status, url: urlWithoutQuery(res.url), text })"),
+    "service-worker.js cap:fetch route must return tagUntrusted({ ok: true, ... }) with the stripped url echo",
   );
 
   // 2. Real production runFetch through chrome.runtime:
@@ -157,3 +159,154 @@ Deno.test("cap:fetch untrusted tagging (INV-7): returns tagUntrusted and product
   }
 });
 
+
+// --- 7t2zv: the script-side brokers fold in the lrhyl r6 contract ---
+//
+// Filed as a SIBLING of lrhyl (one branch per bead), not folded into it: the
+// lrhyl fix stripped the PYTHON broker's model-readable echoes; cap:fetch and
+// script-host's runFetch had the identical shape. The r6 pattern folds in:
+// fixed error codes + static hints (never interpolated method, protocol,
+// host or exception text) and origin+path-only URL echoes at every
+// model-readable return. Dispatch keeps the full URL. The urlWithoutQuery
+// normaliser is promoted to a shared module (lib/url-echo.js) rather than
+// importing the whole python ledger into the offscreen bundle; python-network
+// re-exports it so every existing consumer and citation keeps working.
+
+Deno.test("7t2zv: checkFetchPolicy refusals carry fixed errorCodes alongside their text", () => {
+  assertEquals(checkFetchPolicy("https://example.com/", null).errorCode, "no_active_run");
+  const off = checkFetchPolicy("https://example.com/", { hosts: ["other.example"], dynamic: false });
+  assertEquals(off.errorCode, "host_not_approved");
+  // the target-level codes pass through the composed policy check
+  assertEquals(checkFetchPolicy("http://127.0.0.1/", { hosts: ["127.0.0.1"], dynamic: true }).errorCode, "forbidden_host");
+  assertEquals(checkFetchPolicy("javascript:alert(1)", { hosts: [], dynamic: false }).errorCode, "invalid_url");
+});
+
+Deno.test("7t2zv: runFetch validator and method refusals are codes, not interpolated text", async () => {
+  const { runFetch } = await import("../extension/lib/script-host.js");
+  const proto = await runFetch({ url: "ftp://example.com/x" }, "run-7t2zv");
+  assertEquals(proto.error, "invalid_url");
+  assertEquals(proto.hint, "protocol not allowed (http/https only)");
+  assert(!JSON.stringify(proto).includes("ftp:"), "the parser-derived protocol is never echoed back");
+  const creds = await runFetch({ url: "https://user:pass@example.com/" }, "run-7t2zv");
+  assertEquals(creds.error, "invalid_url");
+  assertEquals(creds.hint, "URLs with credentials are not allowed");
+  const bad = await runFetch({ url: "not a url" }, "run-7t2zv");
+  assertEquals(bad.error, "invalid_url");
+  const meth = await runFetch({ url: "https://example.com/x", opts: { method: "POST" } }, "run-7t2zv");
+  assertEquals(meth.error, "method_not_allowed");
+  assert(!JSON.stringify(meth).includes("POST"), "the model-controlled method is never echoed back");
+});
+
+Deno.test("7t2zv: the direct-fallback echo is stripped - a ?key= credential never rides result.url", async () => {
+  const { runFetch } = await import("../extension/lib/script-host.js");
+  const origChrome = globalThis.chrome;
+  const origFetch = globalThis.fetch;
+  try {
+    delete globalThis.chrome;
+    globalThis.fetch = async () => {
+      const r = new Response("body", { status: 200 });
+      Object.defineProperty(r, "url", { value: "https://example.com/p?key=SECRET7T2ZV" });
+      return r;
+    };
+    const res = await runFetch({ url: "https://example.com/p?key=SENT" }, null);
+    assertEquals(res.ok, true);
+    assertEquals(res.url, "https://example.com/p", "the echoed url is origin+path only");
+    assert(!JSON.stringify(res).includes("SECRET7T2ZV"), "the resolved response url's query never reaches the script-visible result");
+  } finally {
+    globalThis.chrome = origChrome;
+    globalThis.fetch = origFetch;
+  }
+});
+
+Deno.test("7t2zv SW source pin: cap:fetch returns codes + static hints and echoes origin+path only", async () => {
+  const sw = await Deno.readTextFile(new URL("../extension/background/service-worker.js", import.meta.url));
+  assert(sw.includes("return tagUntrusted({ ok: true, status: res.status, url: urlWithoutQuery(res.url), text })"), "the success echo is stripped at the broker");
+  assert(!sw.includes("url: res.url, text })"), "the bare response-URL echo is gone");
+  assert(sw.includes("error: verdict.errorCode, hint: SCRIPT_FETCH_ERROR_HINTS[verdict.errorCode]"), "policy refusals are codes + static hints");
+  assert(sw.includes('error: "redirect_refused", hint: SCRIPT_FETCH_ERROR_HINTS.redirect_refused'), "the redirect refusal is a code");
+  assert(sw.includes('error: "host_permission_missing", hint: SCRIPT_FETCH_ERROR_HINTS.host_permission_missing'), "the host-permission refusal is a code");
+  assert(!sw.includes("`method ${m} is not allowed"), "the method refusal no longer interpolates the model's method");
+  assert(!sw.includes("error: `fetch failed: ${e?.message ?? e}`"), "the cap:fetch catch no longer echoes exception text");
+  assert(!sw.includes("network access to ${u.host} is not granted"), "the host-permission refusal no longer interpolates the host");
+});
+
+// 7t2zv r2 — RUNTIME falsifier on the REAL SW broker path (the merger's bar;
+// the cac6c-r4 lesson: a source-shape pin standing in for an observed
+// emission). The "cap:fetch" handler body is extracted from service-worker.js
+// (marker-based, never line-based), compiled with ONLY its real imports
+// (checkFetchPolicy, readResponseTextBounded, tagUntrusted, urlWithoutQuery)
+// and stubs for the four ambient edges (chrome.permissions, fetch, the run
+// policy map, swLog), then driven through refusals and success so the
+// OBSERVED emissions — not the source text — are what assert the contract:
+// fixed codes + static hints on every refusal, and a stripped echo.
+Deno.test("7t2zv SW broker runtime: refusals are fixed codes + static hints, the echo is origin+path only", async () => {
+  const sw = await Deno.readTextFile(new URL("../extension/background/service-worker.js", import.meta.url));
+  const sig = 'async "cap:fetch"({ url, method = "GET", runId }) {';
+  const at = sw.indexOf(sig);
+  assert(at > 0, "the cap:fetch handler signature must exist (unique route-map entry)");
+  const bodyStart = at + sig.length - 1; // index of the handler's opening '{'
+  let depth = 0;
+  let bodyEnd = -1;
+  for (let i = bodyStart; i < sw.length; i++) {
+    if (sw[i] === "{") depth++;
+    else if (sw[i] === "}") { depth--; if (depth === 0) { bodyEnd = i; break; } }
+  }
+  assert(bodyEnd > bodyStart, "the cap:fetch handler body must close");
+  const body = sw.slice(bodyStart + 1, bodyEnd);
+  const { readResponseTextBounded } = await import("../extension/lib/fetch-body-bound.js");
+  const { tagUntrusted } = await import("../extension/lib/untrusted-fence.js");
+  const { urlWithoutQuery } = await import("../extension/lib/url-echo.js");
+  const factory = new Function(
+    "checkFetchPolicy",
+    "scriptRunPolicies",
+    "chrome",
+    "fetch",
+    "readResponseTextBounded",
+    "tagUntrusted",
+    "urlWithoutQuery",
+    "swLog",
+    'return async function capFetchProbe({ url, method = "GET", runId }) {\n' + body + "\n};",
+  );
+  const policies = new Map([["run-7t2zv", { hosts: ["example.com"], dynamic: false, at: Date.now() }]]);
+  const chromeStub = { permissions: { contains: async () => true } };
+  const makeDispatch = (fetchImpl) =>
+    factory(checkFetchPolicy, policies, chromeStub, fetchImpl, readResponseTextBounded, tagUntrusted, urlWithoutQuery, { error: () => {} });
+  const dispatch = makeDispatch(null); // refusals below never reach fetch
+
+  // (1) The method refusal emits a FIXED CODE, and the caller's method value
+  // never rides the reply.
+  const methodRes = await dispatch({ url: "https://example.com/", method: "POST", runId: "run-7t2zv" });
+  assertEquals(methodRes.ok, false);
+  assertEquals(methodRes.error, "method_not_allowed");
+  assert(typeof methodRes.hint === "string" && methodRes.hint.length > 0, "a static hint accompanies the code");
+  assert(!JSON.stringify(methodRes).includes("POST"), "the reply must not echo the caller's method");
+
+  // (2) An unapproved host is refused with a code, and the caller's URL/host
+  // (and any credential in it) appears NOWHERE in the refusal.
+  const offRes = await dispatch({ url: "https://secret-host7t2zv.example/?token=SECRET7T2ZV", method: "GET", runId: "run-7t2zv" });
+  assertEquals(offRes.ok, false);
+  assert(/^[a-z_]+$/.test(offRes.error), `the refusal error is a fixed code, got ${JSON.stringify(offRes.error)}`);
+  assert(typeof offRes.hint === "string" && offRes.hint.length > 0, "a static hint accompanies the policy refusal");
+  assert(!JSON.stringify(offRes).includes("secret-host7t2zv"), "the refusal must not echo the refused host");
+  assert(!JSON.stringify(offRes).includes("SECRET7T2ZV"), "the refusal must not echo the URL's query");
+
+  // (3) A redirect response is refused with redirect_refused — the redirect
+  // target never reaches the model.
+  const redirectRes = await makeDispatch(async () => ({ status: 302, type: "opaqueredirect" }))({
+    url: "https://example.com/", method: "GET", runId: "run-7t2zv",
+  });
+  assertEquals(redirectRes.ok, false);
+  assertEquals(redirectRes.error, "redirect_refused");
+  assert(typeof redirectRes.hint === "string" && redirectRes.hint.length > 0);
+
+  // (4) The success path: the model-readable echo is ORIGIN+PATH only — a
+  // credential in the resolved response URL's query is stripped before any
+  // script sees it — and the result carries the real untrusted marker.
+  const successRes = await makeDispatch(async () => ({
+    status: 200, type: "basic", url: "https://example.com/p?key=SECRET7T2ZV", body: new Response("hi").body,
+  }))({ url: "https://example.com/p", method: "GET", runId: "run-7t2zv" });
+  assertEquals(successRes.ok, true);
+  assertEquals(successRes.untrusted, true, "the real tagUntrusted wraps the success");
+  assertEquals(successRes.url, "https://example.com/p", "the echoed url is origin+path only");
+  assert(!JSON.stringify(successRes).includes("SECRET7T2ZV"), "the resolved response url's query never reaches the result");
+});
