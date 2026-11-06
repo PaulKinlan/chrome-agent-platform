@@ -160,8 +160,8 @@ function atLeast(version: string, floor: string): boolean {
 }
 
 Deno.test("behrd: every advisory-patched dependency is patched in BOTH lockfiles", () => {
-  // Five findings across the 2026-10-18 and 2026-10-27 nightlies (chrome-agent-platform-behrd,
-  // chrome-agent-platform-e7lsv), each bumped rather than waved
+  // Six findings across the 2026-10-18, 2026-10-27 and 2026-11-03 nightlies (chrome-agent-platform-behrd,
+  // chrome-agent-platform-e7lsv, chrome-agent-platform-shewe), each bumped rather than waved
   // through, and each pinned here so a later lockfile regeneration cannot quietly walk back under the fix.
   //
   // Reachability, recorded rather than assumed (all five are transitive and NONE of the advisory paths is on
@@ -184,12 +184,25 @@ Deno.test("behrd: every advisory-patched dependency is patched in BOTH lockfiles
   //                                    body-parser directly. Unreachable today; bumped so the advisory
   //                                    stops re-opening nightly. The qs row rides along: body-parser 2.4.0
   //                                    needs qs ^6.16.1, so both lockfiles move qs to 6.17.0 with it.
+  //   @hono/node-server
+  //              GHSA-rmxm-3fg6-px4f  LOW-severity advisory in the hono node-server adapter (shewe,
+  //                                    factory run-20261103T031227Z, deps-supply-chain). Affected range
+  //                                    1.19.10-2.1.2, fixed 2.1.3; both locks resolved 2.1.1, arriving
+  //                                    only via @modelcontextprotocol/sdk's hono adapter dependency.
+  //                                    Unreachable today: no file under extension/, scripts/ or tests/
+  //                                    imports hono, @hono/node-server or serveStatic; the sole host-side
+  //                                    MCP server uses WebStandardStreamableHTTPServerTransport, and
+  //                                    scripts/browser-dependencies.mjs:54-58 fails the build on node:*
+  //                                    imports. Nothing to exploit; bumped so lockfile drift cannot let a
+  //                                    genuinely reachable hono advisory ride in unnoticed, and so the
+  //                                    nightly row retires.
   const patched: Array<{ name: string; floor: string; advisory: string; denoName?: string }> = [
     { name: "hono", floor: "4.13.7", advisory: "GHSA-hxh3-vqpv-xpqv", denoName: "hono" },
     { name: "ip-address", floor: "10.7.1", advisory: "GHSA-j6r3-76f7-8jcv", denoName: "ip-address" },
     { name: "proxy-addr", floor: "2.0.8", advisory: "GHSA-jqcg-44mw-7w3h", denoName: "proxy-addr" },
     { name: "undici", floor: "7.29.1", advisory: "GHSA-3wwx-pv8p-q78v", denoName: "undici" },
     { name: "body-parser", floor: "2.4.0", advisory: "GHSA-27r3-jxmh-p828", denoName: "body-parser" },
+    { name: "@hono/node-server", floor: "2.1.3", advisory: "GHSA-rmxm-3fg6-px4f", denoName: "@hono/node-server" },
   ];
   for (const { name, floor, advisory, denoName } of patched) {
     // chrome-agent-platform-sl42e: floor-check EVERY npm resolution, not just the hoisted
@@ -235,6 +248,9 @@ Deno.test("behrd falsification: atLeast refuses the versions this bead bumped AW
   assertEquals(atLeast("2.0.7", "2.0.8"), false, "proxy-addr 2.0.7 is the version that was vulnerable");
   assertEquals(atLeast("7.29.0", "7.29.1"), false, "undici 7.29.0 is the version that was vulnerable");
   assertEquals(atLeast("2.3.0", "2.4.0"), false, "body-parser 2.3.0 is the version GHSA-27r3-jxmh-p828 covers");
+  assertEquals(atLeast("2.1.1", "2.1.3"), false, "@hono/node-server 2.1.1 is inside the GHSA-rmxm-3fg6-px4f range (shewe)");
+  assertEquals(atLeast("2.1.2", "2.1.3"), false, "@hono/node-server 2.1.2 is the last affected version");
+  assertEquals(atLeast("2.1.3", "2.1.3"), true, "@hono/node-server 2.1.3 is the fix itself");
   assertEquals(atLeast("2.4.0", "2.4.0"), true, "body-parser 2.4.0 is the fix itself");
   assertEquals(atLeast("not-a-version", "1.0.0"), false, "fail closed on nonsense");
   assertEquals(atLeast("4.13.7", "4.13.7"), true, "the fix itself satisfies the floor");
