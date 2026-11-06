@@ -1,5 +1,5 @@
 // CAP-FB-20260830-ESCAPEHTML-SINGLE-SOURCE-01 — the grep guard that keeps the
-// shared pure helpers SINGLE-SOURCED in extension/lib/pure.js.
+// shared pure helpers SINGLE-SOURCED in extension/lib/pure*.js (the barrel + its seams).
 //
 // The hub and Settings each carried their own escapeHtml that did not escape
 // the single quote, so any single-quoted attribute built with it was an XSS
@@ -16,6 +16,22 @@ const ROOT = new URL("../extension/", import.meta.url);
 // deno-lint-ignore no-explicit-any
 const pure: Record<string, any> = await import("../extension/lib/pure.js");
 const CANONICAL_FILE = "lib/pure.js";
+
+const CANONICAL_SEAMS: Record<string, string> = {
+  escapeHtml: "lib/pure-text.js",
+  timeAgo: "lib/pure-text.js",
+  sha256Hex: "lib/pure-hash.js",
+  sha256HexBytes: "lib/pure-hash.js",
+  fnv1a: "lib/pure-hash.js",
+  fnv1a64: "lib/pure-hash.js",
+  truncateUtf8: "lib/pure-text.js",
+  newId: "lib/pure-text.js",
+  sleep: "lib/pure-text.js",
+};
+
+function isPureModule(rel: string): boolean {
+  return rel === CANONICAL_FILE || (rel.startsWith("lib/pure-") && rel.endsWith(".js"));
+}
 
 /** Paths (relative to extension/) that are build output or vendored bundles —
  * never hand-written product code, so never a duplicate we own. */
@@ -70,6 +86,9 @@ async function sources(): Promise<Map<string, string>> {
   const out = new Map<string, string>();
   for await (const [rel, text] of walk(ROOT)) out.set(rel, text);
   assert(out.has(CANONICAL_FILE), "pure.js must be in the walk");
+  for (const seam of Object.values(CANONICAL_SEAMS)) {
+    assert(out.has(seam), `${seam} must be in the walk`);
+  }
   return out;
 }
 
@@ -79,28 +98,29 @@ function definitionSites(text: string, name: string): number {
   return (text.match(fn) ?? []).length + (text.match(arrow) ?? []).length;
 }
 
-Deno.test("single-source: each shared helper is defined exactly once, in lib/pure.js", async () => {
+Deno.test("single-source: each shared helper is defined exactly once, in lib/pure*.js (the barrel + its seams)", async () => {
   const files = await sources();
   const failures: string[] = [];
   for (const name of CANONICAL_NAMES) {
+    const expected = CANONICAL_SEAMS[name];
     const sites: string[] = [];
     for (const [rel, text] of files) {
       if (ALLOWED_COPIES.has(`${rel}:${name}`)) continue;
       const n = definitionSites(text, name);
       for (let i = 0; i < n; i++) sites.push(rel);
     }
-    if (sites.length !== 1 || sites[0] !== CANONICAL_FILE) {
-      failures.push(`${name}: defined at [${sites.join(", ")}] — expected exactly once in ${CANONICAL_FILE}`);
+    if (sites.length !== 1 || sites[0] !== expected) {
+      failures.push(`${name}: defined at [${sites.join(", ")}] — expected exactly once in ${expected}`);
     }
   }
   assertEquals(failures, [], failures.join("\n"));
 });
 
-Deno.test("single-source: no alias of a shared helper is defined outside lib/pure.js", async () => {
+Deno.test("single-source: no alias of a shared helper is defined outside lib/pure*.js (the barrel + its seams)", async () => {
   const files = await sources();
   const offenders: string[] = [];
   for (const [rel, text] of files) {
-    if (rel === CANONICAL_FILE) continue;
+    if (isPureModule(rel)) continue;
     for (const re of [ALIAS_RE, ARROW_ALIAS_RE]) {
       re.lastIndex = 0;
       for (const m of text.matchAll(re)) {
@@ -113,11 +133,11 @@ Deno.test("single-source: no alias of a shared helper is defined outside lib/pur
   assertEquals(offenders, [], offenders.join("\n"));
 });
 
-Deno.test({ name: "single-source: no hand-rolled Date.now()+Math.random() id generator outside lib/pure.js", ignore: !GUARD_ID_GENERATORS, fn: async () => {
+Deno.test({ name: "single-source: no hand-rolled Date.now()+Math.random() id generator outside lib/pure*.js (the barrel + its seams)", ignore: !GUARD_ID_GENERATORS, fn: async () => {
   const files = await sources();
   const offenders: string[] = [];
   for (const [rel, text] of files) {
-    if (rel === CANONICAL_FILE) continue;
+    if (isPureModule(rel)) continue;
     text.split("\n").forEach((line, i) => {
       if (line.includes("Date.now()") && line.includes("Math.random()")) offenders.push(`${rel}:${i + 1}: ${line.trim()}`);
     });
@@ -125,12 +145,12 @@ Deno.test({ name: "single-source: no hand-rolled Date.now()+Math.random() id gen
   assertEquals(offenders, [], offenders.join("\n"));
 } });
 
-Deno.test({ name: "single-source: no inline promise-wrapped setTimeout sleep outside lib/pure.js", ignore: !GUARD_INLINE_SLEEPS, fn: async () => {
+Deno.test({ name: "single-source: no inline promise-wrapped setTimeout sleep outside lib/pure*.js (the barrel + its seams)", ignore: !GUARD_INLINE_SLEEPS, fn: async () => {
   const files = await sources();
   const re = /new Promise\(\s*\(?\s*(\w+)\s*\)?\s*=>\s*setTimeout\(\s*\1\s*,/g;
   const offenders: string[] = [];
   for (const [rel, text] of files) {
-    if (rel === CANONICAL_FILE) continue;
+    if (isPureModule(rel)) continue;
     for (const m of text.matchAll(re)) {
       const line = text.slice(0, m.index).split("\n").length;
       offenders.push(`${rel}:${line}`);
@@ -142,8 +162,8 @@ Deno.test({ name: "single-source: no inline promise-wrapped setTimeout sleep out
 Deno.test("single-source: components.js re-exports the canonical escapeHtml (the gallery import surface is unchanged)", async () => {
   const text = await Deno.readTextFile(new URL("shared/components.js", ROOT));
   assert(
-    /export\s*\{[^}]*\bescapeHtml\b[^}]*\}\s*from\s*"\.\.\/lib\/pure\.js"/.test(text),
-    "components.js must `export { escapeHtml } from \"../lib/pure.js\"`",
+    /export\s*\{[^}]*\bescapeHtml\b[^}]*\}\s*from\s*"\.\.\/lib\/pure-text\.js"/.test(text),
+    "components.js must `export { escapeHtml } from \"../lib/pure-text.js\"`",
   );
   assertEquals(definitionSites(text, "escapeHtml"), 0, "components.js must not define its own escapeHtml");
 });
