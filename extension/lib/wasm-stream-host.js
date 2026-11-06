@@ -6,7 +6,7 @@ import { createWasiJob } from "./wasm-host-types.js";
 import { BUNDLED_INVENTORY } from "./bundled-inventory-data.js";
 import { validateAuthorityRecord } from "./wasm-executor.js";
 import { validateWasmStreamRef, WASM_STREAM_ROOT_NAME } from "./wasm-stream-files.js";
-import { isTrustedServiceWorkerSender, SERVICE_WORKER_BUNDLE_PATH } from "./pure.js";
+import { isTrustedServiceWorkerSender, SERVICE_WORKER_BUNDLE_PATH } from "./pure-trust.js";
 
 export const WASM_STREAM_RUN_TYPE = "cap:wasm-stream-run";
 export const WASM_STREAM_WALL_MS = 180_000; export const WASM_STREAM_SERVICE_WORKER_PATH = SERVICE_WORKER_BUNDLE_PATH;

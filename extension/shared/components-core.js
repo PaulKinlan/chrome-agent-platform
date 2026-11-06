@@ -3,9 +3,9 @@
 
 import { t } from "./i18n.js";
 import { cachedRpc } from "./rpc-cache.js";
-import { escapeHtml, timeAgo, sleep } from "../lib/pure.js";
+import { escapeHtml, timeAgo, sleep } from "../lib/pure-text.js";
 import { permissionUserLanguage } from "../lib/permission-language.js";
-export { escapeHtml, timeAgo, sleep } from "../lib/pure.js";
+export { escapeHtml, timeAgo, sleep } from "../lib/pure-text.js";
 
 const ARIA_HIDDEN = "aria-hidden";
 const TRUE = ""; // boolean-attribute present marker

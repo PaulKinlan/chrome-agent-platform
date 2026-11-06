@@ -1,6 +1,6 @@
 // extension/lib/user-wasm-host.js — Offscreen execution host listener for user-uploaded WASI modules.
 import { executeUserWasmRun } from "./wasm-offscreen-host.js";
-import { isTrustedServiceWorkerSender } from "./pure.js";
+import { isTrustedServiceWorkerSender } from "./pure-trust.js";
 import { verifyAndReadOwnerBlobBytes } from "./user-wasm-store.js";
 
 export const USER_WASM_RUN_TYPE = "cap:user-wasm-run";

@@ -9,7 +9,7 @@
 // MV3-CSP-safe: no eval / new Function. Defensive: this module never throws —
 // a malformed error falls back to a generic but still-actionable description.
 
-import { safeProviderError } from "./pure.js";
+import { safeProviderError } from "./pure-redact.js";
 import { isNativeQuotaExceededError } from "./storage-errors.js";
 
 /** Error categories — a stable tag the UI can style + group. */

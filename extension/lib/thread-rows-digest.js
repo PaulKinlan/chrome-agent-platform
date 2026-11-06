@@ -4,7 +4,7 @@
 // only the aria-current highlight moves. Pure: the dot projection is injected
 // so the module stays testable without the run registry.
 
-import { timeAgo } from "./pure.js";
+import { timeAgo } from "./pure-text.js";
 
 /** The rows renderTaskRows would build for `threads` (bounded to the first 40,
  *  like the render itself), reduced to one string: id, name, preview, the

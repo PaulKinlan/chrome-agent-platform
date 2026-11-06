@@ -26,7 +26,8 @@
 // (redactSecretText, pure.js — the string-level redactor; redactSecrets only
 // covers object keys).
 
-import { newId, redactSecretText } from "./pure.js";
+import { redactSecretText } from "./pure-redact.js";
+import { newId } from "./pure-text.js";
 import { resolveTargetAgent } from "./agent-delegation.js";
 
 export const BOARD_JOBS_KEY = "cap:board-jobs";

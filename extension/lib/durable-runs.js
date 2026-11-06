@@ -18,7 +18,8 @@ import {
   siteMemory,
 } from "./memory.js";
 import { REPLAY_MUTATING, perCallIdempotencyKey, worstSafety } from "./tool-replay-safety.js";
-import { newId, redactSecretText } from "./pure.js";
+import { redactSecretText } from "./pure-redact.js";
+import { newId } from "./pure-text.js";
 import { commitThreadCancellation, commitThreadTerminal, boundResponseDigest, boundTerminalEnvelope } from "./threads.js";
 import { isNativeQuotaExceededError } from "./storage-errors.js";
 import {

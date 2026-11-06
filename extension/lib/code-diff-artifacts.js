@@ -8,7 +8,7 @@
 // route, approval, provider, OPFS, WebAssembly, or mutation authority.
 
 import { ASSET_BOUNDS, createAssetKeyed, getAsset } from "./artifacts.js";
-import { sha256HexBytes } from "./pure.js";
+import { sha256HexBytes } from "./pure-hash.js";
 
 export const CODE_DIFF_MEDIA = "application/x-cap-code-diff@1";
 

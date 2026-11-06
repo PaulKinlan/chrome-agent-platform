@@ -11,7 +11,7 @@ import {
   TABLE_VERSION,
   tableUtf8Bytes,
 } from "./table-core.js";
-import { sha256Hex } from "./pure.js";
+import { sha256Hex } from "./pure-hash.js";
 import { canonicalJson } from "./wasm-package-authority.js";
 import { stageAssetAsWasmStream } from "./tool-stream-platform.js";
 import { discardWasmStream, readWasmStreamReceipt } from "./wasm-stream-files.js";

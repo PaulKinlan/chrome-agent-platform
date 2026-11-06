@@ -4,7 +4,7 @@
 // fail before page dispatch, while after-dispatch publication requires a live
 // durable Allow.
 
-import { sha256Hex } from "./pure.js";
+import { sha256Hex } from "./pure-hash.js";
 
 /** Prototype-safe own-property accessor for page-derived descriptor inputs. */
 function ownData(value, key) {

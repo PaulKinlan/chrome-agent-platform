@@ -15,7 +15,7 @@
 // its use back (release). The run/task/agent/origin/document/generation fences
 // and the catalog/source staleness checks are unchanged.
 
-import { hasLoneSurrogates, truncateUtf8, utf8ByteLength } from "./pure.js";
+import { hasLoneSurrogates, truncateUtf8, utf8ByteLength } from "./pure-text.js";
 
 export const TOOL_SELECTION_BOUNDS = Object.freeze({
   // A 30-tab loop takes longer than a minute: refs live 10 min (max 15).

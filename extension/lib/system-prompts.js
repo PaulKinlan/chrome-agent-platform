@@ -87,13 +87,8 @@
 // owner text. Only product-authored content carries public SHA-256 hashes.
 
 import { MASTER_SKILL, PLATFORM_ENVIRONMENT_GROUNDING } from "./master-skill.js";
-import {
-  hasLoneSurrogates,
-  hmacSha256Hex,
-  sha256Hex,
-  truncateUtf8,
-  utf8ByteLength,
-} from "./pure.js";
+import { hmacSha256Hex, sha256Hex } from "./pure-hash.js";
+import { hasLoneSurrogates, truncateUtf8, utf8ByteLength } from "./pure-text.js";
 import { kvGet, kvSet, storageAvailable } from "./kv.js";
 import { buildSkillsPrompt } from "./skills.js";
 import { RUNTIME_CONTEXT_PLACEHOLDER } from "./runtime-context.js";

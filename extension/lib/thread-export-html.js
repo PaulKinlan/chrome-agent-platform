@@ -5,7 +5,7 @@
 // the complete thread narrative and embedded artifacts, with prominent privacy
 // notice and exact-value secret scrubbing.
 
-import { escapeHtml } from "./pure.js";
+import { escapeHtml } from "./pure-text.js";
 import { redactExportText, redactExportValue } from "./thread-export-redact.js";
 
 /**

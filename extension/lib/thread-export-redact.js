@@ -5,7 +5,7 @@
 // (API keys, bearer tokens, passwords, headers, session cookies, HMACs) across arbitrary text,
 // plus URL query stripping, shape masking, and local path sanitization.
 
-import { BARE_SECRET_SHAPES, SECRET_KEY_RE } from "./pure.js";
+import { BARE_SECRET_SHAPES, SECRET_KEY_RE } from "./pure-redact.js";
 
 /** Escape a literal string for safe use in RegExp. */
 function escapeRegex(s) {

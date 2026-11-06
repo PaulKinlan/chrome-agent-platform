@@ -4,7 +4,7 @@
 
 import { TABLE_LIMITS } from "./table-core.js";
 import { runManagedStreamJob, STREAM_PLATFORM_LIMITS } from "./tool-stream-platform.js";
-import { isTrustedServiceWorkerSender } from "./pure.js";
+import { isTrustedServiceWorkerSender } from "./pure-trust.js";
 
 const activeJobs = new Map(); // runId -> Set<controller>
 const TABLE_WORKER_PATH = "lib/table-operation-worker.js";

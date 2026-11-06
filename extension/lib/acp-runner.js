@@ -7,7 +7,7 @@
 import { AcpClient, acpAllowOptionId, acpDenyOptionId, loopbackAcpRefusalReason } from "./acp-client.js";
 import { AcpNativeTransport, classifyNativeFailure, DEFAULT_NATIVE_HOST } from "./acp-native.js";
 import { acpExecutionId } from "./acp-thread-journal.js";
-import { sha256Hex } from "./pure.js";
+import { sha256Hex } from "./pure-hash.js";
 import {
   wrapUntrustedContent,
   isWellFormedFenceWithToken,

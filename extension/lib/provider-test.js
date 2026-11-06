@@ -10,7 +10,7 @@
 // from an extension page is subject to the provider's CORS policy — a CORS
 // rejection surfaces as a clear network error, never a false success.
 
-import { safeProviderError } from "./pure.js";
+import { safeProviderError } from "./pure-redact.js";
 import { isOpenAIEndpoint } from "./models/openai-model.js";
 
 // OpenAI-compatible providers (every cloud provider advertised goes through the
