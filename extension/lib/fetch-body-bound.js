@@ -31,8 +31,10 @@
 //     bundle, whose enforced byte ceiling had only 80 bytes of headroom at the
 //     pristine baseline. The hub authorised 259,000 as an explicit TRACKED
 //     BRIDGE for this fix (measured +374 B at this helper's shrunk floor);
-//     the x2ux1 offscreen split removes the need, and until it lands every
-//     byte here stays argued for - shrinking is still the first move.
+//     chrome-agent-platform-892u2 retired that bridge when the offscreen split
+//     landed (entry 258,294 -> 57,876 B, ceiling re-based to 65,000 B), but the
+//     discipline it bought stays: every byte here is argued for, and shrinking
+//     is still the first move.
 
 /**
  * Read a Response body as text, bounded at the stream level.

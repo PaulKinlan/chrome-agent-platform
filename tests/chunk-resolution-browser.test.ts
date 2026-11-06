@@ -17,6 +17,11 @@ const SURFACES = [
   { path: "ntp/ntp.html", bundle: "ntp.bundle.js" },
   { path: "sidepanel/sidepanel.html", bundle: "sidepanel.bundle.js" },
   { path: "options/options.html", bundle: "options.bundle.js" },
+  // chrome-agent-platform-892u2: the offscreen execution host joined the same
+  // splitting build, so its readiness contract now depends on STATIC chunk imports
+  // resolving before the entry body registers any host. Load it like the other
+  // surfaces: same derived graph, same 404/CSP/exception assertions.
+  { path: "offscreen/offscreen.html", bundle: "offscreen.bundle.js" },
 ];
 
 type MarkerIndex = {
@@ -84,15 +89,39 @@ async function readMarkerVerifiedFile(index: MarkerIndex, relPath: string): Prom
   );
 }
 
+/** Relative module specifiers a bundle or chunk actually IMPORTS.
+ *
+ *  chrome-agent-platform-892u2: the previous walker matched any `./<file>.js` substring, which
+ *  was harmless while every surface was self-contained — and became wrong the moment offscreen's
+ *  code moved into a shared chunk, because tool-exec-preview.js carries the string fallback
+ *  `"./wasm-executor.js"` for the non-extension (Deno) context inside a ternary. That is a
+ *  worker-module PATH, not an import, and dist/chunks holds no such file: the walk demanded a
+ *  build output that legitimately does not exist. Matching import SYNTAX instead keeps the
+ *  no-silent-shortening property (a real specifier the marker does not index still throws)
+ *  without inventing outputs out of string literals. Both quote styles are accepted so a
+ *  developer build (unminified) and a store build (minified) derive the same graph. */
+const RELATIVE_MODULE_SPECIFIER_RE =
+  /(?:\bfrom|\bimport)\s*\(?\s*"(\.[a-zA-Z0-9._/-]+\.js)"|(?:\bfrom|\bimport)\s*\(?\s*'(\.[a-zA-Z0-9._/-]+\.js)'/g;
+
+function relativeSpecifiers(code: string): string[] {
+  const out: string[] = [];
+  for (const m of code.matchAll(RELATIVE_MODULE_SPECIFIER_RE)) {
+    const spec = m[1] ?? m[2];
+    if (spec) out.push(spec);
+  }
+  return out;
+}
+
 async function computeExpectedChunkGraph(index: MarkerIndex, bundleRelPath: string): Promise<Set<string>> {
   const visited = new Set<string>();
   const queue: string[] = [];
 
   const bundleCode = await readMarkerVerifiedFile(index, bundleRelPath);
-  for (const m of bundleCode.matchAll(/\.\/chunks\/([a-zA-Z0-9._-]+\.js)/g)) {
-    if (!visited.has(m[1])) {
-      visited.add(m[1]);
-      queue.push(m[1]);
+  for (const spec of relativeSpecifiers(bundleCode)) {
+    const chunkName = spec.startsWith("./chunks/") ? spec.slice("./chunks/".length) : null;
+    if (chunkName && !visited.has(chunkName)) {
+      visited.add(chunkName);
+      queue.push(chunkName);
     }
   }
 
@@ -101,10 +130,11 @@ async function computeExpectedChunkGraph(index: MarkerIndex, bundleRelPath: stri
     // A referenced chunk that the marker does not index, or whose bytes are not the recorded ones, is a
     // hard stop: the old `.catch(() => "")` here could silently shorten the graph instead.
     const chunkCode = await readMarkerVerifiedFile(index, `chunks/${chunkName}`);
-    for (const m of chunkCode.matchAll(/\.\/([a-zA-Z0-9._-]+\.js)/g)) {
-      if (!visited.has(m[1])) {
-        visited.add(m[1]);
-        queue.push(m[1]);
+    for (const spec of relativeSpecifiers(chunkCode)) {
+      const sibling = spec.startsWith("../") ? null : spec.replace(/^\.\//, "");
+      if (sibling && !sibling.includes("/") && !visited.has(sibling)) {
+        visited.add(sibling);
+        queue.push(sibling);
       }
     }
   }
@@ -305,6 +335,19 @@ Deno.test("20e2u condition (e): load ntp, sidepanel, options in real Chrome; all
           `import(chrome.runtime.getURL("dist/user-wasm-store-client.bundle.js")).then(m => typeof m.runOwnerBlobStore === "function")`,
         );
         assertEquals(lazyStoreResult, true, "Lazy dynamic import of dist/user-wasm-store-client.bundle.js must resolve and export runOwnerBlobStore");
+      }
+
+      // 6b. chrome-agent-platform-892u2: the offscreen readiness contract is "the
+      // entry body finished, so every host is registered synchronously". Now that
+      // the entry pulls its code from static chunk imports, a chunk that failed to
+      // evaluate would leave listeners unregistered while the document looks fine.
+      if (surface.bundle === "offscreen.bundle.js") {
+        const hasListeners = await client.eval(sessionId, "chrome.runtime.onMessage.hasListeners()");
+        assertEquals(
+          hasListeners,
+          true,
+          "offscreen.bundle.js must finish its entry body (host registration) after resolving its static chunk imports",
+        );
       }
 
       const sampleChunk = [...expectedGraph][0];

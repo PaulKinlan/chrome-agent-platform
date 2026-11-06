@@ -675,8 +675,21 @@ try {
     if (DEBUG_BUILD) swInject.push(path.join(ROOT, "scripts/mcp-probe-entry.js"));
 
     // chrome-agent-platform-9epn.5 + jjsz + 9epn.6 + 20e2u: build SW, diff-core,
-    // workers, and offscreen standalone; build UI surfaces with esbuild splitting:true
-    // so shared chat machinery and core components extract into admitted chunks/.
+    // and workers standalone; build the UI surfaces — and, since 892u2, the
+    // offscreen execution host — with esbuild splitting:true so shared chat
+    // machinery and core components extract into admitted chunks/.
+    //
+    // chrome-agent-platform-892u2 (the x2ux1 ceiling recovery): offscreen was the
+    // LAST surface still built without splitting, at 93% cross-surface
+    // duplication with the UI group (x2ux1 metafile analysis) and only 706 B of
+    // headroom under the enforced 259,000 B bridge. It joins the UI group's one
+    // esbuild call here, so its shared modules become chunks the UI entries
+    // already ship. Load order needs no protocol work: offscreen.html loads
+    // type="module" and offscreen.js registers every host via TOP-LEVEL STATIC
+    // imports, so ESM evaluates the imported chunks before the entry body and
+    // sync registration remains the readiness signal. Do NOT replace those with
+    // dynamic import(): that is exactly the x2ux1 async-gap trap (no ready
+    // handshake exists on this surface).
     const [
       swResult,
       uiResult,
@@ -684,7 +697,6 @@ try {
       artifactResult,
       directoryResult,
       privacyResult,
-      offscreenResult,
       userWasmClientResult,
       settingsViewResult,
       diffCoreResult,
@@ -703,6 +715,7 @@ try {
           "options.bundle": path.join(EXT_DIR, "options/options.js"),
           "ntp.bundle": path.join(EXT_DIR, "ntp/ntp.js"),
           "sidepanel.bundle": path.join(EXT_DIR, "sidepanel/sidepanel.js"),
+          "offscreen.bundle": path.join(EXT_DIR, "offscreen/offscreen.js"),
         },
         outdir: STAGE,
         splitting: true,
@@ -713,7 +726,6 @@ try {
       build({ ...shared, entryPoints: [path.join(EXT_DIR, "artifact/artifact.js")], outfile: ARTIFACT_BUNDLE, metafile: true }),
       build({ ...shared, entryPoints: [path.join(EXT_DIR, "directory/directory.js")], outfile: DIRECTORY_BUNDLE, metafile: true }),
       build({ ...shared, entryPoints: [path.join(EXT_DIR, "privacy/privacy.js")], outfile: PRIVACY_BUNDLE, metafile: true }),
-      build({ ...shared, entryPoints: [path.join(EXT_DIR, "offscreen/offscreen.js")], outfile: OFFSCREEN_BUNDLE, metafile: true }),
       build({ ...shared, entryPoints: [path.join(EXT_DIR, "lib/user-wasm-store-client.js")], outfile: USER_WASM_STORE_CLIENT_BUNDLE, metafile: true }),
       build({ ...shared, entryPoints: [path.join(EXT_DIR, "options/settings-view.js")], outfile: SETTINGS_VIEW_BUNDLE, metafile: true }),
       build({ ...shared, entryPoints: [path.join(EXT_DIR, "shared/diff-core.js")], outfile: DIFF_CORE }),
@@ -740,7 +752,11 @@ try {
       { name: "artifact", entry: "artifact/artifact.js", out: "artifact.bundle.js", path: ARTIFACT_BUNDLE, result: artifactResult, budget: 200_000 },
       { name: "directory", entry: "directory/directory.js", out: "directory.bundle.js", path: DIRECTORY_BUNDLE, result: directoryResult, budget: 65_000 },
       { name: "privacy", entry: "privacy/privacy.js", out: "privacy.bundle.js", path: PRIVACY_BUNDLE, result: privacyResult, budget: 65_000 },
-      { name: "offscreen", entry: "offscreen/offscreen.js", out: "offscreen.bundle.js", path: OFFSCREEN_BUNDLE, result: offscreenResult, budget: 259_000 }, /* ratcheted with STORE_BUNDLE_BUDGETS (bwxf measured 255,306; hvd4s measured 258,294 at its shrunk floor) */
+      // chrome-agent-platform-892u2: offscreen is part of the UI esbuild group now, so
+      // its metafile is uiResult's (one build, one metafile). The budget stays
+      // ENFORCED (rmoh8) but is re-based onto the measured post-split ENTRY size,
+      // which retires the 259,000 B hub bridge — see STORE_BUNDLE_BUDGETS.
+      { name: "offscreen", entry: "offscreen/offscreen.js", out: "offscreen.bundle.js", path: OFFSCREEN_BUNDLE, result: uiResult, budget: 65_000 }, /* 892u2 re-based from measurement (split entry 57,876 B; pre-split bwxf measured 255,306 and hvd4s 258,294) */
       { name: "user-wasm-store-client", entry: "lib/user-wasm-store-client.js", out: "user-wasm-store-client.bundle.js", path: USER_WASM_STORE_CLIENT_BUNDLE, result: userWasmClientResult, budget: 10_000 },
       { name: "settings-view", entry: "options/settings-view.js", out: "settings-view.bundle.js", path: SETTINGS_VIEW_BUNDLE, result: settingsViewResult, budget: 120_000 },
     ];
@@ -871,7 +887,9 @@ try {
         "artifact.bundle.js": artifactResult.metafile,
         "directory.bundle.js": directoryResult.metafile,
         "privacy.bundle.js": privacyResult.metafile,
-        "offscreen.bundle.js": offscreenResult.metafile,
+        // chrome-agent-platform-892u2: offscreen is built inside the UI group's
+        // single esbuild call, so its metafile IS uiResult.metafile.
+        "offscreen.bundle.js": uiResult.metafile,
         "user-wasm-store-client.bundle.js": userWasmClientResult.metafile,
         "settings-view.bundle.js": settingsViewResult.metafile,
       };
