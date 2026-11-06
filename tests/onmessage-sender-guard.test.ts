@@ -398,9 +398,14 @@ const ALLOWLISTED_SITES = new Map<string, string>([
   [
     // NOTE: this key is line-coupled by design (the guard inventory reports
     // sites by file:line) — edits ABOVE the central dispatcher in
-    // service-worker.js must renumber it. hvd4s moved it 13361 → 13365.
-    "extension/background/service-worker.js:13365",
-    "central dispatcher: accepts page/content-script senders BY DESIGN; sender classified by authorizeToolReport (lib/pure.js:912) and route authority enforced per-route (Layers 1-3)",
+    // service-worker.js must renumber it. hvd4s moved it 13361 → 13365; lrhyl's
+    // +63 lines moved it to 13393 WITHOUT renumbering, and the exposed site
+    // failed — correctly, because the allowlist justification had been masking
+    // a real ordering bug: the dispatcher answered unknown messages BEFORE
+    // authorizeToolReport ran (cac6c). The ordering is now fixed and pinned by
+    // the cac6c regression test below; khwi9's merge sits at 13407.
+    "extension/background/service-worker.js:13407",
+    "central dispatcher: accepts page/content-script senders BY DESIGN; sender classified by authorizeToolReport (lib/pure.js:912) BEFORE any reply (cac6c, pinned by the regression test below) and route authority enforced per-route (Layers 1-3)",
   ],
   [
     "extension/content/content-script.js:399",
@@ -1238,4 +1243,38 @@ Deno.test("census: docs/SW-DISPATCH-AUTHORITY-CENSUS.md documents non-dispatcher
   assert(census.includes("extension/lib/script-host.js"), "census must list script-host.js");
   assert(census.includes("extension/offscreen/offscreen.js"), "census must list offscreen.js");
   assert(census.includes("extension/lib/provider-gate.js"), "census must list provider-gate.js");
+});
+
+// cac6c REGRESSION: the central dispatcher answered the unknown-message case
+// BEFORE authorizeToolReport ran — a reply path ahead of the trust predicate
+// (what the line-coupled allowlist entry had been masking since hvd4s: lrhyl's
+// +63 lines moved the site off its key and exposed it). The guard inventory
+// cannot see ordering, so this probe pins it directly: NO reply may be emitted
+// before the classification call, the unknown-message reply must not echo the
+// caller's type, and an unauthorized page sender must get SILENCE — not a
+// differentiated error that confirms the channel exists (coord's requirement).
+Deno.test("cac6c regression: the central dispatcher classifies the sender before ANY reply", async () => {
+  const src = await Deno.readTextFile(new URL("../extension/background/service-worker.js", import.meta.url));
+  // Marker-based, never line-based: the routeLog 'route' debug call appears
+  // exactly once and opens the central dispatcher's listener body.
+  const anchor = src.indexOf('routeLog.debug("route"');
+  assert(anchor > 0, "the central dispatcher's routeLog anchor must exist");
+  const bodyStart = src.indexOf("{", src.lastIndexOf("addListener(", anchor));
+  assert(bodyStart > 0, "the dispatcher listener body must open before the routeLog anchor");
+  let depth = 0;
+  let bodyEnd = -1;
+  for (let i = bodyStart; i < src.length; i++) {
+    if (src[i] === "{") depth++;
+    else if (src[i] === "}") { depth--; if (depth === 0) { bodyEnd = i; break; } }
+  }
+  assert(bodyEnd > bodyStart, "the dispatcher listener body must close");
+  const body = src.slice(bodyStart, bodyEnd);
+  const authIdx = body.indexOf("authorizeToolReport(");
+  const replyIdx = body.indexOf("sendResponse(");
+  assert(authIdx > 0, "the dispatcher must classify via authorizeToolReport");
+  assert(replyIdx > 0, "the dispatcher must have a reply path");
+  assert(authIdx < replyIdx, "NO reply may be emitted before the sender classification runs (cac6c: the unknown-message reply preceded authorizeToolReport)");
+  assert(!body.includes("unknown message: ${"), "the unknown-message reply must not echo the caller-controlled type");
+  assert(body.includes('error: "unknown message"'), "the unknown-message reply is the generic shape");
+  assert(body.includes("if (auth.kind === \"content-script\" && auth.error) return false;"), "an unauthorized page sender gets silence: the channel closes with no reply (never a differentiated error confirming the channel exists)");
 });
