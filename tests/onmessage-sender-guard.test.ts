@@ -107,7 +107,11 @@ interface ListenerSite {
 // pinned separately by the cac6c regression test below — the two together are
 // what the old line-coupled allowlist entry claimed but never enforced.
 const VETTED_PREDICATE_SOURCES: Record<string, Set<string>> = {
-  "extension/lib/pure.js": new Set(["isTrustedServiceWorkerSender", "isOwnExtensionSender"]),
+  "extension/lib/pure.js": new Set(["isTrustedServiceWorkerSender"]),
+  // chrome-agent-platform-ux4ud: the predicates are DEFINED in the trust seam now and the
+  // barrel re-exports them, so a file may import either. Credit is still binding-level: the
+  // name must be imported from a module that defines it, never merely referenced.
+  "extension/lib/pure-trust.js": new Set(["isTrustedServiceWorkerSender", "isOwnExtensionSender"]),
 };
 
 // True iff a binding pattern (const/let/var id, param, catch param,
@@ -428,6 +432,8 @@ const ALLOWLISTED_SITES = new Map<string, string>([
   // justification merely ASSERTED is ENFORCED by the cac6c regression tests
   // below (source-order pin + runtime first-reply pin). Nothing in this map
   // keys to service-worker.js any more, so no line shift there can rot it.
+  // (ux4ud rebases on top of cac6c: the former 13366 renumber is moot — the
+  // entry cac6c removed is gone; the predicate is imported from pure-trust.js.)
   [
     "extension/content/content-script.js:399",
     "content script receiving SW pushes: isTrustedServiceWorkerSenderPort — faithful port of pure.js isTrustedServiceWorkerSender (KEEP IN SYNC), id + tab/documentId absence + url pins the compiled SW bundle; pinned by the behavioral content-script test below",
@@ -437,7 +443,7 @@ const ALLOWLISTED_SITES = new Map<string, string>([
     "same SW-push guard shape as content-script.js:376: inline id-match + tab-absence; relay only, no execution authority",
   ],
   [
-    "extension/ntp/ntp.js:6409",
+    "extension/ntp/ntp.js:6410",
     "delegates sender validation to handleScriptRunMessage (lib/script-host.js:184), which enforces isTrustedServiceWorkerSender before any script run",
   ],
   [
