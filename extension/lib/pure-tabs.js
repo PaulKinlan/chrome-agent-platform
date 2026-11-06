@@ -255,5 +255,3 @@ export function createTabChangeNotifier({ notify, chromeTabs, debounceMs = 300 }
     isBaselinePending: () => baselinePending,
   };
 }
-
-// probe
