@@ -77,7 +77,7 @@ Deno.test("honest errors: the failure-mode fixture declares all nine tools", () 
   assert(FIXTURE.includes("user:hunter2@example.com/x?y=1#frag"), "the P1 userinfo fixture embeds the URL credential the redaction must catch");
 });
 
-Deno.test("honest errors: pure.js carries the reverse keep-in-sync pointer", async () => {
-  const PURE = await Deno.readTextFile(new URL("../extension/lib/pure.js", import.meta.url));
+Deno.test("honest errors: pure-webmcp.js carries the reverse keep-in-sync pointer", async () => {
+  const PURE = await Deno.readTextFile(new URL("../extension/lib/pure-webmcp.js", import.meta.url));
   assert(PURE.includes("redactBridgeText"), "redactSecretText names its content-script port so the two stay in sync");
 });
