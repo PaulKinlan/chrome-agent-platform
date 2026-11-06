@@ -1053,7 +1053,9 @@ export function generateAgentName(seed) {
 
 /**
  * Generate an avatar for an agent using the Gemini image model (nano banana).
- * `apiKey` is the user's configured Gemini key (never committed). On success
+ * `apiKey` is the user's configured Gemini key (never committed; and per jjedl
+ * never in the URL — it travels in the x-goog-api-key request header).
+ * On success
  * returns a data:image/png URL; on any failure returns null (the caller falls
  * back to a deterministic initial/icon). This is async + network-bound, so it
  * runs only on an explicit request (named-agent.avatar), not on every list.
@@ -1065,11 +1067,16 @@ export async function generateAgentAvatar({ name, role, apiKey }) {
     (role ? ` whose role is "${role}"` : "") +
     `. Minimal geometric mascot, friendly but not childish, petrol-teal (#0e6e63) on a warm paper (#f7f6f3) circular badge. No text, no letters, no gradients. Simple + bold, reads at 32px.`;
   try {
+    // chrome-agent-platform-jjedl: the key travels in the x-goog-api-key
+    // HEADER, never in the URL query. A query-string credential leaks into
+    // URL logs, proxy history and every response-URL echo (the lrhyl class);
+    // the Gemini REST API accepts the same key via this header, so the URL
+    // carries no secret at all.
     const url =
-      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_IMAGE_MODEL}:generateContent?key=${encodeURIComponent(apiKey)}`;
+      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_IMAGE_MODEL}:generateContent`;
     const res = await fetch(url, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
       body: JSON.stringify({
         contents: [{ parts: [{ text: prompt }] }],
         generationConfig: { responseModalities: ["IMAGE"] },
