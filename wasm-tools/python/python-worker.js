@@ -317,8 +317,8 @@ class NetworkError(Exception):
 class Response:
     """One HTTP response. Bodies are text; use .json() to parse.
 
-    `truncated` is True when the body exceeded the broker's byte cap (10 MB)
-    and was cut at the stream: `text` and `bytes` describe only the RETAINED
+    'truncated' is True when the body exceeded the broker's byte cap (10 MB)
+    and was cut at the stream: 'text' and 'bytes' describe only the RETAINED
     portion. A truncated body is never an error - check the flag before
     treating a partial document as a complete one (j2mff).
     """
