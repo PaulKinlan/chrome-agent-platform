@@ -633,12 +633,18 @@ Deno.test("lrhyl r3: the reviewer's origin repro - a caller-supplied query-beari
 
 Deno.test("lrhyl SW source pin: the python.fetch echo strips, the failure returns are CODES, and the free-text paths are gone", async () => {
   const sw = await Deno.readTextFile(new URL("../extension/background/service-worker.js", import.meta.url));
+  // guh95 supersedes the echo target: the stripped echo used to be built from
+  // res.url || u.href, but BOTH are post-$VAULT-substitution — a secret
+  // substituted into the PATH survives origin+path normalization. The echo now
+  // comes from the PRE-SUBSTITUTION template url, still through the ONE
+  // normaliser, still exactly once.
   assertEquals(
-    sw.split("url: urlWithoutQuery(res.url || u.href)").length - 1, 1,
-    "the python.fetch broker's response echo must go through urlWithoutQuery exactly once",
+    sw.split("url: urlWithoutQuery(String(url ?? \"\")),").length - 1, 1,
+    "the python.fetch broker's response echo must go through urlWithoutQuery exactly once, from the template url",
   );
-  const withoutWrapped = sw.split("url: urlWithoutQuery(res.url || u.href)").join("");
+  const withoutWrapped = sw.split("url: urlWithoutQuery(String(url ?? \"\")),").join("");
   assert(!withoutWrapped.includes("url: res.url || u.href"), "a bare, unstripped echo must not survive anywhere in the SW");
+  assert(!sw.includes("urlWithoutQuery(res.url || u.href)"), "the post-substitution echo is deleted (guh95): res.url/u.href carry substituted vault secrets");
   assert(sw.includes("urlWithoutQuery,\n  PYTHON_FETCH_ERROR_HINTS,\n} from \"../lib/python-network.js\""), "the SW imports the code-hint map from the module that owns the invariant");
   assert(!sw.includes("scrubUrlQueries"), "the deleted scrubber has no surviving reference in the SW");
   assert(sw.includes("return { ok: false, error: code, origin: verdict.origin, hint: PYTHON_FETCH_ERROR_HINTS[code] ?? \"\" };"), "the exception path returns a fixed code + sanitised origin + STATIC hint, never an interpolated message");
@@ -797,4 +803,45 @@ Deno.test("khwi9 SW source pin: python.fetch reads the body through the bounded 
   assert(sw.includes("...(truncated ? { truncated: true } : {})"), "the ledger entry surfaces truncation honestly (only when true)");
   assert(sw.includes("truncated,\n        // Round 7: the COUNT"), "the Python-facing success return carries the truncated boolean next to the count");
   assert(!sw.includes('const text = m === "HEAD" ? "" : await res.text();'), "the unbounded read is deleted, not commented out");
+});
+
+// --- guh95: the echo is built from the PRE-SUBSTITUTION template, never the fetched URL ---
+//
+// urlWithoutQuery preserves origin+PATH by design (contract), so ANY vault
+// secret that reaches the path of a fetched URL rides through it. The filed
+// repro substituted the template by hand; through the real flow the URL parser
+// percent-encodes braces in the PATH before $VAULT{KEY} substitution runs
+// (substitution fires only in the query, which the lrhyl strip removed), so
+// the leak is not live today — but res.url/u.href are the wrong echo source
+// REGARDLESS: their safety depends on that encoding coincidence, and any
+// future substitution semantics (e.g. raw-template substitution with
+// revalidation) would reopen the leak through them. The model wrote the
+// TEMPLATE; it must never learn the vault value. Fix: echo
+// urlWithoutQuery(template) — which is also what the ledger's begin()
+// records — closing the last post-substitution echo under every semantics.
+// The silent functional gap this uncovered (a $VAULT{KEY} in the path is
+// never substituted, and no refusal says so) is reported separately on the
+// bead — making substitution fire there is a design decision (substituting
+// before the parse can move the origin, so it needs revalidation), not a
+// one-line change.
+
+Deno.test("guh95 repro pin: a PATH-substituted vault secret survives urlWithoutQuery - which is why the echo must use the template", () => {
+  const S = "GUH95_VAULT_SEKRET_4417";
+  const template = "https://api.example.com/v1/$VAULT{GEMINI}/generate";
+  const postSub = template.split("$VAULT{GEMINI}").join(S);
+  // The defect's mechanism, pinned so the fix's premise cannot silently change:
+  // origin+path normalization KEEPS the path, secret included.
+  assert(urlWithoutQuery(postSub).includes(S), "urlWithoutQuery preserves PATH by contract - a post-substitution echo leaks");
+  // The template echo carries no secret - only the model's own placeholder
+  // text (URL parsing percent-encodes the braces in the path; deterministic,
+  // secret-free, and still recognisable to the model that wrote it).
+  const echoed = urlWithoutQuery(template);
+  assert(!echoed.includes(S));
+  assertEquals(echoed, "https://api.example.com/v1/$VAULT%7BGEMINI%7D/generate");
+});
+
+Deno.test("guh95 SW source pin: python.fetch echoes the PRE-SUBSTITUTION template url; the post-substitution echo is gone", async () => {
+  const sw = await Deno.readTextFile(new URL("../extension/background/service-worker.js", import.meta.url));
+  assert(sw.includes("url: urlWithoutQuery(String(url ?? \"\")),"), "the model-readable echo is the template url the model itself wrote");
+  assert(!sw.includes("urlWithoutQuery(res.url || u.href)"), "the post-substitution echo (res.url/u.href - both carry substituted vault secrets) is deleted, not commented out");
 });

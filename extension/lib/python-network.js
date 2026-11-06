@@ -100,7 +100,11 @@ export function normalizeGrantOrigin(input) {
  * is for echoes, never for dispatch.
  * CAVEAT (lrhyl r6.1 review): failing closed on opaque schemes is right for
  * the NETWORK LEDGER, but do not reuse this helper where opaque schemes are
- * legitimate (data:, blob:, chrome-extension: URLs) — it would blank them. */
+ * legitimate (data:, blob:, chrome-extension: URLs) — it would blank them.
+ * CAVEAT (guh95): origin+path KEEPS the path. Where secrets can be substituted
+ * INTO the path ($VAULT{KEY} substitution scans the whole URL string), this
+ * helper does NOT make a post-substitution URL safe to echo — echo the
+ * PRE-SUBSTITUTION template instead, as python.fetch's return does. */
 export function urlWithoutQuery(raw) {
   try {
     const u = new URL(String(raw ?? ""));

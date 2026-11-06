@@ -135,6 +135,14 @@ inventory and the sender/inventory guard described in INV-15.
   `url` is normalized to origin+path or fails closed to "" — and a non-http(s) scheme
   fails closed too, because an opaque-scheme string parses with origin "null" while its
   path keeps the credential (`extension/lib/python-network.js#urlWithoutQuery`);
+  and the broker's success echo is built from the PRE-SUBSTITUTION template URL, never
+  from `res.url`/`u.href`: origin+path normalization KEEPS the path, so a vault secret
+  that ever reaches the path of a fetched URL would survive it by design
+  (`chrome-agent-platform-guh95`; today the URL parser percent-encodes braces in paths
+  before `$VAULT{KEY}` substitution runs, so substitution fires only in the query the
+  strip already removed — the template echo does not depend on that coincidence and is
+  safe under any future substitution semantics) — the model wrote the template and must
+  never learn the vault value;
   refused header names never reach a record at all — records carry the COUNT
   (refusedHeaderCount), and the caller-controlled $VAULT keyId echo is the boolean
   vaultKeyPresented (round 7: a code-like string carrying arbitrary data is free text
