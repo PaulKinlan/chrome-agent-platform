@@ -230,9 +230,13 @@ function exactDenseArrayValues(value, maxLength) {
 // boundary fact the residuals intro relies on), so a Proxy seed requires
 // same-realm code: either this codebase, or an attacker who already has code
 // execution where no validator is a boundary.
-// A getter mutating the input mid-walk is re-checked at bounded cost: after the
-// walk the prototype and the `length` descriptor must be unchanged, and every
-// byte in the result passed its own range check at its own single Get.
+// A getter mutating the input mid-walk is re-checked at bounded cost ONLY for
+// the shapes the re-check observes: a moved prototype, a changed `length`
+// descriptor, or a symbol still present after the walk is rejected, while a
+// getter-added enumerable key (residual 3) or a symbol added and removed
+// inside the walk (residual 4) is accepted and inert; every byte in the
+// result passed its own range check at its own single Get whatever else
+// happened mid-walk.
 function exactDenseByteArray(value, maxLength) {
   if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) seedFail();
   const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
@@ -286,7 +290,11 @@ function classForPath(path) {
 // Validate a trusted workspace seed. The schema is EXACTLY
 // `workspaceSeed: { files: [{ path, bytes }] }`. Every layer must be a plain
 // ordinary object/array with only own properties: no sparse indexes and no
-// custom/null prototypes. A Proxy-wrapped value cannot be distinguished from
+// custom/null prototypes — ENFORCED for ordinary objects and arrays; a
+// Proxy-wrapped layer is neither distinguishable nor refuseable (next
+// sentence and the PROXY CARVE-OUT at exactDenseByteArray), and for such an
+// input the enforced guarantee reduces to the purity of the frozen output.
+// A Proxy-wrapped value cannot be distinguished from
 // an ordinary one — that is JavaScript's design, and b4pei round 3 proved the
 // consequence: a trap is an attacker-scheduled callback that can answer every
 // check with exactly what the check wants to see AND run side effects between
