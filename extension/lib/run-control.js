@@ -28,7 +28,8 @@
 // The module holds NO chrome.* / OPFS authority — the SW wires its kv and the
 // run loop wires its seam. Everything is deterministic + bounded.
 
-import { newId, redactSecretText } from "./pure.js";
+import { redactSecretText } from "./pure-redact.js";
+import { newId } from "./pure-text.js";
 
 const QUEUE_KEY = "cap:threadQueues";
 const MAX_QUEUE_PER_THREAD = 16; // visible pending chips stay bounded

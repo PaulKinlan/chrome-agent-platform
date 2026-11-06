@@ -21,7 +21,8 @@
 // and location intact.
 
 import { PYTHON_RUNTIME_DIR, PYTHON_RUNTIME_PIN, PYTHON_EXEC_TIMEOUT_MS } from "./python-runtime.js";
-import { sha256HexBytes, isTrustedServiceWorkerSender } from "./pure.js";
+import { sha256HexBytes } from "./pure-hash.js";
+import { isTrustedServiceWorkerSender } from "./pure-trust.js";
 
 const RUN_TIMEOUT_MS = PYTHON_EXEC_TIMEOUT_MS;
 

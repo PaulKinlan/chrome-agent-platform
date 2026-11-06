@@ -211,7 +211,8 @@ async function currentVersion(dir, key) {
 }
 
 import { kvGet } from "./kv.js";
-import { fnv1a, newId } from "./pure.js";
+import { fnv1a } from "./pure-hash.js";
+import { newId } from "./pure-text.js";
 
 const ENROLL_KEY = "cap:enrollment";
 

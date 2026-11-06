@@ -3,7 +3,7 @@ import { emscriptenJobOwner } from "./emscripten-custody.js";
 
 import { runAuditedHostBinaryJob } from "./emscripten-host-binary-runner.js";
 import { EMSCRIPTEN_HOST_STAGE_TYPE } from "./emscripten-stage-protocol.js";
-import { sha256HexBytes } from "./pure.js";
+import { sha256HexBytes } from "./pure-hash.js";
 import { validateSealedWasmStream, validateWasmStreamRef } from "./wasm-stream-files.js";
 
 const REQUEST_KEYS = ["type", "identity", "inputRef", "packageId", "version", "graphDigest",

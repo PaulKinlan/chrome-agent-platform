@@ -11,7 +11,7 @@
 // 3. Fail-Closed on Mismatch: a corrupted or substituted module fails closed
 //    with error.code = "digest_mismatch"; createBlobUrl is NEVER invoked.
 
-import { createSha256 } from "./pure.js";
+import { createSha256 } from "./pure-hash.js";
 import { verifyAndReadOwnerBlobBytes } from "./user-wasm-store.js";
 
 export const JS_MODULE_NAME_RE = /^[a-z0-9_@/-]+$/i;

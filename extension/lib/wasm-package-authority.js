@@ -6,7 +6,7 @@
 // permission, network, filesystem, or execution surface.
 
 import { masterMemory } from "./memory.js";
-import { sha256Hex, sha256HexBytes } from "./pure.js";
+import { sha256Hex, sha256HexBytes } from "./pure-hash.js";
 
 // ── THE SCHEMA-2 SURFACE IS INJECTED, NEVER IMPORTED (ycez / ltkj.2) ─────────────────────────────
 // The Emscripten schema-2 validator and the typed-graph auditor must run in the OPTIONS document,

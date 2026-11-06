@@ -27,7 +27,7 @@
 // service worker.
 
 import { z } from "zod";
-import { compileSchemaToZod } from "./pure.js";
+import { compileSchemaToZod } from "./pure-schema.js";
 import { tagUntrusted } from "./untrusted-fence.js";
 
 // The two error shapes mcp-client-core's `call()` returns as a plain string (a

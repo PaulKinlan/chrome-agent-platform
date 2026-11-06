@@ -28,7 +28,7 @@ import {
 } from "./emscripten-module-audit.js";
 import { createBundledInventory } from "./bundled-inventory.js";
 import { masterMemory } from "./memory.js";
-import { isTrustedServiceWorkerSender } from "./pure.js";
+import { isTrustedServiceWorkerSender } from "./pure-trust.js";
 
 // Register the schema-2 surface into WasmPackageAuthority.
 registerSchema2Surface({

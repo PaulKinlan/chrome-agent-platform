@@ -1,7 +1,7 @@
 // Closed schema-2 records. Inventory trust and execution eligibility are separate
 // from structural graph validity; none of these functions loads package code.
 import { exactKeys, assertRelativePath, canonicalJson, WasmPackageAuthorityError, parseCanonicalJson } from "./wasm-package-authority.js";
-import { sha256Hex } from "./pure.js";
+import { sha256Hex } from "./pure-hash.js";
 
 const fail = (code, path = "schema2") => { throw new WasmPackageAuthorityError(code, path); };
 const keys = (o, names) => exactKeys(o, names.split(" "));

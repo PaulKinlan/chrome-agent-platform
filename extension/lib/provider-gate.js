@@ -19,7 +19,8 @@
 //    per-event log) until a successful provider call resets it.
 
 import { normalizeHostPattern, requestPermissionBundleFromGesture } from "./permission-orchestration.js";
-import { safeProviderError, isTrustedServiceWorkerSender } from "./pure.js";
+import { safeProviderError } from "./pure-redact.js";
+import { isTrustedServiceWorkerSender } from "./pure-trust.js";
 import { effectiveBaseURL, PROVIDER_CHOICES } from "./provider-catalog.js";
 import { defaultModelFor } from "./model-catalog.js";
 

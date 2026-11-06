@@ -2,7 +2,7 @@
 // Web Components (customElements.define, MV3-CSP-safe: no eval / new Function,
 // static templates + event listeners only).
 
-export { escapeHtml } from "../lib/pure.js";
+export { escapeHtml } from "../lib/pure-text.js";
 export * from "./components-core.js";
 export * from "./components-conversation.js";
 export * from "./components-hub.js";

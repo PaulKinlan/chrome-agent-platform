@@ -12,7 +12,7 @@ import {
   TABLE_VERSION,
   tableUtf8Bytes,
 } from "./table-core.js";
-import { sha256Hex } from "./pure.js";
+import { sha256Hex } from "./pure-hash.js";
 
 export const TABLE_EXTRACTOR_LIMITS = Object.freeze({
   maxRows: 2000,

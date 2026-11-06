@@ -11,7 +11,7 @@
 // Invariants: port map `agentId -> { worker, port }`; host holds port per live agent;
 // the SW is the only caller (validated routes stay in the SW).
 
-import { isTrustedServiceWorkerSender } from "./pure.js";
+import { isTrustedServiceWorkerSender } from "./pure-trust.js";
 
 const WORKER_URL = "dist/workers/agent-worker.js";
 

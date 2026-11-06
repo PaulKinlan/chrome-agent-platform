@@ -3,7 +3,7 @@
 // slice. The NTP per-agent schedule row renders through THIS function and the
 // test pins ITS output — a preview path must never re-implement redaction
 // (an unredacted or unbounded copy would leak secrets into the DOM).
-import { redactSecretText } from "./pure.js";
+import { redactSecretText } from "./pure-redact.js";
 
 export const SCHEDULE_PREVIEW_CHARS = 80;
 

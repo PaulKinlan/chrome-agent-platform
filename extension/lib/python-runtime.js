@@ -27,7 +27,7 @@
 // shape unchanged.
 
 import { EXECUTOR_BOUNDS } from "./wasm-executor-bounds.js";
-import { newId } from "./pure.js";
+import { newId } from "./pure-text.js";
 import { validateWheelArchiveBounds } from "./python-wheel-validator.js";
 
 export const PYTHON_EXEC_TIMEOUT_MS = EXECUTOR_BOUNDS.maxCallMs; // 30s: a hung interpreter must die

@@ -5,7 +5,7 @@
 // document cannot be read completely. Model-authored python.execute runs NEVER
 // receive these modules (isolation guard).
 
-import { sha256Hex, createSha256 } from "./pure.js";
+import { sha256Hex, createSha256 } from "./pure-hash.js";
 import { PYTHON_EXEC_BOUNDS, withTimeout } from "./python-execution.js";
 import { validatePurePythonWheel } from "./python-wheel-validator.js";
 import { TABLE_LIMITS, TABLE_VERSION, TABLE_MEDIA_TYPE, canonicalTableJson } from "./table-core.js";

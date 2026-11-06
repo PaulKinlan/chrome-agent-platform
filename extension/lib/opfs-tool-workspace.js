@@ -34,7 +34,7 @@
 //   - `.job`/receipts/`.gc` carry metadata only — never args/secrets.
 
 import { createAssetKeyed } from "./artifacts.js";
-import { sha256HexBytes } from "./pure.js";
+import { sha256HexBytes } from "./pure-hash.js";
 
 import { capLog } from "./cap-log.js";
 
