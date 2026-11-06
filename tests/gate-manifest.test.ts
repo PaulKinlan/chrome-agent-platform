@@ -6,9 +6,11 @@
 // ledger says `executed: N` while naming no suite, or whose ledger is absent entirely — the
 // "unreadable green" that made 146 cached PASS records undecidable and blocks the strict consumer
 // (coord, 2026-10-14: producer-first sequencing).
-import { assert, assertEquals, assertThrows } from "jsr:@std/assert@1";
+import { assert, assertEquals, assertStringIncludes, assertThrows } from "jsr:@std/assert@1";
 import {
   BUILD_GATE_DEFERRAL_SUFFIX,
+  FLEET_MANIFEST_GRAPHS,
+  FLEET_MANIFEST_PREFIX,
   GATE_MANIFEST_PREFIX,
   GATE_UNKNOWN_PREFIX,
   GATE_UNMAPPED_PREFIX,
@@ -16,6 +18,8 @@ import {
   deferredTierEntries,
   emitGateLedger,
   explainChangedFileMapping,
+  formatFleetCoverageManifest,
+  fleetReceiptForExit,
   formatGateManifest,
   formatGateUnmapped,
   formatGateUnknown,
@@ -29,6 +33,7 @@ import {
   HEAVY_GATE_FILES,
   HEAVY_GATE_REASONS,
 } from "../scripts/test-partition.mjs";
+import { exitGate } from "../scripts/select-tests.mjs";
 
 // The extractor's own recognizer: `re.match(r"^fast-gate:\s*manifest:\s*(\{.*\})$", line)`.
 const EXTRACTOR_MANIFEST_RE = /^fast-gate:\s*manifest:\s*(\{.*\})$/;
@@ -543,4 +548,200 @@ Deno.test("fhh50 ledger: repo metadata is not-applicable, agent tooling is unmap
     !written.some((line) => line.includes(".beads/issues.jsonl")),
     "declared metadata is exempt, so it must not be reported as unmapped",
   );
+});
+
+// chrome-agent-platform-j677e: the fleet-shaped terminal receipt. The wire contract belongs to
+// ~/fleet/remote/producer-verdict.py, not to us — these pins replay ITS parser rules verbatim so a
+// green gate run can be certified on the strongest producer form (a structured final line with
+// graph= and numeric failed=) instead of only the weaker PASS-line regex.
+Deno.test("j677e: formatFleetCoverageManifest emits the exact fleet wire shape, fields in stable order", () => {
+  const line = formatFleetCoverageManifest({ graph: "PARTIAL", failed: 0, ran: 53, rc: 0, changed: 7 });
+  assertEquals(line, "GATE-COVERAGE-MANIFEST graph=PARTIAL failed=0 ran=53 rc=0 changed=7");
+  assert(!line.includes("\n"), "the receipt is exactly one line");
+});
+
+Deno.test("j677e: the receipt satisfies producer-verdict.py's parser rules verbatim", () => {
+  // Replay of ~/fleet/remote/producer-verdict.py: fields = last_line.split(); fields[0] must be
+  // the prefix; every other field is key=value with key fullmatching [a-z][a-z0-9_-]*, no
+  // duplicate keys, non-empty values; graph must be non-empty; failed must fullmatch [0-9]+ and
+  // be 0 for a PASS; the repo declaration '^GATE-COVERAGE-MANIFEST .+$' must fullmatch the line.
+  const declaration = /^GATE-COVERAGE-MANIFEST .+$/;
+  for (
+    const line of [
+      formatFleetCoverageManifest({ graph: "FULL", failed: 0, ran: 747, rc: 0, changed: 12 }),
+      formatFleetCoverageManifest({ graph: "PARTIAL", failed: 0, ran: 53, rc: 0 }),
+      formatFleetCoverageManifest({ graph: "INCOMPLETE", failed: 1, ran: 0, rc: 75 }),
+    ]
+  ) {
+    assert(declaration.test(line), `declared regex must fullmatch: ${line}`);
+    const fields = line.split(" ");
+    assertEquals(fields[0], FLEET_MANIFEST_PREFIX);
+    const values: Record<string, string> = {};
+    for (const field of fields.slice(1)) {
+      const i = field.indexOf("=");
+      assert(i > 0, `field must be key=value: ${field}`);
+      const key = field.slice(0, i);
+      const value = field.slice(i + 1);
+      assert(/^[a-z][a-z0-9_-]*$/.test(key), `key must fullmatch the fleet key rule: ${key}`);
+      assert(value.length > 0, `value must be non-empty: ${key}`);
+      assert(!(key in values), `duplicate key: ${key}`);
+      values[key] = value;
+    }
+    assert((values.graph ?? "").length > 0, "graph must be present and non-empty");
+    assert(/^[0-9]+$/.test(values.failed ?? ""), "failed must be numeric");
+  }
+});
+
+Deno.test("j677e: the formatter refuses lines the fleet parser would reject", () => {
+  for (
+    const bad of [
+      { graph: "SKIPPED", failed: 0, ran: 1, rc: 0 }, // not in the declared vocabulary
+      { graph: "PARTIAL", failed: -1, ran: 1, rc: 1 }, // negative outcome
+      { graph: "PARTIAL", failed: 0.5, ran: 1, rc: 0 }, // non-integer
+      { graph: "PARTIAL", failed: 0, ran: 1, rc: 0, changed: "two words" as unknown as number }, // space in value
+    ]
+  ) {
+    assertThrows(() => formatFleetCoverageManifest(bad as never), Error, "fleet manifest");
+  }
+  assertEquals(FLEET_MANIFEST_GRAPHS, ["FULL", "PARTIAL", "INCOMPLETE"]);
+});
+
+Deno.test("j677e: a non-certifying mode can never format as a PASS receipt, even with rc=0", () => {
+  // --always-on/--core pass failed:1 explicitly: producer-verdict.py refuses certification on any
+  // non-zero failed, so a green guards-only run cannot read as a certified fast gate.
+  const line = formatFleetCoverageManifest({ graph: "INCOMPLETE", failed: 1, ran: 19, rc: 0 });
+  assert(line.includes("failed=1"), `rc=0 must still carry failed=1: ${line}`);
+  assert(line.includes("rc=0"), "the true exit code still rides along for diagnosis");
+});
+
+Deno.test("j677e: select-tests.mjs has exactly one process.exit and it lives inside exitGate", async () => {
+  // The final-line property is only true if EVERY gate terminal routes through the receipt
+  // emitter. A bare process.exit re-added anywhere in the runner silently reopens the original
+  // defect (final line is not a manifest -> fleet records UNKNOWN for a green run).
+  const src = await Deno.readTextFile(new URL("../scripts/select-tests.mjs", import.meta.url));
+  const code = src.split("\n").filter((l) => !l.trimStart().startsWith("*") && !l.trimStart().startsWith("//")).join("\n");
+  const exits = code.match(/process\.exit\(/g) ?? [];
+  assertEquals(exits.length, 1, "exactly one process.exit may remain in the runner (inside exitGate)");
+  // r3: the exit is now routed through the injectable seam (`exitNow(rc)`), so the
+  // single textual process.exit lives in the default sink. The BEHAVIOURAL proof that
+  // the seam is what the terminals use is the captured-output test below; this regex
+  // only keeps the structural property (one exit point, inside exitGate, last statement).
+  const gate = code.match(/function exitGate\([\s\S]*?exitNow\(rc\);\n\}/);
+  assert(gate, "the single exit must be the last statement of exitGate");
+  const calls = code.match(/exitGate\(/g) ?? [];
+  assert(calls.length >= 7, `definition + all six gate terminals must call exitGate, found ${calls.length}`);
+});
+
+// The CONDITIONAL property, pinned at unit level after the executed emission falsifier of
+// 2026-11-06 proved it end to end (coord: "the DRILL proves the receipt works while the SUITE
+// still only checks formatting"). The falsifier: a planted throw in THIS file's first test,
+// through the real gate - exit 1, 285s - flipped the receipt's complete final line from the
+// same tip's green `failed=0 ran=807 rc=0 changed=4` to `failed=1 ran=807 rc=1 changed=4`,
+// with outcome:failed in the JSON ledger. These pins replay that exact pair through the
+// shared formatter so the property outlives the drill: a red gate can never emit a green
+// receipt, because `failed` defaults to the outcome encoding in ONE place.
+Deno.test("j677e: fleetReceiptForExit encodes the run outcome - a red exit can never format as green", () => {
+  // The falsifier pair, verbatim from the executed drill at tip 296257440:
+  assertEquals(
+    fleetReceiptForExit(0, { graph: "FULL", ran: 807, changed: 4 }),
+    "GATE-COVERAGE-MANIFEST graph=FULL failed=0 ran=807 rc=0 changed=4",
+  );
+  const red = fleetReceiptForExit(1, { graph: "FULL", ran: 807, changed: 4 });
+  assertEquals(red, "GATE-COVERAGE-MANIFEST graph=FULL failed=1 ran=807 rc=1 changed=4");
+  assert(!red.includes("failed=0"), "a red receipt carries no green failed field");
+  assert(!/ rc=0( |$)/.test(red), "a red receipt carries no green rc field");
+  // Any non-zero exit encodes failed>=1, whatever the code means (refusals, signals, npm trailers):
+  for (const rc of [1, 2, 75, 124, 137, 143]) {
+    const line = fleetReceiptForExit(rc, { graph: "INCOMPLETE", ran: 0 });
+    assert(line.includes(`failed=1 ran=0 rc=${rc}`), `rc=${rc} must encode failed=1: ${line}`);
+  }
+  // An explicit failed always survives (non-certifying modes force failed:1 even at rc=0):
+  assert(fleetReceiptForExit(0, { graph: "INCOMPLETE", ran: 19, failed: 1 }).includes("failed=1"));
+  // and an explicit count is never overwritten by the encoding:
+  assert(fleetReceiptForExit(1, { graph: "FULL", ran: 807, failed: 3 }).includes("failed=3"));
+});
+
+Deno.test("j677e source pin: exitGate derives the receipt via fleetReceiptForExit - the outcome encoding lives in ONE place", async () => {
+  const src = await Deno.readTextFile(new URL("../scripts/select-tests.mjs", import.meta.url));
+  const start = src.indexOf("function exitGate(");
+  assert(start >= 0, "exitGate exists");
+  const region = src.slice(start, src.indexOf("\n}", start) + 2);
+  assert(region.includes("fleetReceiptForExit(rc,"), "the receipt line comes from the shared conditional formatter");
+  assert(!region.includes("failed ?? ("), "the outcome-encoding default is NOT re-inlined at the exit (single source)");
+  assert(!region.includes("formatFleetCoverageManifest"), "exitGate no longer calls the bare formatter");
+  assert(region.includes("process.exit("), "the true exit code still lands even if formatting throws (default exit sink)");
+  assert(region.includes("receipt withheld"), "a formatting failure is announced, never silent");
+  const lib = await Deno.readTextFile(new URL("../scripts/lib/gate-manifest.mjs", import.meta.url));
+  const fnStart = lib.indexOf("export function fleetReceiptForExit");
+  assert(fnStart >= 0, "the shared formatter is exported from gate-manifest.mjs");
+  const fn = lib.slice(fnStart, lib.indexOf("\n}", fnStart) + 2);
+  assert(fn.includes("failed ?? (rc === 0 ? 0 : 1)"), "the outcome encoding is the formatter's default");
+});
+
+// j677e ROUND 3 — the EMISSION property, behavioural (coord, reviewing round 2:
+// "the suite now pins the ENCODING but still not the EMISSION ... nothing observes
+// that a receipt is written"). The round-2 no-emission mutant — replacing the
+// emission with `void fleetReceiptForExit(...)` — left the suite 24/0 because every
+// pin was either a direct formatter call or a source grep. These tests call the REAL
+// exitGate through its injected sinks and assert on the CAPTURED output, so
+// suppressing the emission reds the suite. The exact-line assertions reuse the
+// falsifier pair from the executed drill of 2026-11-06 verbatim.
+Deno.test("j677e r3: exitGate EMITS the receipt at its sink - captured line, red then green", () => {
+  const captured: string[] = [];
+  const exits: number[] = [];
+  const seams = {
+    log: (line: unknown) => captured.push(String(line)),
+    exit: (code: number) => exits.push(code),
+  };
+
+  exitGate(1, { graph: "FULL", ran: 807, changed: 4 }, seams);
+  assertEquals(captured.length, 1, "exactly one line is emitted on a red exit");
+  assertEquals(
+    captured[0],
+    "GATE-COVERAGE-MANIFEST graph=FULL failed=1 ran=807 rc=1 changed=4",
+    "a red rc can never emit a green-shaped receipt",
+  );
+  assertEquals(exits, [1], "the true rc reaches the exit sink");
+
+  captured.length = 0;
+  exits.length = 0;
+  exitGate(0, { graph: "FULL", ran: 807, changed: 4 }, seams);
+  assertEquals(captured.length, 1, "exactly one line is emitted on a green exit");
+  assertEquals(
+    captured[0],
+    "GATE-COVERAGE-MANIFEST graph=FULL failed=0 ran=807 rc=0 changed=4",
+    "and a green rc never inflates the failure count",
+  );
+  assertEquals(exits, [0]);
+});
+
+Deno.test("j677e r3: a bound-killed rc still emits failed=1 at the sink (124/137/143)", () => {
+  for (const rc of [124, 137, 143]) {
+    const captured: string[] = [];
+    exitGate(rc, { graph: "FULL", ran: 807, changed: 4 }, {
+      log: (line: unknown) => captured.push(String(line)),
+      exit: () => {},
+    });
+    assertEquals(captured.length, 1);
+    assertStringIncludes(captured[0], `failed=1 ran=807 rc=${rc}`, "a bound kill is an UNKNOWN, never green");
+  }
+});
+
+Deno.test("j677e r3: the withheld-receipt fallback is emitted at the sink too, and the exit still lands", () => {
+  const captured: string[] = [];
+  const exits: number[] = [];
+  const seams = {
+    log: (line: unknown) => {
+      const s = String(line);
+      // simulate the receipt formatter itself blowing up
+      if (s.startsWith("GATE-COVERAGE-MANIFEST ")) throw new Error("sink boom");
+      captured.push(s);
+    },
+    exit: (code: number) => exits.push(code),
+  };
+  exitGate(1, { graph: "FULL", ran: 807, changed: 4 }, seams);
+  assertEquals(captured.length, 1, "the withheld notice is the emitted line");
+  assertStringIncludes(captured[0], "receipt withheld");
+  assertStringIncludes(captured[0], "sink boom");
+  assertEquals(exits, [1], "the exit code is the contract even when the receipt dies");
 });

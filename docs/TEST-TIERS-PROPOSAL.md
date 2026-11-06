@@ -133,6 +133,21 @@ CHECK_FAST_TIMEOUT=600  # 10m bound (matches live conf and accommodates measured
 CHECK_FAST_PASS_RE='^select-tests: parallel phase GREEN'
 CHECK_FAST_COVERAGE_REQUIRED=1
 CHECK_FAST_CONTRACT_OWNER="/home/exedev/chrome-agent-platform/.git"
+# j677e option (a) - the strongest producer form: gate:fast now ends EVERY gate run with a
+# fleet-shaped terminal receipt as its FINAL log line:
+#   GATE-COVERAGE-MANIFEST graph=FULL|PARTIAL|INCOMPLETE failed=<n> ran=<n> rc=<n> [changed=<n>]
+# which ~/fleet/remote/producer-verdict.py can certify directly. Activate with:
+CHECK_FAST_MANIFEST_RE='^GATE-COVERAGE-MANIFEST .+$'
+# ACTIVATION IS A TWO-STEP, ORDER MATTERS: (1) the emitter (this repo) lands on main; (2) only
+# then add CHECK_FAST_MANIFEST_RE to the machine-global conf (~/.fleet/check.conf, hub-installer
+# written - a fleet-ops step, not a repo edit). Switching before the emitter lands would record
+# UNKNOWN for every green run (final line not yet a manifest). Keep CHECK_FAST_PASS_RE declared:
+# producer-verdict.py prefers the manifest branch when the final line is a receipt and falls back
+# to the PASS-line search otherwise, so the declaration is strictly stronger, never weaker. On
+# red runs npm appends its own trailer after node exits, displacing the receipt from the final
+# line - a red run certifies as UNKNOWN exactly as it does today; only PASS needs the receipt.
+# Non-certifying modes (--always-on, --core), refusals and build failures emit failed=1 (and
+# graph=INCOMPLETE) so they can never read as a certified fast gate even when their rc is 0.
 ```
 
 ---
