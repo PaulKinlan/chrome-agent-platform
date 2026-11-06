@@ -87,6 +87,10 @@ interface ListenerSite {
 // uncalled nested function still counts. Do not re-litigate; pinned by probe18.
 const VETTED_PREDICATE_SOURCES: Record<string, Set<string>> = {
   "extension/lib/pure.js": new Set(["isTrustedServiceWorkerSender"]),
+  // chrome-agent-platform-ux4ud: the predicate is DEFINED in the trust seam now and the
+  // barrel re-exports it, so a file may import either. Credit is still binding-level: the
+  // name must be imported from a module that defines it, never merely referenced.
+  "extension/lib/pure-trust.js": new Set(["isTrustedServiceWorkerSender"]),
 };
 
 // True iff a binding pattern (const/let/var id, param, catch param,
@@ -398,9 +402,9 @@ const ALLOWLISTED_SITES = new Map<string, string>([
   [
     // NOTE: this key is line-coupled by design (the guard inventory reports
     // sites by file:line) — edits ABOVE the central dispatcher in
-    // service-worker.js must renumber it. hvd4s moved it 13361 → 13365.
-    "extension/background/service-worker.js:13365",
-    "central dispatcher: accepts page/content-script senders BY DESIGN; sender classified by authorizeToolReport (lib/pure.js:912) and route authority enforced per-route (Layers 1-3)",
+    // service-worker.js must renumber it. hvd4s moved it 13361 → 13365; ux4ud's seam imports moved it 13365 → 13366.
+    "extension/background/service-worker.js:13366",
+    "central dispatcher: accepts page/content-script senders BY DESIGN; sender classified by authorizeToolReport (lib/pure-trust.js) and route authority enforced per-route (Layers 1-3)",
   ],
   [
     "extension/content/content-script.js:399",
@@ -411,7 +415,7 @@ const ALLOWLISTED_SITES = new Map<string, string>([
     "same SW-push guard shape as content-script.js:376: inline id-match + tab-absence; relay only, no execution authority",
   ],
   [
-    "extension/ntp/ntp.js:6409",
+    "extension/ntp/ntp.js:6410",
     "delegates sender validation to handleScriptRunMessage (lib/script-host.js:184), which enforces isTrustedServiceWorkerSender before any script run",
   ],
   [

@@ -182,7 +182,10 @@ Deno.test("activity explorer: summary + detail/copy route tool RESULTS through r
 Deno.test("activity explorer redacts historical values before render + copy", () => {
   const src = Deno.readTextFileSync(fileURLToPath(new URL("../extension/shared/components-hub.js", import.meta.url)));
   const clean = src.replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, "");
-  const specifiers = [...clean.matchAll(/import\s*\{([^}]+)\}\s*from\s*["']\.\.\/lib\/pure\.js["']/g)]
+  // chrome-agent-platform-ux4ud: redactSecrets lives in lib/pure-redact.js now; the
+  // barrel (lib/pure.js) still re-exports it, so BOTH specifiers are canonical and
+  // the pin stays "imported from the pure module family", not "imported from a path".
+  const specifiers = [...clean.matchAll(/import\s*\{([^}]+)\}\s*from\s*["']\.\.\/lib\/pure(?:-[a-z]+)?\.js["']/g)]
     .flatMap((m) => m[1].split(","))
     .map((s) => s.trim())
     .filter(Boolean);
@@ -190,7 +193,7 @@ Deno.test("activity explorer redacts historical values before render + copy", ()
     const parts = s.split(/\s+as\s+/).map((p) => p.trim());
     return parts[0] === "redactSecrets" && (parts.length === 1 || parts[1] === "redactSecrets");
   });
-  assert(importsRedactSecrets, "the canonical redactor is imported from lib/pure.js");
+  assert(importsRedactSecrets, "the canonical redactor is imported from lib/pure-redact.js (or the pure.js barrel)");
   assert(src.includes("redactSecrets(parsed.value)"), "_detailBody redacts parsed values before tree render + copy");
   assert(src.includes("redactSecrets(p.value)"), "the summary-line args preview is redacted too");
 });
