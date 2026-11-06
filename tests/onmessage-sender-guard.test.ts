@@ -396,7 +396,10 @@ function analyzeOnMessageListeners(code: string, filePath: string): ListenerSite
 // inventory accepts). Every entry must name what checks the sender instead.
 const ALLOWLISTED_SITES = new Map<string, string>([
   [
-    "extension/background/service-worker.js:13361",
+    // NOTE: this key is line-coupled by design (the guard inventory reports
+    // sites by file:line) — edits ABOVE the central dispatcher in
+    // service-worker.js must renumber it. hvd4s moved it 13361 → 13365.
+    "extension/background/service-worker.js:13365",
     "central dispatcher: accepts page/content-script senders BY DESIGN; sender classified by authorizeToolReport (lib/pure.js:912) and route authority enforced per-route (Layers 1-3)",
   ],
   [

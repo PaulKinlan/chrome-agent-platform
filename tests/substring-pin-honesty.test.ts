@@ -1539,6 +1539,15 @@ const ALLOWED = new Map<string, string>([
   // --- a redundant identity banner: the property is enforced by live siblings.
   [tp("enrollment-policy.test.ts::extension/directory/directory.js::read-only Agent Directory"),
     'the only occurrence is the file header. The read-only property is enforced by the absence assertions three lines below (!includes(\'send("tools.policy.set"\')), !includes(\'send("tools.approve"\')), so removing the behaviour still reddens the test.'],
+  // --- chrome-agent-platform-hvd4s: two import-provenance pins whose USE is
+  //     pinned by call-site assertions in the same test, and one prose pin
+  //     whose declared intent IS the doc wording the bead fixed.
+  [tp('fetch-body-bound.test.ts::extension/background/service-worker.js::import { readResponseTextBounded } from "../lib/fetch-body-bound.js";'),
+    'the sibling assertion in the same test parses the live call site ("const { text } = await readResponseTextBounded(res, MAX);") plus a no-residue check that the old unbounded shape is gone, so the binding cannot go dead unnoticed; this pin keeps the MODULE PROVENANCE named (which module supplies the bounded reader).'],
+  [tp('fetch-body-bound.test.ts::extension/lib/script-host.js::import { readResponseTextBounded } from "./fetch-body-bound.js";'),
+    'the sibling assertion in the same test pins the live call site ("const bounded = await readResponseTextBounded(res).catch(() => ({ text: \"\" }));") plus the no-residue check for the removed try/catch + slice shape; import kept as provenance.'],
+  [tp("fetch-body-bound.test.ts::extension/lib/script-host.js::the bound is on the READ itself"),
+    'PROSE-INTENDED: the bead\'s second finding was exactly this stale promise - the JSDoc said "size-bounded" while the code buffered the full body, so the deliverable IS the corrected doc wording and a comment-only occurrence is what the pin guards. The live behaviour is pinned by the call-site assertions above it in the same test.'],
 ]);
 
 function keyOf(p: Pin): string {

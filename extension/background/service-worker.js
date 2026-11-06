@@ -1294,6 +1294,7 @@ import { z } from "zod";
 import { setRunFence, clearRunFence, runAborted } from "../lib/run-fence.js";
 import { setRunContext, clearRunContext, currentRunContext } from "../lib/run-context.js";
 import { checkFetchPolicy, extractFetchHosts } from "../lib/fetch-policy.js";
+import { readResponseTextBounded } from "../lib/fetch-body-bound.js";
 import {
   PYTHON_NETWORK_GRANTS_KEY,
   addGrant as addPythonNetworkGrant,
@@ -7793,13 +7794,16 @@ const handlers = mergeRouteMaps(
         return { ok: false, error: `fetch to ${u.host} refused: the response redirected elsewhere; a script fetch may only reach its approved hosts directly` };
       }
       const MAX = 1_000_000;
-      // Response bodies are one-shot streams: cache the single read before
-      // bounding it (arrayBuffer() followed by text() throws in Chrome).
-      const text = await res.text();
+      // chrome-agent-platform-hvd4s: bound the READ itself — stream with a byte
+      // ceiling and cancel at the ceiling. The old shape buffered the WHOLE
+      // response in one unbounded text read before slicing to MAX, so a hostile
+      // multi-GB response was fully read into this privileged worker first;
+      // the helper never buffers more than the ceiling plus one chunk.
+      const { text } = await readResponseTextBounded(res, MAX);
       if (policy) policy.fetched = true;
       // Fetched bodies are untrusted web content: wrap this return in
       // `tagUntrusted(...)` (lib/untrusted-fence.js, INV-7).
-      return tagUntrusted({ ok: true, status: res.status, url: res.url, text: text.slice(0, MAX) });
+      return tagUntrusted({ ok: true, status: res.status, url: res.url, text });
     } catch (e) {
       return { ok: false, error: `fetch failed: ${e?.message ?? e}` };
     }

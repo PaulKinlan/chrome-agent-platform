@@ -510,7 +510,8 @@ export function managementToolset({ callRoute }) {
     // (no token burn). Use it for repeatable tasks: read a page, transform data,
     // return a value. The script runs SANDBOXED (an opaque iframe, no network of
     // its own) with a CONTROLLED api: `fetch(url, opts)` (the extension fetches
-    // on its behalf, http/https only, size-bounded) and `log(...)`. It is an ASYNC
+    // on its behalf, http/https only, the response READ is capped at 1 MB —
+    // bounded while streaming, never buffered whole) and `log(...)`. It is an ASYNC
     // function body — `return` the result. It has NO DOM, NO extension APIs, NO
     // other origins, and NO direct network. A script can be scheduled (run it
     // on a timer via schedule_task with scriptId) or run on demand (run_script).

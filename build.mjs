@@ -740,7 +740,7 @@ try {
       { name: "artifact", entry: "artifact/artifact.js", out: "artifact.bundle.js", path: ARTIFACT_BUNDLE, result: artifactResult, budget: 200_000 },
       { name: "directory", entry: "directory/directory.js", out: "directory.bundle.js", path: DIRECTORY_BUNDLE, result: directoryResult, budget: 65_000 },
       { name: "privacy", entry: "privacy/privacy.js", out: "privacy.bundle.js", path: PRIVACY_BUNDLE, result: privacyResult, budget: 65_000 },
-      { name: "offscreen", entry: "offscreen/offscreen.js", out: "offscreen.bundle.js", path: OFFSCREEN_BUNDLE, result: offscreenResult, budget: 258_000 }, /* bwxf: ratcheted with STORE_BUNDLE_BUDGETS (measured 255,306) */
+      { name: "offscreen", entry: "offscreen/offscreen.js", out: "offscreen.bundle.js", path: OFFSCREEN_BUNDLE, result: offscreenResult, budget: 259_000 }, /* ratcheted with STORE_BUNDLE_BUDGETS (bwxf measured 255,306; hvd4s measured 258,294 at its shrunk floor) */
       { name: "user-wasm-store-client", entry: "lib/user-wasm-store-client.js", out: "user-wasm-store-client.bundle.js", path: USER_WASM_STORE_CLIENT_BUNDLE, result: userWasmClientResult, budget: 10_000 },
       { name: "settings-view", entry: "options/settings-view.js", out: "settings-view.bundle.js", path: SETTINGS_VIEW_BUNDLE, result: settingsViewResult, budget: 120_000 },
     ];
