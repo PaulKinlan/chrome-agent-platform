@@ -113,29 +113,51 @@ export function scrubUrlQueries(text) {
   return String(text ?? "").replace(/((?:https?:)?\/\/[^\s"'`)\]]*)\?[^\s"'`)\]]*/gi, "$1");
 }
 
-/** lrhyl round 3 (review finding): per-field ENUMERATION kept losing — round 1
- * missed the post-spread `url`, round 2 missed `origin`. A ledger record's
- * fields are not a closed set: callers can add fields through the finalEntry /
- * entry spreads, so the choke-point invariant must not depend on which names
- * were remembered. This walks every own string field and scrubs any value that
- * PARSES as a URL carrying a query — shape-independent by construction. Values
- * that do not parse (free text, quasi-URLs) are left to the dedicated error
- * scrub (scrubUrlQueries); non-string fields pass through untouched. Returns
- * the same object when nothing needed scrubbing (the common, honest case). */
-export function scrubUrlFields(record) {
-  if (!record || typeof record !== "object") return record;
-  let out = null;
-  for (const [key, value] of Object.entries(record)) {
-    if (typeof value !== "string") continue;
+/** lrhyl round 4 (review finding, coord's structural spec): ONE marshal that
+ * EVERY record passes through before it can be observed. Round 3's walker was
+ * wired into the three construction points it knew about; the reviewer found a
+ * FOURTH writer that already existed (abortInFlight) and silent skips for
+ * nested objects, arrays, URL instances and uninspectable values. This is the
+ * shape-independent answer: deep-walk plain objects and arrays, handle URL
+ * instances via toString, strip any string that PARSES as a URL carrying a
+ * query, hash or userinfo (all credential locations) down to origin+path while
+ * clean URLs keep their exact shape (origins must not grow a slash), lexically
+ * scrub URL tokens inside free text, and TAG anything that cannot be inspected
+ * — a tag is honest and model-visible; a silent skip looks like success.
+ * Circular structures and depth > 8 are tagged, never walked to death.
+ * Idempotent: marshalling an already-marshalled record is a no-op, so take()
+ * re-marshals at the observation boundary as defense in depth (a hypothetical
+ * fifth writer cannot bypass the boundary even if it bypassed the writers). */
+export function marshalModelReadable(value, depth = 0, path = null) {
+  if (typeof value === "string") {
     try {
       const u = new URL(value);
-      if (!u.search) continue;
+      // Strip only when there IS something to strip — a clean URL keeps its
+      // exact shape (origins must not grow a trailing slash). Query, hash and
+      // userinfo are all credential locations.
+      if (u.search || u.hash || u.username || u.password) return urlWithoutQuery(value);
+      return value;
     } catch {
-      continue;
+      return scrubUrlQueries(value); // free text: strip query strings from URL tokens
     }
-    (out ??= { ...record })[key] = urlWithoutQuery(value);
   }
-  return out ?? record;
+  if (value instanceof URL) return marshalModelReadable(value.toString(), depth, path);
+  if (value === null || value === undefined) return value;
+  const t = typeof value;
+  if (t === "number" || t === "boolean") return value;
+  if (t !== "object") return `[lrhyl-uninspectable:${t}]`; // functions, symbols, bigint: tagged, never passed
+  if (depth > 8) return "[lrhyl-uninspectable:depth]";
+  const trail = path ?? [];
+  if (trail.includes(value)) return "[lrhyl-uninspectable:cycle]";
+  const deeper = [...trail, value];
+  if (Array.isArray(value)) return value.map((v) => marshalModelReadable(v, depth + 1, deeper));
+  const proto = Object.getPrototypeOf(value);
+  if (proto === Object.prototype || proto === null) {
+    const out = {};
+    for (const [k, v] of Object.entries(value)) out[k] = marshalModelReadable(v, depth + 1, deeper);
+    return out;
+  }
+  return `[lrhyl-uninspectable:${value.constructor?.name ?? "object"}]`; // class instances (Map, Date, ...): tagged wholesale
 }
 
 /** Read a persisted grant list into the canonical, de-duplicated shape.
@@ -308,7 +330,12 @@ export function createPythonNetworkLedger({ maxPerRun = MAX_RECORDS_PER_RUN, max
       count += 1;
       const ms = Math.max(0, now - inflight.startedAt);
       if (inflight.index >= 0 && inflight.index < row.records.length) {
-        row.records[inflight.index] = Object.freeze({
+        // lrhyl round 4 (review finding): abortInFlight was the FOURTH writer,
+        // pre-existing and unwired — it constructed its record directly, so a
+        // query-bearing origin reached both the origin field and the
+        // interpolated error text. It now goes through the same ONE marshal as
+        // every other writer (and inflight.origin is sanitised at the source).
+        row.records[inflight.index] = Object.freeze(marshalModelReadable({
           method: inflight.method,
           url: inflight.url,
           ...(inflight.origin ? { origin: inflight.origin } : {}),
@@ -317,7 +344,7 @@ export function createPythonNetworkLedger({ maxPerRun = MAX_RECORDS_PER_RUN, max
           outcome: "aborted",
           ms,
           error: `fetch to ${inflight.origin ?? inflight.url} aborted when the Python run settled after ${ms}ms`,
-        });
+        }));
       }
       try {
         inflight.controller?.abort?.("run_settled");
@@ -349,16 +376,21 @@ export function createPythonNetworkLedger({ maxPerRun = MAX_RECORDS_PER_RUN, max
       // network field — normalize at the choke point so NO writer (current or
       // future) can put a query string into a model-readable record.
       const u = urlWithoutQuery(url);
+      // lrhyl round 4: the in-flight closure stores the SANITISED origin, so
+      // every interpolation of it (the abort error text especially) is clean
+      // at the source — the marshal at each writer is the belt, this is the
+      // braces.
+      const o = origin == null ? null : marshalModelReadable(origin);
       const start = Number.isFinite(startedAt) ? Number(startedAt) : Date.now();
       let index = -1;
       if (row.records.length >= maxPerRun) {
         row.dropped += 1;
       } else {
         index = row.records.length;
-        row.records.push(Object.freeze(scrubUrlFields({
+        row.records.push(Object.freeze(marshalModelReadable({
           method: m,
           url: u,
-          ...(origin ? { origin } : {}),
+          ...(o ? { origin: o } : {}),
           ok: false,
           inFlight: true,
           ms: 0,
@@ -368,7 +400,7 @@ export function createPythonNetworkLedger({ maxPerRun = MAX_RECORDS_PER_RUN, max
         index,
         method: m,
         url: u,
-        origin: origin ?? null,
+        origin: o,
         startedAt: start,
         controller,
         settled: false,
@@ -387,13 +419,13 @@ export function createPythonNetworkLedger({ maxPerRun = MAX_RECORDS_PER_RUN, max
               ? Number(finalEntry.ms)
               : Math.max(0, now - inflight.startedAt);
             // lrhyl round 2 (review finding): sanitise where the record is
-            // CONSTRUCTED - AFTER the spread, not before. Round 3 (second
-            // review finding): enumerated fields kept losing (round 2 missed
-            // `origin`), so the construction point now walks EVERY own string
-            // field through scrubUrlFields - shape-independent, no name list
-            // to forget. The explicit url line stays (it also fails closed on
-            // strings that do not PARSE, which the walker leaves alone), and
-            // error text keeps its lexical free-text scrub.
+            // CONSTRUCTED - AFTER the spread, not before. Round 3: the walker.
+            // Round 4 (second review finding): the walker was wired only into
+            // the writers round 3 knew about, so the ONE marshal every record
+            // passes through replaces it - deep, URL-instance-aware, and it
+            // TAGS what it cannot inspect. The explicit url line stays: it is
+            // the fail-closed-to-empty policy for unparseable url values,
+            // which the marshal's free-text path deliberately does not do.
             const merged = {
               method: inflight.method,
               url: inflight.url,
@@ -402,8 +434,7 @@ export function createPythonNetworkLedger({ maxPerRun = MAX_RECORDS_PER_RUN, max
               ...finalEntry,
             };
             if (merged.url !== undefined) merged.url = urlWithoutQuery(merged.url);
-            if (typeof merged.error === "string") merged.error = scrubUrlQueries(merged.error);
-            row.records[inflight.index] = Object.freeze(scrubUrlFields(merged));
+            row.records[inflight.index] = Object.freeze(marshalModelReadable(merged));
           }
           return true;
         },
@@ -436,15 +467,12 @@ export function createPythonNetworkLedger({ maxPerRun = MAX_RECORDS_PER_RUN, max
         row.dropped += 1; // honest count, never a silent truncation
         return;
       }
-      // lrhyl: same choke-point normalization as begin() — record() writers
-      // pass raw URLs and the records are model-readable. Round 2: error text
-      // is scrubbed here too. Round 3: EVERY own string field that parses as a
-      // query-bearing URL is scrubbed (the reviewer's origin repro), so no
-      // caller-supplied or future field can smuggle a query in.
-      row.records.push(Object.freeze(scrubUrlFields({
+      // lrhyl: same choke point as every writer — round 4 routes this through
+      // the ONE marshal (deep-walk, URL instances, tags for the uninspectable)
+      // with the fail-closed url line kept on top.
+      row.records.push(Object.freeze(marshalModelReadable({
         ...entry,
         ...(entry?.url !== undefined ? { url: urlWithoutQuery(entry.url) } : {}),
-        ...(typeof entry?.error === "string" ? { error: scrubUrlQueries(entry.error) } : {}),
       })));
     },
 
@@ -459,7 +487,16 @@ export function createPythonNetworkLedger({ maxPerRun = MAX_RECORDS_PER_RUN, max
       const row = runs.get(id);
       runs.delete(id);
       if (!row) return { records: [], dropped: 0, hasSuccessfulFetch: false };
-      return { records: Object.freeze([...row.records]), dropped: row.dropped, hasSuccessfulFetch: row.hasSuccessfulFetch };
+      // lrhyl round 4: the OBSERVATION boundary — every record is re-marshalled
+      // at take() regardless of which writer produced it (the marshal is
+      // idempotent and records are bounded per run, so this costs nothing
+      // measurable). A hypothetical fifth writer that bypassed the write-time
+      // choke points still cannot hand the model an unnormalised record.
+      return {
+        records: Object.freeze(row.records.map((r) => Object.freeze(marshalModelReadable(r)))),
+        dropped: row.dropped,
+        hasSuccessfulFetch: row.hasSuccessfulFetch,
+      };
     },
 
     /** Live count, for tests and for a run still in flight. */

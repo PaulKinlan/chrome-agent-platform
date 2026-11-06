@@ -474,8 +474,14 @@ Deno.test("lrhyl SW source pin: the python.fetch response echo strips, no bare e
   assert(lib.includes("const u = urlWithoutQuery(url);"), "begin() normalizes at the choke point");
   assert(lib.includes("...(entry?.url !== undefined ? { url: urlWithoutQuery(entry.url) } : {}),"), "record() normalizes at the choke point");
   assert(lib.includes("if (merged.url !== undefined) merged.url = urlWithoutQuery(merged.url);"), "complete() sanitises AFTER the finalEntry spread (r2 override fix)");
-  assert(lib.includes("...(typeof entry?.error === \"string\" ? { error: scrubUrlQueries(entry.error) } : {}),"), "record() scrubs error text at the choke point (r2)");
-  assert(lib.includes("if (typeof merged.error === \"string\") merged.error = scrubUrlQueries(merged.error);"), "complete() scrubs error text at the choke point (r2)");
+  // r4: the error-text scrub and every other field now live inside the ONE
+  // marshal; these pins hold the wiring the round-3 enumeration lost.
+  assert(lib.includes("return scrubUrlQueries(value);"), "the marshal lexically scrubs free text (the r2 error-text property lives inside it)");
+  assertEquals(
+    lib.split("Object.freeze(marshalModelReadable(").length - 1, 5,
+    "all FOUR writers (begin, complete, record, abortInFlight) plus the take() boundary construct through the single marshal",
+  );
+  assert(lib.includes("row.records.map((r) => Object.freeze(marshalModelReadable(r)))"), "take() re-marshals at the observation boundary (a fifth writer cannot bypass it)");
 });
 
 // --- lrhyl round 3: the reviewer's origin repro and the shape-independent fix ---
@@ -528,4 +534,103 @@ Deno.test("lrhyl r3: the scrub is SHAPE-INDEPENDENT — a novel field arriving t
   const serialized = JSON.stringify(taken.records);
   assert(!serialized.includes(SECRET_PLACEHOLDER), "no novel field may carry the query value");
   assert(!serialized.includes("sig=") && !serialized.includes("retry="), "not even the query KEYS survive");
+});
+
+// --- lrhyl round 4: ONE marshal choke point, structural not enumerated ---------
+//
+// Round 3 wired the walker into the three construction points it knew about;
+// the reviewer found a FOURTH writer that already existed — abortInFlight —
+// constructing its record directly (raw origin field, raw origin/url
+// interpolated into the abort error text). And the walker silently skipped
+// what it did not understand: nested objects, arrays, URL instances and
+// uninspectable values passed through unscrubbed, and a silent skip looks
+// like success. Round 4 (coord): one marshal function that EVERY record
+// passes through before it can be observed — deep-walking plain objects and
+// arrays, handling URL instances via toString, and TAGGING values it cannot
+// inspect rather than skipping them — routed through begin/complete/record
+// AND abortInFlight, plus re-marshalled at take() (the observation boundary)
+// so a hypothetical fifth writer cannot bypass it either.
+
+Deno.test("lrhyl r4 RED-FIXED: the abort path sanitises origin AND the interpolated error text", () => {
+  const ledger = createPythonNetworkLedger();
+  // begin() with a query-bearing origin, then let take() abort it in flight
+  ledger.begin("run-lrhyl-r4a", { method: "GET", url: "https://h/p", origin: `https://h/p?token=${SECRET_PLACEHOLDER}`, startedAt: Date.now(), controller: { abort() {} } });
+  const taken = ledger.take("run-lrhyl-r4a");
+  assertEquals(taken.records.length, 1);
+  const rec = taken.records[0];
+  assertEquals(rec.aborted, true, "sanity: this is the abort-path record");
+  assertEquals(rec.origin, "https://h/p", "the abort record's origin field is scrubbed");
+  assertStringIncludes(rec.error, "fetch to https://h/p aborted", "the interpolated error text carries the scrubbed URL");
+  const serialized = JSON.stringify(taken.records);
+  assert(!serialized.includes(SECRET_PLACEHOLDER), "the reviewer's abort-path repro: no token in any field");
+  assert(!serialized.includes("token="), "not even the query key");
+});
+
+Deno.test("lrhyl r4 RED-FIXED: nested objects and arrays of URLs are scrubbed, not silently skipped", () => {
+  const ledger = createPythonNetworkLedger();
+  const inflight = ledger.begin("run-lrhyl-r4b", { method: "GET", url: "https://api.example.com/n", origin: "https://api.example.com", startedAt: Date.now(), controller: null });
+  inflight.complete({
+    ok: true,
+    status: 200,
+    meta: { finalUrl: `https://api.example.com/landed?sig=${SECRET_PLACEHOLDER}`, depth: { deeper: `https://x.example/d?k=${SECRET_PLACEHOLDER}` } },
+    chain: [`https://a.example/1?next=${SECRET_PLACEHOLDER}`, "https://b.example/2", 7],
+  });
+  const taken = ledger.take("run-lrhyl-r4b");
+  const rec = taken.records[0];
+  assertEquals(rec.meta.finalUrl, "https://api.example.com/landed", "a nested object's URL field is scrubbed");
+  assertEquals(rec.meta.depth.deeper, "https://x.example/d", "recursively");
+  assertEquals(rec.chain[0], "https://a.example/1", "an array element URL is scrubbed");
+  assertEquals(rec.chain[1], "https://b.example/2", "a clean URL element is untouched");
+  assertEquals(rec.chain[2], 7, "non-string elements pass through");
+  const serialized = JSON.stringify(taken.records);
+  assert(!serialized.includes(SECRET_PLACEHOLDER), "nothing nested carries the secret");
+  assert(!serialized.includes("sig=") && !serialized.includes("next=") && !serialized.includes("k="), "not even the query keys");
+});
+
+Deno.test("lrhyl r4 RED-FIXED: a URL instance is marshalled via toString to origin+path", () => {
+  const ledger = createPythonNetworkLedger();
+  ledger.record("run-lrhyl-r4c", { method: "GET", url: "https://api.example.com/u", ok: true, resolved: new URL(`https://api.example.com/final?key=${SECRET_PLACEHOLDER}`), ms: 3 });
+  const taken = ledger.take("run-lrhyl-r4c");
+  assertEquals(taken.records[0].resolved, "https://api.example.com/final", "the URL instance becomes its scrubbed string form");
+  assert(!JSON.stringify(taken.records).includes(SECRET_PLACEHOLDER));
+});
+
+Deno.test("lrhyl r4 RED-FIXED: uninspectable values are TAGGED, never silently passed through", () => {
+  const ledger = createPythonNetworkLedger();
+  const circular = { name: "cyc" };
+  circular.self = circular;
+  const inflight = ledger.begin("run-lrhyl-r4d", { method: "GET", url: "https://api.example.com/i", origin: "https://api.example.com", startedAt: Date.now(), controller: null });
+  inflight.complete({
+    ok: true,
+    status: 200,
+    fn: () => SECRET_PLACEHOLDER,
+    map: new Map([["k", `https://h/p?token=${SECRET_PLACEHOLDER}`]]),
+    circular,
+  });
+  const taken = ledger.take("run-lrhyl-r4d");
+  const rec = taken.records[0];
+  for (const field of ["fn", "map"]) {
+    assertEquals(typeof rec[field], "string", `${field} became an honest tag string`);
+    assertStringIncludes(rec[field], "[lrhyl-uninspectable:", `${field} is tagged, not passed through`);
+  }
+  // the circular structure is WALKED (its plain fields survive) and the
+  // REVISIT is tagged — no stack overflow, no raw circular dump
+  assertEquals(typeof rec.circular, "object", "a circular plain object is walked, not thrown away");
+  assertEquals(rec.circular.self, "[lrhyl-uninspectable:cycle]", "the revisit is tagged");
+  const serialized = JSON.stringify(taken.records);
+  assert(!serialized.includes(SECRET_PLACEHOLDER), "a tag never carries the value's contents");
+});
+
+Deno.test("lrhyl r4: the marshal is idempotent and keeps honest records byte-identical", () => {
+  const ledger = createPythonNetworkLedger();
+  ledger.record("run-lrhyl-r4e", { method: "GET", url: "https://api.example.com/clean", origin: "https://api.example.com", ok: true, status: 200, bytes: 10, ms: 2 });
+  const first = ledger.take("run-lrhyl-r4e").records[0];
+  assertEquals(first.url, "https://api.example.com/clean");
+  assertEquals(first.method, "GET");
+  assertEquals(first.status, 200);
+  assertEquals(first.ok, true);
+  // userinfo is a credential location too: a URL that PARSES loses everything but origin+path
+  ledger.record("run-lrhyl-r4f", { method: "GET", url: "https://api.example.com/ui", ok: true, referer: `https://user:${SECRET_PLACEHOLDER}@h.example/p`, ms: 1 });
+  const second = ledger.take("run-lrhyl-r4f").records[0];
+  assertEquals(second.referer, "https://h.example/p", "userinfo credentials are stripped by the same marshal");
 });
