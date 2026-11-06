@@ -148,10 +148,25 @@ Deno.test("mfu4a: a union on a TYPED node still adds its branches", () => {
   assertEquals(compileSchemaToZod(z, arrayUnion).fatal, "schema-work-exceeded");
 });
 
-Deno.test("mfu4a: a schema-valued additionalProperties is counted (insurance, not a live path)", () => {
-  // This converter DROPS additionalProperties/patternProperties today, so the
-  // budget counts them for the day they are supported — the point is that the
-  // accounting cannot be narrower than the builder without a test noticing.
+Deno.test("mfu4a/yn8en: a schema-valued additionalProperties is counted AND live (zod catchall); patternProperties stays dropped", () => {
+  // Comment truth (chrome-agent-platform-yn8en): additionalProperties is NOT
+  // insurance — sanitizeSchemaNode keeps it and buildFromClean compiles it into
+  // obj.catchall(...), so extras are validated per key on a LIVE path. The
+  // accounting counts it, and the asserts below pin the behavior: an extra
+  // violating the catchall schema fails, a conforming one passes. If the
+  // catchall compile is ever silently dropped, these red. patternProperties is
+  // the dropped half; counting it is the insurance.
+  const liveCatchall = {
+    type: "object",
+    properties: { a: { type: "string" } },
+    additionalProperties: { type: "array", items: { type: "integer" } },
+  };
+  const compiled = compileSchemaToZod(z, liveCatchall);
+  assertEquals(compiled.fatal, null, "the catchall schema is inside the work budget");
+  assertEquals(compiled.zodSchema.safeParse({ a: "x", extra: ["not-an-int"] }).success, false,
+    "an extra key violating the catchall schema must FAIL — the catchall is a live validator path");
+  assertEquals(compiled.zodSchema.safeParse({ a: "x", extra: [1, 2] }).success, true,
+    "a conforming extra passes the live catchall");
   const addProps = { type: "object", additionalProperties: nestedArrays(4) };
   assertEquals(compileSchemaToZod(z, addProps).fatal, "schema-work-exceeded");
   const boolAddProps = { type: "object", properties: { a: { type: "string" } }, additionalProperties: false };
