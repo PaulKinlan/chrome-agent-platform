@@ -30,10 +30,29 @@
     // scroll, resize, DOM mutation, and explicit apply-completion so the
     // measurements are reused across the burst while never outliving a
     // layout change.
+    // chrome-agent-platform-ffp7s: hheu4 only routed pickable() through the
+    // cache; the insert-mode path (live-browser.js layoutFlowChildren +
+    // handleMouseMove's target read) kept calling getBoundingClientRect
+    // directly, so every uncoalesced mousemove still forced N+1 layouts.
+    // cachedRect() below is the SINGLE shared read path for this cache —
+    // every hot-path caller must go through it, never raw
+    // getBoundingClientRect, or the fix silently regresses per caller.
     let elementRectCache = new WeakMap();
     function invalidateElementRects() {
       // WeakMap has no clear(); a fresh map drops every entry.
       elementRectCache = new WeakMap();
+    }
+
+    // The shared cache read. Returns the same cached DOMRect snapshot for an
+    // element until the next invalidation, for EVERY caller.
+    function cachedRect(el) {
+      if (!el || typeof el.getBoundingClientRect !== 'function') return null;
+      let r = elementRectCache.get(el);
+      if (!r) {
+        r = el.getBoundingClientRect();
+        elementRectCache.set(el, r);
+      }
+      return r;
     }
     // Per-instance listeners: each instance's invalidator clears only its own
     // cache, so parallel instances stay correct (the cost is one listener set
@@ -42,19 +61,35 @@
     root.addEventListener('scroll', invalidate, { capture: true, passive: true });
     root.addEventListener('resize', invalidate, { passive: true });
     if (typeof MutationObserver === 'function') {
-      new MutationObserver(invalidate).observe(doc, { childList: true, subtree: true, attributes: true });
+      // chrome-agent-platform-m0uen: the observer used to fire on the overlay's OWN
+      // chrome writes — setPageInteractionCursor rewrites the cursor <style>'s
+      // textContent on every insert-mode mousemove, and showHighlight/showInsertLine
+      // write inside the UI root — so the cache measuring the HOST page was emptied
+      // by our own churn between moves and never amortised (reviewer measured
+      // [5,5,5,5] rect reads per element across 5 insert-mode moves instead of
+      // [1,1,1,1]). Own-chrome mutations cannot change host layout (the cursor
+      // style is style-only; the chrome is overlay UI), so records whose targets
+      // are all inside [id^=prefix] are ignored; ANY host-page record still
+      // invalidates, exactly as before, and anything not provably own-chrome
+      // (including a malformed record list) fails safe toward invalidation.
+      const isOwnChromeTarget = (node) => {
+        if (!node) return false;
+        const el = node.nodeType === 1 ? node : node.parentElement;
+        return !!own(el);
+      };
+      new MutationObserver((records) => {
+        if (!Array.isArray(records) || records.some((r) => !isOwnChromeTarget(r && r.target))) {
+          invalidateElementRects();
+        }
+      }).observe(doc, { childList: true, subtree: true, attributes: true });
     }
 
     function pickable(el) {
       if (!el || el.nodeType !== 1) return false;
       if (tagsToSkip.has(String(el.tagName || '').toLowerCase())) return false;
       if (own(el)) return false;
-      let r = elementRectCache.get(el);
-      if (!r) {
-        r = el.getBoundingClientRect();
-        elementRectCache.set(el, r);
-      }
-      return r.width >= 20 && r.height >= 20;
+      const r = cachedRect(el);
+      return !!r && r.width >= 20 && r.height >= 20;
     }
 
     function desc(el) {
@@ -150,6 +185,7 @@
     return {
       own,
       pickable,
+      cachedRect,
       invalidateElementRects,
       desc,
       rectIsUsableAnchor,

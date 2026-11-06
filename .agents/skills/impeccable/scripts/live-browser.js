@@ -267,6 +267,7 @@
   const {
     own,
     pickable,
+    cachedRect,
     invalidateElementRects,
     desc,
     rectIsUsableAnchor,
@@ -1730,9 +1731,12 @@
 
   function layoutFlowChildren(parent) {
     if (!parent) return [];
+    // chrome-agent-platform-ffp7s: rects come from the SHARED hheu4 cache
+    // (cachedRect), not raw getBoundingClientRect — this runs per uncoalesced
+    // mousemove in insert mode, and pickable() just measured most of these.
     return [...parent.children]
       .filter(pickable)
-      .map((el) => ({ el, rect: el.getBoundingClientRect() }));
+      .map((el) => ({ el, rect: cachedRect(el) }));
   }
 
   function computeInsertPosition(clientX, clientY, rect, axis) {
@@ -2027,7 +2031,10 @@
   function setPageInteractionCursor(cursor) {
     let style = document.getElementById(PICK_CURSOR_STYLE_ID);
     if (!cursor) {
-      if (style) style.textContent = '';
+      // chrome-agent-platform-m0uen: skip no-op writes. An identical textContent
+      // rewrite per mousemove churned a global style recalc and fed our own
+      // MutationObserver, emptying the shared rect cache between moves.
+      if (style && style.textContent !== '') style.textContent = '';
       return;
     }
     if (!style) {
@@ -2037,10 +2044,13 @@
       // root (uiAppendStyle's target) these selectors would match nothing.
       (document.head || document.documentElement).appendChild(style);
     }
-    style.textContent =
+    const next =
       '* { cursor: ' + cursor + ' !important; }\n'
       + '[id^="' + PREFIX + '"],\n'
       + '[id^="' + PREFIX + '"] * { cursor: revert !important; }';
+    // m0uen: unchanged value, unchanged DOM — no write, no mutation record.
+    if (style.textContent === next) return;
+    style.textContent = next;
   }
 
   /** Page-level cursor while pick or insert mode is targeting page elements. */
@@ -7291,7 +7301,7 @@
       const parent = target.parentElement;
       const axis = detectInsertAxis(parent);
       const siblings = layoutFlowChildren(parent);
-      const rect = target.getBoundingClientRect();
+      const rect = cachedRect(target); // ffp7s: shared cache, not a raw layout read
       const resolved = resolveInsertHover({
         clientX: e.clientX,
         clientY: e.clientY,
