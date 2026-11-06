@@ -7997,7 +7997,14 @@ const handlers = mergeRouteMaps(
         return { ok: false, error: "redirect_refused", status: res.status || 0, hint: PYTHON_FETCH_ERROR_HINTS.redirect_refused };
       }
       // Bodies are one-shot streams: read once, then measure what we read.
-      const text = m === "HEAD" ? "" : await res.text();
+      // khwi9: the READ itself is bounded — the hub fixed the python.fetch cap
+      // at 10 MB (2026-11-06: consistency with the fetch brokers and the
+      // OOXML bounds). The old shape buffered the ENTIRE body in this
+      // privileged worker before any bound existed (the hvd4s class, worse:
+      // these bodies are attacker-chosen web content); the shared reader
+      // streams with an exact byte ceiling and cancels there.
+      const PYTHON_FETCH_BODY_MAX_BYTES = 10_000_000;
+      const { text, truncated } = m === "HEAD" ? { text: "", truncated: false } : await readResponseTextBounded(res, PYTHON_FETCH_BODY_MAX_BYTES);
       const bytes = new TextEncoder().encode(text).byteLength;
       const responseHeaders = {};
       try {
@@ -8008,6 +8015,9 @@ const handlers = mergeRouteMaps(
         origin: verdict.origin,
         status: res.status,
         bytes,
+        // khwi9: truncation is SURFACED, never guessed — the boolean joins the
+        // record only when true, so the closed shape stays stable.
+        ...(truncated ? { truncated: true } : {}),
         ...(refusedHeaders.length ? { refusedHeaderCount: refusedHeaders.length } : {}),
       };
       if (inflight) {
@@ -8030,6 +8040,10 @@ const handlers = mergeRouteMaps(
         headers: responseHeaders,
         text,
         bytes,
+        // khwi9: the Python side sees the truncation fact directly — `bytes`
+        // measures the RETAINED text, so a 10 MB-capped body never pretends
+        // to be complete.
+        truncated,
         // Round 7: the COUNT, never the caller's header names - a 128-char
         // token charset still lets a secret-shaped name ride through.
         refusedHeaderCount: refusedHeaders.length,

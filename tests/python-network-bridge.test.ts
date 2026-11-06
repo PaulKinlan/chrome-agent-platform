@@ -759,3 +759,42 @@ Deno.test("lrhyl r7: EVERY string field of EVERY writer's record is a fixed enum
   assertEquals((taken.records[0] as any).label, undefined);
   assertEquals((taken.records[0] as any).origin, "https://h", "the userinfo-bearing origin is re-parsed to the BARE origin - the credential is gone, the honest origin survives (same policy as url -> origin+path)");
 });
+
+// --- khwi9: the python.fetch body read is BOUNDED, and truncation is honest ---
+//
+// The hvd4s class, worse: python.fetch buffered the ENTIRE response body into
+// the privileged service worker with no bound at all (sw.js:7991's raw
+// res.text()), and its bodies are attacker-chosen web content. The hub fixed
+// the cap at 10 MB (2026-11-06: "consistency with the fetch brokers and the
+// OOXML bounds"). The read goes through the same stream-level bounded reader
+// cap:fetch uses (lib/fetch-body-bound.js), and truncation is SURFACED, never
+// guessed: a boolean on the Python-facing return and, when true, a contract
+// field on the ledger record - a boolean, so the lrhyl r6/r7 closed shape and
+// its string-field contract scan are untouched.
+
+Deno.test("khwi9: 'truncated' is a contract field - the ledger carries the boolean, only when true, type-checked", () => {
+  const ledger = createPythonNetworkLedger();
+  const i1 = ledger.begin("run-khwi9-a", { method: "GET", url: "https://h/big", origin: "https://h", startedAt: Date.now(), controller: null });
+  i1.complete({ ok: true, status: 200, bytes: 10_000_000, truncated: true });
+  const recA = ledger.take("run-khwi9-a").records[0];
+  assertEquals(recA.truncated, true, "a truncated body is recorded as the boolean fact");
+  const i2 = ledger.begin("run-khwi9-b", { method: "GET", url: "https://h/small", origin: "https://h", startedAt: Date.now(), controller: null });
+  i2.complete({ ok: true, status: 200, bytes: 12 });
+  const recB = ledger.take("run-khwi9-b").records[0];
+  assertEquals((recB as any).truncated, undefined, "an untruncated record does not grow the field");
+  // a non-boolean 'truncated' is dropped, never laundered into a record string
+  const ledger2 = createPythonNetworkLedger();
+  ledger2.record("run-khwi9-c", { method: "GET", url: "https://h/x", ok: true, ms: 1, truncated: `yes https://h/?s=${SECRET_PLACEHOLDER}` });
+  const recC = ledger2.take("run-khwi9-c").records[0];
+  assertEquals((recC as any).truncated, undefined, "a caller-supplied non-boolean truncated is dropped");
+  assert(!JSON.stringify(recC).includes(SECRET_PLACEHOLDER));
+});
+
+Deno.test("khwi9 SW source pin: python.fetch reads the body through the bounded reader at the hub's 10 MB cap", async () => {
+  const sw = await Deno.readTextFile(new URL("../extension/background/service-worker.js", import.meta.url));
+  assert(sw.includes("const PYTHON_FETCH_BODY_MAX_BYTES = 10_000_000;"), "the hub's 10 MB decision is a named constant at the broker");
+  assert(sw.includes('const { text, truncated } = m === "HEAD" ? { text: "", truncated: false } : await readResponseTextBounded(res, PYTHON_FETCH_BODY_MAX_BYTES);'), "the body read is bounded at the STREAM, HEAD keeps its body-less semantics");
+  assert(sw.includes("...(truncated ? { truncated: true } : {})"), "the ledger entry surfaces truncation honestly (only when true)");
+  assert(sw.includes("truncated,\n        // Round 7: the COUNT"), "the Python-facing success return carries the truncated boolean next to the count");
+  assert(!sw.includes('const text = m === "HEAD" ? "" : await res.text();'), "the unbounded read is deleted, not commented out");
+});
