@@ -125,7 +125,12 @@ inventory and the sender/inventory guard described in INV-15.
   network position with the extension's host permission — `cap:fetch` at
   `extension/background/service-worker.js#cap:fetch` and `python.fetch` at
   `extension/background/service-worker.js#python.fetch`, both applying
-  `extension/lib/fetch-policy.js:135`.
+  `extension/lib/fetch-policy.js:135`. `python.fetch`'s model-visible echoes never
+  carry a query string: its response URL and every Python network-ledger record are
+  normalized to origin+path (`extension/lib/python-network.js#urlWithoutQuery`,
+  lrhyl), because the query string is exactly where callers put credentials (the
+  `?key=` pattern) — INV-7 fences the untrusted BODY side of this boundary, and the
+  strip closes the REQUEST-echo side for the Python broker.
 - **TB5 — The ACP bridge.** A loopback WebSocket on the host in front of an agent
   harness that can run shell commands and write files
   (`scripts/acp-bridge.ts:52` defaults to `127.0.0.1`, `:785` binds the server;

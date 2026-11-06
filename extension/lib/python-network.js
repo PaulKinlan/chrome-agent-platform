@@ -86,6 +86,22 @@ export function normalizeGrantOrigin(input) {
   return u.port ? `${u.protocol}//${u.hostname}:${u.port}` : `${u.protocol}//${u.hostname}`;
 }
 
+/** chrome-agent-platform-lrhyl: the query string is where credentials live
+ * (the '?key=' pattern), and every URL that becomes model-readable — the
+ * cap.fetch response echo and the network records carried in the run envelope
+ * — must carry ORIGIN+PATH ONLY. A parse failure yields the empty string:
+ * fail closed toward saying nothing rather than echoing a raw, possibly
+ * secret-carrying string. The REQUEST still fetches the full URL — stripping
+ * is for echoes, never for dispatch. */
+export function urlWithoutQuery(raw) {
+  try {
+    const u = new URL(String(raw ?? ""));
+    return `${u.origin}${u.pathname}`;
+  } catch {
+    return "";
+  }
+}
+
 /** Read a persisted grant list into the canonical, de-duplicated shape.
  * Anything unreadable is DROPPED, never guessed at: a grant that cannot be
  * parsed is not a grant. */
@@ -293,7 +309,10 @@ export function createPythonNetworkLedger({ maxPerRun = MAX_RECORDS_PER_RUN, max
       }
       const row = ensureRow(id);
       const m = String(method ?? "GET").toUpperCase();
-      const u = String(url ?? "");
+      // lrhyl: ledger records travel to the model in the run envelope's
+      // network field — normalize at the choke point so NO writer (current or
+      // future) can put a query string into a model-readable record.
+      const u = urlWithoutQuery(url);
       const start = Number.isFinite(startedAt) ? Number(startedAt) : Date.now();
       let index = -1;
       if (row.records.length >= maxPerRun) {
@@ -356,7 +375,9 @@ export function createPythonNetworkLedger({ maxPerRun = MAX_RECORDS_PER_RUN, max
     },
 
     /** Record one attempt. `record` is already the owner-facing shape:
-     * { method, url, origin, ok, status?, bytes?, ms, error?, refusedHeaders? } */
+     * { method, url, origin, ok, status?, bytes?, ms, error?, refusedHeaders? }
+     * `url` is normalized to origin+path (lrhyl) — these records are
+     * model-readable via the run envelope. */
     record(runId, entry) {
       const id = String(runId ?? "");
       if (!id || takenIds.has(id) || runs.get(id)?.settled) return;
@@ -368,7 +389,12 @@ export function createPythonNetworkLedger({ maxPerRun = MAX_RECORDS_PER_RUN, max
         row.dropped += 1; // honest count, never a silent truncation
         return;
       }
-      row.records.push(Object.freeze({ ...entry }));
+      // lrhyl: same choke-point normalization as begin() — record() writers
+      // pass raw URLs and the records are model-readable.
+      row.records.push(Object.freeze({
+        ...entry,
+        ...(entry?.url !== undefined ? { url: urlWithoutQuery(entry.url) } : {}),
+      }));
     },
 
     /** Take (and forget) a run's records. Called once when the run settles, so

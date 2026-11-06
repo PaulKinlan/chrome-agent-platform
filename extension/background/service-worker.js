@@ -1304,6 +1304,7 @@ import {
   normalizeGrants as normalizePythonNetworkGrants,
   removeGrant as removePythonNetworkGrant,
   sanitizeRequestHeaders as sanitizePythonRequestHeaders,
+  urlWithoutQuery,
 } from "../lib/python-network.js";
 import {
   acceptToolSnapshot,
@@ -8012,7 +8013,12 @@ const handlers = mergeRouteMaps(
       return tagUntrusted({
         ok: true,
         status: res.status,
-        url: res.url || u.href,
+        // chrome-agent-platform-lrhyl: origin+path only. This return value is
+        // model-readable (INV-7 data), and the query string is where
+        // credentials live (the '?key=' pattern) — echoing the full URL let a
+        // caller-supplied secret escape the enclave. The request itself still
+        // fetched the full URL above; only the echo is stripped.
+        url: urlWithoutQuery(res.url || u.href),
         headers: responseHeaders,
         text,
         bytes,

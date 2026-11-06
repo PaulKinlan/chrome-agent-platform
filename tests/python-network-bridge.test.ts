@@ -13,7 +13,7 @@
 import { assert, assertEquals, assertStringIncludes, assertThrows } from "jsr:@std/assert@1";
 import { registerPythonHost } from "../extension/lib/python-host.js";
 import { createPythonRuntimeProvider } from "../extension/lib/python-runtime.js";
-import { createPythonNetworkLedger } from "../extension/lib/python-network.js";
+import { createPythonNetworkLedger, urlWithoutQuery } from "../extension/lib/python-network.js";
 import { runPython } from "../extension/lib/python-execution.js";
 import { fileURLToPath } from "node:url";
 
@@ -374,3 +374,63 @@ Deno.test("the worker hands back the granted reach only AFTER the ambient reach 
   assert(!/allowlist|allowList/i.test(worker), "the allow-list lives in the service worker, not here");
 });
 
+
+// --- lrhyl: a query string must never reach a model-readable surface ------------
+//
+// python.fetch echoed the FULL request URL (res.url || u.href) in its
+// tagUntrusted response, and the ledger's dispatch/error records stored the
+// raw url — both flow to the model (the cap.fetch return value; the run
+// envelope's network field). A credential in a query string (the '?key='
+// pattern) therefore escaped the enclave. The fix strips at the two ledger
+// write choke points (begin/record) and at the response echo; the REQUEST
+// still fetches the full URL — stripping is for echoes, never dispatch.
+// Secret-safe discipline: the placeholder below is a synthetic marker, not
+// credential material.
+const SECRET_PLACEHOLDER = "LRHYL-SYNTHETIC-PLACEHOLDER-DO-NOT-ECHO";
+
+Deno.test("lrhyl: urlWithoutQuery keeps origin+path, drops search and hash, fails closed on garbage", () => {
+  assertEquals(urlWithoutQuery(`https://api.example.com/v1/models?key=${SECRET_PLACEHOLDER}`), "https://api.example.com/v1/models");
+  assertEquals(urlWithoutQuery("https://a.example/p/q#frag"), "https://a.example/p/q");
+  assertEquals(urlWithoutQuery("https://a.example:8443/p?x=1"), "https://a.example:8443/p", "an explicit port is part of the origin and survives");
+  assertEquals(urlWithoutQuery(`https://a.example/?key=${SECRET_PLACEHOLDER}`), "https://a.example/");
+  assertEquals(urlWithoutQuery("not a url at all"), "", "an unparseable string yields NOTHING rather than an echo");
+  assertEquals(urlWithoutQuery(undefined), "");
+  assertEquals(urlWithoutQuery(null), "");
+});
+
+Deno.test("lrhyl: the ledger strips the query at BOTH write choke points, and an abort message never carries it", () => {
+  const ledger = createPythonNetworkLedger();
+  // the direct record() path (the broker's validation/error closures)
+  ledger.record("run-lrhyl", { method: "GET", url: `https://api.example.com/a?token=${SECRET_PLACEHOLDER}`, origin: "https://api.example.com", ok: false, refused: true, error: "not granted", ms: 1 });
+  // the begin()/complete() path (dispatch-time record)
+  const inflight = ledger.begin("run-lrhyl", { method: "GET", url: `https://api.example.com/b?key=${SECRET_PLACEHOLDER}`, origin: "https://api.example.com", startedAt: Date.now(), controller: null });
+  inflight.complete({ ok: true, origin: "https://api.example.com", status: 200, bytes: 3 });
+  // a still-in-flight record that take() must abort — its finalized error
+  // message interpolates origin/url and must not echo the query either
+  ledger.begin("run-lrhyl", { method: "GET", url: `https://api.example.com/c?sig=${SECRET_PLACEHOLDER}`, origin: "https://api.example.com", startedAt: Date.now(), controller: { abort() {} } });
+  const taken = ledger.take("run-lrhyl");
+  assertEquals(taken.records.length, 3);
+  assertEquals(taken.records[0].url, "https://api.example.com/a");
+  assertEquals(taken.records[1].url, "https://api.example.com/b");
+  assertEquals(taken.records[2].url, "https://api.example.com/c");
+  assertEquals(taken.records[2].aborted, true);
+  const serialized = JSON.stringify(taken.records);
+  assert(!serialized.includes(SECRET_PLACEHOLDER), "no model-readable record may carry the query value");
+  assert(!serialized.includes("token=") && !serialized.includes("key=") && !serialized.includes("sig="), "not even the query KEYS survive");
+});
+
+Deno.test("lrhyl SW source pin: the python.fetch response echo strips, no bare echo survives, and the import exists", async () => {
+  const sw = await Deno.readTextFile(new URL("../extension/background/service-worker.js", import.meta.url));
+  assertEquals(
+    sw.split("url: urlWithoutQuery(res.url || u.href)").length - 1, 1,
+    "the python.fetch broker's response echo must go through urlWithoutQuery exactly once",
+  );
+  const withoutWrapped = sw.split("url: urlWithoutQuery(res.url || u.href)").join("");
+  assert(!withoutWrapped.includes("url: res.url || u.href"), "a bare, unstripped echo must not survive anywhere in the SW");
+  assert(sw.includes("urlWithoutQuery,\n} from \"../lib/python-network.js\""), "the SW imports urlWithoutQuery from the module that owns the invariant");
+  // discriminating check on the ledger choke points: begin() and record() must
+  // normalize through urlWithoutQuery (reverting either reds this pin)
+  const lib = await Deno.readTextFile(new URL("../extension/lib/python-network.js", import.meta.url));
+  assert(lib.includes("const u = urlWithoutQuery(url);"), "begin() normalizes at the choke point");
+  assert(lib.includes("...(entry?.url !== undefined ? { url: urlWithoutQuery(entry.url) } : {}),"), "record() normalizes at the choke point");
+});
