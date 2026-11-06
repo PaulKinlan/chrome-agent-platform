@@ -11,11 +11,13 @@
 // to 258000 by bwxf's wave-2 admission: 4 new manifest identities measured
 // 255306 bytes; to 259000 by hvd4s's bounded-read helper as an explicit tracked
 // bridge authorised by the hub: baseline measured 257920 with only 80 B
-// headroom, +374 B at the helper's shrunk floor of 258294 - the x2ux1 offscreen
-// split removes the need; see scripts/bundle-budget.mjs).
+// headroom, +374 B at the helper's shrunk floor of 258294; and RE-BASED to 65000
+// from measurement by chrome-agent-platform-892u2 when the x2ux1 offscreen split
+// landed - the split entry measures 57876 B, which retires the bridge's need; see
+// scripts/bundle-budget.mjs).
 //
-// Falsification: a synthetic 259001-byte offscreen bundle fails naming its
-// source and top contributors. The order pin (scrub BEFORE
+// Falsification: a synthetic offscreen bundle one byte over the ceiling fails
+// naming its source and top contributors. The order pin (scrub BEFORE
 // minify) is the safety-critical invariant: the eval scrub's textual patterns
 // only match unminified code.
 // @ts-nocheck
@@ -297,13 +299,16 @@ Deno.test("0kdsc / ug95c / k3vrl / akoxt / 324tz / rjvdp / h2c0e / tgff6 / benkb
   );
 
   // 5h7mi positive checks: unit-equivalent expressions pass
+  // Derived from the live constant, so a legitimate re-base (892u2 did exactly
+  // that) does not turn these into false negatives about the parser.
+  const formattedCeiling = offscreenCeiling.toLocaleString("en-US");
   verifyEnforcedOffscreenCeilingDocs({
     ...docs,
-    acpHarness: docs.acpHarness + "\nThe enforced offscreen.bundle.js ceiling is 259,000B for all store surfaces.\n",
+    acpHarness: docs.acpHarness + `\nThe enforced offscreen.bundle.js ceiling is ${formattedCeiling}B for all store surfaces.\n`,
   }, offscreenCeiling);
   verifyEnforcedOffscreenCeilingDocs({
     ...docs,
-    acpHarness: docs.acpHarness + "\nThe enforced offscreen.bundle.js ceiling is 259 KB for all store surfaces.\n",
+    acpHarness: docs.acpHarness + `\nThe enforced offscreen.bundle.js ceiling is ${Math.round(offscreenCeiling / 1000)} KB for all store surfaces.\n`,
   }, offscreenCeiling);
 
   // Case I: conflicting figure with no unit
@@ -379,14 +384,14 @@ Deno.test("bundle budget: sizes return measured bytes; an over-reference bundle 
 
 Deno.test("rmoh8: a synthetic offscreen bundle over the enforced ceiling fails with typed measured-source evidence", () => {
   const ceiling = STORE_BUNDLE_BUDGETS["offscreen.bundle.js"];
-  assertEquals(ceiling, 259_000, "the store table is the single ceiling source (bwxf→hvd4s ratchet)");
+  assertEquals(ceiling, 65_000, "the store table is the single ceiling source (892u2's measured re-base of the bwxf→hvd4s ratchet)");
   assertEquals(assertBundleBudget({ label: "offscreen.bundle.js", bytes: ceiling, budgetBytes: ceiling }), ceiling);
   const failure = assertThrows(() => assertBundleBudget({ label: "offscreen.bundle.js",
     bytes: ceiling + 1, budgetBytes: ceiling,
     metafile: { inputs: { "stage-host.js": { bytes: ceiling + 1 } } },
   }));
   assertEquals(failure.code, "cap_offscreen_bundle_ceiling_exceeded");
-  for (const fact of ["offscreen.bundle.js", "259001 bytes", "259000", "scripts/bundle-budget.mjs", "stage-host.js"]) {
+  for (const fact of ["offscreen.bundle.js", `${ceiling + 1} bytes`, `${ceiling}`, "scripts/bundle-budget.mjs", "stage-host.js"]) {
     assertStringIncludes(failure.message, fact);
   }
 });
@@ -608,7 +613,7 @@ Deno.test("9epn.4 bundle budget: dist.complete records every generated bundle, r
     assertEquals(size, (await Deno.stat(`extension/dist/${path}`)).size, `${path}: the recorded size is the shipped file's size`);
   }
   if (marker.target !== "store") return; // developer build: unminified by design; the references measure the store bytes
-  // All entries are reported; offscreen also has a hard ceiling (259000 since hvd4s).
+  // All entries are reported; offscreen also has a hard ceiling (65000 since 892u2's measured re-base).
   // A store build above it must fail before publication (rmoh8).
   for (const [path, budget] of Object.entries(STORE_BUNDLE_BUDGETS)) {
     const size = sizeOf.get(path);
@@ -1144,8 +1149,8 @@ Deno.test("9epn.5 bundle budget: offscreen.bundle.js <= 259 KB minified and all 
   try {
     const stat = await Deno.stat(offscreenBundle);
     assert(
-      stat.size <= 259_000,
-      `offscreen.bundle.js must be <= 259 KB minified (actual: ${stat.size} bytes)`,
+      stat.size <= 65_000,
+      `offscreen.bundle.js must be <= 65,000 B minified after the 892u2 split (actual: ${stat.size} bytes)`,
     );
   } catch (e) {
     if (e instanceof Deno.errors.NotFound) {
@@ -1237,6 +1242,56 @@ Deno.test("9epn.5 self-contained single bundles: zero runtime relative imports t
       );
     }
   }
+});
+
+Deno.test("892u2: the split offscreen entry reaches its code through STATIC chunk imports only (no dynamic chunk import)", async () => {
+  // The c2j4t design admitted offscreen into the UI splitting group on ONE condition:
+  // chunking preserves offscreen's readiness contract - "hosts register via top-level
+  // static imports, so ESM evaluates the chunks before the entry body" - and it rejected
+  // dynamic import() on this surface because no ready handshake exists (the x2ux1
+  // async-gap trap: a host that is not yet registered when the SW announces a run loses
+  // the claim). This pin is the mechanical half of that condition, on the SHIPPED byte.
+  const repo = fileURLToPath(new URL("../", import.meta.url));
+  const source = await Deno.readTextFile(join(repo, "extension", "dist", "offscreen.bundle.js"));
+
+  // 1. No chunk may be reached through import(): every chunk specifier is static.
+  assertEquals(
+    [...source.matchAll(/(?:import|export)\s*\(\s*["']?\.?\/?chunks\//g)].map((m) => m[0]),
+    [],
+    "offscreen must reach its shared chunks through static import declarations, never import()",
+  );
+  assert(
+    /\.\/chunks\/[a-zA-Z0-9._-]+\.js/.test(source),
+    "offscreen must actually reference chunk files - a self-contained entry would mean the split silently stopped sharing",
+  );
+
+  // 2. The ONE surviving dynamic import is the pre-existing, deliberate exception:
+  // the Emscripten staging route resolves a runtime.getURL module on demand so the
+  // native runner is not inlined into this bundle (emscripten-host-stage-route.js).
+  // Anything else appearing here is a new async gap on an offscreen host path.
+  const dynamicImports = [...source.matchAll(/import\s*\(/g)].map((m) => source.slice(Math.max(0, m.index - 80), m.index + 120));
+  assertEquals(dynamicImports.length, 1, `offscreen must carry exactly the one documented dynamic import (found ${dynamicImports.length}): ${dynamicImports.join(" | ")}`);
+  assert(
+    dynamicImports[0].includes("emscripten-host-stage.js"),
+    `the only dynamic import in offscreen must be the Emscripten staging module (saw: ${dynamicImports[0]})`,
+  );
+});
+
+Deno.test("892u2: every host offscreen.js imports is still LINKED into the split build (no host silently dropped)", async () => {
+  // The split changes how offscreen's code is assembled, not what registers. so the risk it
+  // introduces is a module that stops being linked (tree-shaken, or dropped with a chunk) while
+  // the entry still loads and answers - the surface looks alive, one host is gone. Derive the
+  // expected host modules from the SOURCE (never a hand-kept list) and require each one in the
+  // build's own metafile for the offscreen build, which is the UI group's metafile post-892u2.
+  const repo = fileURLToPath(new URL("../", import.meta.url));
+  const source = await Deno.readTextFile(join(repo, "extension", "offscreen", "offscreen.js"));
+  const imported = [...source.matchAll(/from\s+"(\.\.\/[^"]+\.js)"/g)].map((m) => m[1].replace(/^\.\.\//, "extension/"));
+  assert(imported.length >= 10, `offscreen.js must import its host modules (parsed ${imported.length})`);
+
+  const meta = JSON.parse(await Deno.readTextFile(join(repo, ".build", "bundle-report-offscreen.json")));
+  const inputs = new Set(Object.keys(meta.inputs ?? {}));
+  const missing = imported.filter((rel) => !inputs.has(rel));
+  assertEquals(missing, [], `offscreen hosts missing from the emitted build: ${missing.join(", ")}`);
 });
 
 Deno.test("bd06: build.mjs auto-materializes .deno with a frozen lock before resolving canonical dependencies", async () => {
@@ -1384,7 +1439,7 @@ Deno.test("o2t3: the declared budgets and the reported/marked bundle sets cannot
 
 // ── chrome-agent-platform-20e2u: UI shared chunks and ratcheted budget targets ───
 
-Deno.test("20e2u bundle budget: sidepanel <= 250 KB, ntp <= 500 KB, options <= 450 KB, chunks <= 750 KB", async () => {
+Deno.test("20e2u bundle budget: sidepanel <= 250 KB, ntp <= 500 KB, options <= 450 KB, chunks <= STORE_AGGREGATE_CHUNKS_BUDGET_BYTES", async () => {
   const repo = fileURLToPath(new URL("../", import.meta.url));
   const sidepanelBundle = join(repo, "extension", "dist", "sidepanel.bundle.js");
   const ntpBundle = join(repo, "extension", "dist", "ntp.bundle.js");
