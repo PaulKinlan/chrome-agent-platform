@@ -379,7 +379,7 @@ Deno.test("perm lease: REAL SW dispatcher integration (chrome.runtime.onMessage 
     const answered = listeners.find((fn) => {
       let responded = false;
       const sendResponse = (r) => { responded = true; resolve(r); };
-      const keepOpen = fn(msg, { documentUrl: `chrome-extension://test-extension-id/options/options.html` }, sendResponse);
+      const keepOpen = fn(msg, { id: "test-extension-id", url: `chrome-extension://test-extension-id/options/options.html`, documentId: "doc-options-1", documentLifecycle: "active" }, sendResponse);
       return true; // first listener that responds wins
     });
     void answered;
@@ -546,19 +546,19 @@ Deno.test("kv.get (real dispatcher): secret namespaces redacted on read-all AND 
   const ntpSeed = await dispatch({ type: "kv.set", values: {
     "cap:namedAgents": { probe: { name: MARKER_NAMED, provider: { provider: "deepseek", apiKey: "config-has-a-value" } } },
     "providerConfig": { provider: "deepseek", baseURL: "https://api.example", apiKey: "config-value", model: "m", note: MARKER_GLOBAL },
-  } }, { url: "chrome-extension://test-extension-id/ntp/ntp.html" });
+  } }, { id: "test-extension-id", url: "chrome-extension://test-extension-id/ntp/ntp.html" });
   assert(ntpSeed?.ok === false && /secret-controlled/.test(String(ntpSeed?.error)), "kv.set secret namespaces DENIED from NTP");
   // kv.set for an ordinary key from NTP: still allowed (only secret stores are gated).
-  const ordinary = await dispatch({ type: "kv.set", values: { "cap:test-key": "v" } }, { url: "chrome-extension://test-extension-id/ntp/ntp.html" });
+  const ordinary = await dispatch({ type: "kv.set", values: { "cap:test-key": "v" } }, { id: "test-extension-id", url: "chrome-extension://test-extension-id/ntp/ntp.html" });
   assert(ordinary?.ok !== false, "kv.set ordinary key still allowed from NTP");
   // kv.remove of a SECRET namespace from NTP: DENIED.
-  const ntpRemove = await dispatch({ type: "kv.remove", keys: ["providerConfig", "cap:namedAgents"] }, { url: "chrome-extension://test-extension-id/ntp/ntp.html" });
+  const ntpRemove = await dispatch({ type: "kv.remove", keys: ["providerConfig", "cap:namedAgents"] }, { id: "test-extension-id", url: "chrome-extension://test-extension-id/ntp/ntp.html" });
   assert(ntpRemove?.ok === false && /secret-controlled/.test(String(ntpRemove?.error)), "kv.remove secret namespaces DENIED from NTP");
   // Seed via the OWNER-PRINCIPAL dispatcher path (the attested Options shape):
   const ownerSender = { id: "test-extension-id", url: "chrome-extension://test-extension-id/options/options.html", documentId: "doc-options-1", documentLifecycle: "active" };
   const shadowNtp = await dispatch(
     { type: "tool-catalog.shadow", action: "summary" },
-    { url: "chrome-extension://test-extension-id/ntp/ntp.html" },
+    { id: "test-extension-id", url: "chrome-extension://test-extension-id/ntp/ntp.html" },
   );
   assert(
     shadowNtp?.ok === false && /Settings surface/.test(String(shadowNtp?.error)),
@@ -596,22 +596,22 @@ Deno.test("kv.get (real dispatcher): secret namespaces redacted on read-all AND 
   } }, ownerSender);
   assert(seedRes?.ok !== false, "kv.set secret namespaces allowed from owner-options principal");
   // 1. read-all: credentials redacted; the agent NAME marker survives.
-  const all = await dispatch({ type: "kv.get" }, { url: "chrome-extension://test-extension-id/ntp/ntp.html" });
+  const all = await dispatch({ type: "kv.get" }, { id: "test-extension-id", url: "chrome-extension://test-extension-id/ntp/ntp.html" });
   const allStr = JSON.stringify(all);
   assert(!allStr.includes("config-has-a-value"), "per-agent credential redacted on read-all");
   assert(!allStr.includes("config-value\""), "global credential redacted on read-all");
   assert(allStr.includes(MARKER_NAMED), "non-secret agent name survives (targeted redaction)");
   // 2. explicit key on a secret namespace: redacted.
-  const named = await dispatch({ type: "kv.get", keys: ["cap:namedAgents"] }, { url: "chrome-extension://test-extension-id/ntp/ntp.html" });
+  const named = await dispatch({ type: "kv.get", keys: ["cap:namedAgents"] }, { id: "test-extension-id", url: "chrome-extension://test-extension-id/ntp/ntp.html" });
   assert(!JSON.stringify(named).includes("config-has-a-value"), "explicit secret-namespace read redacted");
   // 3. provider.set from an NTP sender: REFUSED.
-  const refused = await dispatch({ type: "provider.set", config: { provider: "gemini" } }, { url: "chrome-extension://test-extension-id/ntp/ntp.html" });
+  const refused = await dispatch({ type: "provider.set", config: { provider: "gemini" } }, { id: "test-extension-id", url: "chrome-extension://test-extension-id/ntp/ntp.html" });
   assert(refused?.ok === false && /Settings surface/.test(String(refused?.error)), "provider.set refused from NTP");
   // 4. provider.CLEAR-KEY from NTP: REFUSED.
-  const clearNtp = await dispatch({ type: "provider.clear-key" }, { url: "chrome-extension://test-extension-id/ntp/ntp.html" });
+  const clearNtp = await dispatch({ type: "provider.clear-key" }, { id: "test-extension-id", url: "chrome-extension://test-extension-id/ntp/ntp.html" });
   assert(clearNtp?.ok === false && /Settings surface/.test(String(clearNtp?.error)), "provider.clear-key refused from NTP");
   // 5. provider.TEST from NTP: REFUSED.
-  const testNtp = await dispatch({ type: "provider.test", provider: "demo" }, { url: "chrome-extension://test-extension-id/ntp/ntp.html" });
+  const testNtp = await dispatch({ type: "provider.test", provider: "demo" }, { id: "test-extension-id", url: "chrome-extension://test-extension-id/ntp/ntp.html" });
   assert(testNtp?.ok === false && /Settings surface/.test(String(testNtp?.error)), "provider.test refused from NTP");
   // 6. Product-owned hash navigation remains the SAME attested Settings
   // document for provider set/get/test; credentials stay redacted.

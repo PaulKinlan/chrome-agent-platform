@@ -13418,19 +13418,31 @@ durableRecoveryReady.then(async () => {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   routeLog.debug("route", message?.type, sender?.tab?.id != null ? `tab:${sender.tab.id}` : "extension");
   // cac6c r3 (1fn9j): ONE sender decision, ahead of route resolution, and
-  // every refusal of an unauthorised sender takes the identical path —
-  // SILENCE — whether or not the route exists. The r2 shape still leaked
-  // route existence to unauthorised senders (a known route answered with a
-  // differentiated classifier error; an unknown route stayed silent; an
-  // unmatched sender got the generic reply on unknown routes but a
-  // cross-origin diagnosis on known ones) — a route-enumeration oracle. And
-  // a null-origin message threw synchronously here, before any refusal — a
-  // throw on a privileged listener is its own fingerprint and its own bug.
-  // isOwnExtensionSender is the CREDITED ENFORCEMENT predicate (pure.js):
-  // anything that is not this extension is refused at this call site,
-  // uniformly, before the classifier even runs — so the classifier's
-  // absent-tab "extension" label can never admit a foreign sender.
-  if (!isOwnExtensionSender(sender, chrome.runtime.id)) return false;
+  // every rejection — foreign sender, unknown route, failed content-script
+  // attestation, unmatched surface, forbidden page route — takes THE
+  // IDENTICAL PATH: the same generic reply, one literal, emitted before any
+  // route knowledge is consulted. The r2 shape leaked route existence to
+  // unauthorised senders (a known route answered with a differentiated
+  // classifier error; an unknown route stayed silent; an unmatched sender
+  // got the generic reply on unknown routes but a cross-origin diagnosis on
+  // known ones) — a route-enumeration oracle. A null-origin message also
+  // threw synchronously here, before any refusal — a throw on a privileged
+  // listener is its own fingerprint and its own bug. The refusal is a REPLY
+  // (not silence) because the shipped integration contracts pin it:
+  // untrusted-sender dispatches assert a refusal response
+  // (tests/named-agent-provider-route.test.ts's spoof loop,
+  // tests/settings-session.test.ts, tests/provider-gate.test.ts real
+  // dispatcher legs); the identical literal on every path is what kills the
+  // oracle, not the absence of a reply. isOwnExtensionSender is the
+  // CREDITED ENFORCEMENT predicate (pure.js): anything that is not this
+  // extension is refused at this call site, uniformly, before the classifier
+  // even runs — so the classifier's absent-tab "extension" label can never
+  // admit a foreign sender.
+  const deny = () => sendResponse({ ok: false, error: "unknown message" });
+  if (!isOwnExtensionSender(sender, chrome.runtime.id)) {
+    deny();
+    return true;
+  }
   // The classifier only ever sees a string: the caller-supplied origin field
   // is passed through the guarded typeof-check below, and message?.type
   // stays optional-chained throughout — a null-origin (or null) message is
@@ -13441,15 +13453,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     canonicalOrigin,
     chrome.runtime.id,
   );
-  if (!handlers[message?.type]) {
-    // cac6c r3: authorised senders (extension surfaces, content scripts with
-    // a passing origin attestation) learn only the generic shape — the same
-    // reply an unknown route gets on every other path. Hostile senders
-    // (failed attestation, unmatched surface) get silence, exactly like the
-    // foreign refusal above: no branch may differ by route existence.
-    if (auth.kind === "extension" || (auth.kind === "content-script" && !auth.error)) {
-      sendResponse({ ok: false, error: "unknown message" });
-    }
+  if (!handlers[message?.type] || auth.error || auth.kind === "unmatched") {
+    // The ONE rejection shape for every class — authorised or not, known
+    // route or not. No reply ever differentiates by route existence.
+    deny();
     return true;
   }
 
@@ -13468,19 +13475,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     routeContext = { ...routeContext, principal: "owner-options" };
   }
   if (auth.kind === "content-script") {
-    if (auth.error) {
-      // cac6c r3: origin attestation failed — hostile or tampered. SILENCE,
-      // the same uniform refusal a foreign sender gets, on every route: the
-      // r2 shape answered with the differentiated classifier error on known
-      // routes, which let the same unauthorised sender probe route existence.
-      return false;
-    }
     if (!PAGE_ALLOWED_ROUTES.has(message.type)) {
       securityEvent("blocked-action", `page route denied: ${message.type}`);
-      // cac6c r3: IDENTICAL to the unknown-route reply. A page must not be
-      // able to distinguish "route exists but is forbidden" from "no such
-      // route" — the forbidden-route reply used to name the policy.
-      sendResponse({ ok: false, error: "unknown message" });
+      // cac6c r3: THE identical rejection shape. A page must not be able to
+      // distinguish "route exists but is forbidden" from "no such route".
+      deny();
       return true;
     }
     // Derive the origin for every permitted page route — never trust a
@@ -13506,11 +13505,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     };
   } else if (auth.kind === "unmatched") {
     securityEvent("cross-origin", "sender refused: surface matched no known principal");
-    // cac6c r3: silence, uniform with the foreign and failed-attestation
-    // refusals. The r2 shape echoed auth.error here — on a known route the
-    // sender got a cross-origin diagnosis, on an unknown one the generic
-    // reply: route existence, leaked through the reply channel.
-    return false;
+    // cac6c r3: the identical rejection shape — the r2 shape echoed
+    // auth.error here, so on a known route the sender got a cross-origin
+    // diagnosis while on an unknown one it got the generic reply: route
+    // existence, leaked through the reply channel.
+    deny();
+    return true;
   }
 
   // Settings-session verification (chrome-agent-platform-8v5l.2): happens BEFORE

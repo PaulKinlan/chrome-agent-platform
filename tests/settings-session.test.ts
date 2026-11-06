@@ -23,6 +23,7 @@ import {
 import {
   PAGE_ALLOWED_ROUTES,
   authorizeToolReport,
+  isOwnExtensionSender,
   isExactOptionsSender,
 } from "../extension/lib/pure.js";
 import { mayResolveApproval } from "../extension/lib/owner-approval.js";
@@ -319,6 +320,7 @@ function createExtractedSwHarness({
     const {
       chrome,
       authorizeToolReport,
+      isOwnExtensionSender,
       canonicalOrigin,
       isExactOptionsSender,
       PAGE_ALLOWED_ROUTES,
@@ -345,6 +347,7 @@ function createExtractedSwHarness({
   const built = factory({
     chrome: (globalThis as any).chrome,
     authorizeToolReport,
+    isOwnExtensionSender,
     canonicalOrigin,
     isExactOptionsSender,
     PAGE_ALLOWED_ROUTES,

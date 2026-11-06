@@ -281,7 +281,7 @@ consequences are carried by the matching register entry where one exists.
 - **Boundary:** TB2. **Evidence:** `authorizeToolReport` at
   `extension/lib/pure.js#authorizeToolReport` (the classifier), the dispatcher's admission gate
   `extension/lib/pure.js#isOwnExtensionSender` (cac6c r3/1fn9j: sender.id must equal the runtime
-  id, refused with uniform silence ahead of route resolution — census-clean per
+  id, refused with the identical generic reply ahead of route resolution — census-clean per
   `docs/INTERNAL-SENDER-CONTRACT-AUDIT.md` §4), `PAGE_ALLOWED_ROUTES` at
   `extension/lib/pure.js#PAGE_ALLOWED_ROUTES`, and the central listener at
   `extension/background/service-worker.js#chrome.runtime.onMessage.addListener`
@@ -529,7 +529,7 @@ consequences are carried by the matching register entry where one exists.
   (`isTrustedServiceWorkerSender`, or — since `chrome-agent-platform-cac6c`
   r3/1fn9j, superseding the r2 credit of the classifier — the central
   dispatcher's ENFORCEMENT predicate `isOwnExtensionSender` from `lib/pure.js`,
-  which yields the uniform rejection (silence, ahead of route resolution) at
+  which yields the uniform rejection (the identical generic reply, ahead of route resolution) at
   its call site; `authorizeToolReport` classifies already-admitted senders and
   is deliberately NOT credited — absent-tab/non-extension senders could reach
   kind `"extension"` and kind `"unmatched"` was refused only downstream, so
@@ -606,7 +606,7 @@ and each names the executable check that would catch a regression.
   `extension/background/service-worker.js#chrome.runtime.onMessage.addListener`
   (browser sender classification and derived-origin overwrite inside that listener);
   since cac6c r3 the listener first enforces `extension/lib/pure.js#isOwnExtensionSender`
-  (sender.id === runtime id, uniform silence for non-own senders) and dereferences
+  (sender.id === runtime id, the identical generic refusal for non-own senders) and dereferences
   `message.origin` only through a guarded string form, so a null-origin message is refused,
   never thrown;
   `scripts/security-suite.ts:307-308`. A new route that reads an origin, tab id or

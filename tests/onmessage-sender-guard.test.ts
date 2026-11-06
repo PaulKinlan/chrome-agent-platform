@@ -91,7 +91,7 @@ interface ListenerSite {
 // uncalled nested function still counts. Do not re-litigate; pinned by probe18.
 // cac6c r3 (1fn9j) adds exactly one vetted predicate: isOwnExtensionSender
 // (pure.js) — the central dispatcher's ENFORCEMENT point, which yields the
-// uniform rejection (silence, ahead of route resolution) AT ITS CALL SITE for
+// uniform rejection (the identical generic reply, ahead of route resolution) AT ITS CALL SITE for
 // anything that is not this extension. The r2 credit of authorizeToolReport is
 // SUPERSEDED: it is a CLASSIFIER of already-admitted senders — absent-tab and
 // non-extension senders could reach kind "extension", and kind "unmatched" was
@@ -1287,37 +1287,31 @@ Deno.test("cac6c regression: the central dispatcher classifies the sender before
   assert(bodyEnd > bodyStart, "the dispatcher listener body must close");
   const body = src.slice(bodyStart, bodyEnd);
   // cac6c r3 (1fn9j): the SENDER DECISION is the enforcement point and it
-  // runs FIRST — the foreign refusal (silence) precedes the classifier,
-  // which precedes any reply.
+  // runs FIRST — the foreign refusal precedes the classifier, which
+  // precedes any route knowledge. Every rejection takes THE IDENTICAL PATH:
+  // one deny helper, one generic literal, defined once.
   const ownIdx = body.indexOf("isOwnExtensionSender(sender, chrome.runtime.id)");
-  const foreignRefusalIdx = body.indexOf("if (!isOwnExtensionSender(sender, chrome.runtime.id)) return false;");
+  const denyIdx = body.indexOf('const deny = () => sendResponse({ ok: false, error: "unknown message" });');
   const authIdx = body.indexOf("authorizeToolReport(");
-  const replyIdx = body.indexOf("sendResponse(");
   assert(ownIdx > 0, "the dispatcher must enforce via the credited isOwnExtensionSender");
-  assert(foreignRefusalIdx > 0 && foreignRefusalIdx < authIdx, "the uniform foreign refusal precedes the classifier");
+  assert(denyIdx > 0, "every rejection must go through the single deny helper");
+  assert(denyIdx < ownIdx && ownIdx < authIdx, "the refusal shape is defined first, the sender decision precedes the classifier");
   assert(authIdx > 0, "the dispatcher must classify content-script senders via authorizeToolReport (classifier, NOT credited as authoriser)");
-  assert(replyIdx > 0, "the dispatcher must have a reply path");
-  assert(ownIdx < authIdx && authIdx < replyIdx, "NO reply may be emitted before the sender decision and the sender classification run");
-  assert(!body.includes("unknown message: ${"), "the unknown-message reply must not echo the caller-controlled type");
-  assert(body.includes('error: "unknown message"'), "the unknown-message reply is the generic shape");
-  // r3 finding 1 — uniform refusal: no rejection may echo classifier detail
-  // (the r2 shape answered known routes with error: auth.error while unknown
-  // routes stayed silent — a route-existence oracle). Hostile classes get
-  // silence everywhere; authorised classes get the ONE generic shape
-  // everywhere (unknown route AND forbidden page route use the identical
-  // literal).
+  assert(!body.includes("unknown message: ${"), "the rejection reply must not echo the caller-controlled type");
+  // ONE reply literal for EVERY rejection — foreign, unknown route, failed
+  // attestation, unmatched surface, forbidden page route. The uniformity
+  // that kills the route-enumeration oracle is the identical shape (the
+  // shipped integration contracts pin a refusal RESPONSE, not silence).
+  const genericReplies = body.match(/sendResponse\(\{ ok: false, error: "unknown message" \}\)/g) ?? [];
+  assert(genericReplies.length === 1, "exactly ONE rejection reply shape may exist (every denial goes through deny())");
+  const denyCallCount = (body.match(/\bdeny\(\);/g) ?? []).length;
+  assert(denyCallCount >= 4, "foreign, unknown-route/attestation/unmatched, and forbidden-page paths all deny through the one helper");
   assert(!body.includes("error: auth.error"), "no reply may echo classifier error detail (route oracle, r2 finding)");
   assert(!body.includes('"not authorized from a page"'), "the page-forbidden reply must be the generic shape, not a policy name");
-  const genericReplies = body.match(/sendResponse\(\{ ok: false, error: "unknown message" \}\)/g) ?? [];
-  assert(genericReplies.length >= 2, "unknown route and forbidden page route must take the IDENTICAL reply path");
-  const csErrorIdx = body.indexOf("if (auth.error) {");
-  assert(csErrorIdx > authIdx, "failed content-script attestation is refused in the dispatcher");
-  const csErrorBlock = body.slice(csErrorIdx, csErrorIdx + 480);
-  assert(csErrorBlock.includes("return false;") && !csErrorBlock.includes("sendResponse"), "failed attestation gets SILENCE — identical to the foreign refusal, on every route");
-  const unmatchedIdx = body.indexOf('auth.kind === "unmatched"');
-  assert(unmatchedIdx > 0, "the unmatched surface class is refused in the dispatcher");
-  const unmatchedBlock = body.slice(unmatchedIdx, unmatchedIdx + 460);
-  assert(unmatchedBlock.includes("return false;") && !unmatchedBlock.includes("sendResponse"), "unmatched senders get SILENCE, not a cross-origin diagnosis");
+  assert(!body.includes('if (auth.kind === "content-script" && auth.error) return false;'), "the r2 silence branch is gone — attestation failures take the same generic reply");
+  // MUTATION FALSIFIER for the credit (coord's bar): deleting the real
+  // enforcement reds this guard twice — ownIdx asserts the call exists AND
+  // the site loses its vetted-predicate credit in the census sweep.
   // r3 finding 2 — the classifier must never see a raw dereference: a
   // null-origin (or null) message used to throw synchronously in this
   // privileged listener before any refusal. The guarded form is the ONLY
