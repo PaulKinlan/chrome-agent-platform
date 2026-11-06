@@ -634,3 +634,85 @@ Deno.test("lrhyl r4: the marshal is idempotent and keeps honest records byte-ide
   const second = ledger.take("run-lrhyl-r4f").records[0];
   assertEquals(second.referer, "https://h.example/p", "userinfo credentials are stripped by the same marshal");
 });
+
+// --- lrhyl round 5: the four r4-marshal leak paths, structurally closed -------
+//
+// Review FAIL of round 4, four probes: (1) userinfo in FREE TEXT survives the
+// lexical scrub ('failed https://user:SECRET@h/p'); (2) a fragment carries a
+// secret and survived too; (3) object KEYS are not traversed - a query-bearing
+// URL as a KEY keeps it; (4) the uninspectable tag itself can embed the value
+// (a constructor name is attacker-influenceable). All four are the same
+// mistake in different clothes, so the fixes are structural: the lexical scrub
+// strips userinfo + query + fragment from every URL token, the deep walk
+// marshals keys exactly like values (via defineProperty, so a '__proto__' key
+// cannot pollute), and the tag vocabulary is FIXED - instanceof checks inside
+// try/catch, never reading .name/.toString, so no getter can smuggle the value
+// into the tag.
+
+Deno.test("lrhyl r5: free-text userinfo is scrubbed - 'failed https://user:SECRET@h/p' keeps nothing", () => {
+  const ledger = createPythonNetworkLedger();
+  ledger.record("run-lrhyl-r5a", { method: "GET", url: "https://h/p", ok: false, error: `failed https://user:LRHYL_SECRET_9317@h/p after 3ms`, ms: 3 });
+  const inflight = ledger.begin("run-lrhyl-r5a", { method: "GET", url: "https://h/q", origin: "https://h", startedAt: Date.now(), controller: null });
+  inflight.complete({ ok: false, error: `connect refused for https://admin:LRHYL_SECRET_9317@h.example:8443/x` });
+  const taken = ledger.take("run-lrhyl-r5a");
+  assertEquals(taken.records[0].error, "failed https://h/p after 3ms", "userinfo is stripped from free text at record()");
+  assertEquals(taken.records[1].error, "connect refused for https://h.example:8443/x", "and at complete(), port preserved");
+  const serialized = JSON.stringify(taken.records);
+  assert(!serialized.includes("LRHYL_SECRET_9317"), "the userinfo secret never reaches a model-readable record");
+  assert(!serialized.includes("user:") && !serialized.includes("admin:"), "not even the userinfo username");
+});
+
+Deno.test("lrhyl r5: free-text fragments are scrubbed - '#SECRET' is a credential location too", () => {
+  const ledger = createPythonNetworkLedger();
+  ledger.record("run-lrhyl-r5b", { method: "GET", url: "https://h/p", ok: false, error: `failed https://h/p#LRHYL_SECRET_9317 retrying`, ms: 3 });
+  const taken = ledger.take("run-lrhyl-r5b");
+  assertEquals(taken.records[0].error, "failed https://h/p retrying", "the fragment is dropped from the URL token");
+  assert(!JSON.stringify(taken.records).includes("LRHYL_SECRET_9317"));
+});
+
+Deno.test("lrhyl r5: object KEYS are marshalled exactly like values", () => {
+  const ledger = createPythonNetworkLedger();
+  const inflight = ledger.begin("run-lrhyl-r5c", { method: "GET", url: "https://h/k", origin: "https://h", startedAt: Date.now(), controller: null });
+  inflight.complete({
+    ok: true,
+    status: 200,
+    hdrs: { [`https://h/p?token=LRHYL_SECRET_9317`]: "value", clean: 1 },
+  });
+  const taken = ledger.take("run-lrhyl-r5c");
+  const keys = Object.keys(taken.records[0].hdrs);
+  assert(keys.includes("https://h/p"), "the query-bearing KEY is scrubbed");
+  assert(!keys.some((k) => k.includes("token=")), "no key keeps the query");
+  assertEquals(taken.records[0].hdrs["https://h/p"], "value", "the entry's value survives under the scrubbed key");
+  assertEquals(taken.records[0].hdrs.clean, 1, "clean keys untouched");
+  assert(!JSON.stringify(taken.records).includes("LRHYL_SECRET_9317"), "the key-borne secret never reaches the model");
+  // a '__proto__' key must not pollute the marshalled record's prototype
+  const ledger2 = createPythonNetworkLedger();
+  ledger2.record("run-lrhyl-r5c2", { method: "GET", url: "https://h/p2", ok: true, ms: 1, ["__proto__"]: { polluted: true } });
+  const rec2 = ledger2.take("run-lrhyl-r5c2").records[0];
+  assertEquals(Object.getPrototypeOf(rec2), Object.prototype, "the record keeps a normal prototype");
+  assertEquals((rec2 as any).polluted, undefined, "no prototype pollution through a marshalled key");
+});
+
+Deno.test("lrhyl r5: the uninspectable tag is NON-INFORMATIVE - fixed vocabulary, never the value", () => {
+  const ledger = createPythonNetworkLedger();
+  class Decoy {}
+  Object.defineProperty(Decoy, "name", { value: `LRHYL_SECRET_9317` }); // an attacker-influenceable constructor name
+  class Hostile {}
+  const inflight = ledger.begin("run-lrhyl-r5d", { method: "GET", url: "https://h/t", origin: "https://h", startedAt: Date.now(), controller: null });
+  inflight.complete({
+    ok: true,
+    status: 200,
+    decoy: new Decoy(),
+    sym: Symbol("LRHYL_SECRET_9317"),
+    map: new Map([["k", "LRHYL_SECRET_9317"]]),
+    hostile: new Hostile(),
+  });
+  const taken = ledger.take("run-lrhyl-r5d");
+  const rec = taken.records[0];
+  const serialized = JSON.stringify(taken.records);
+  assert(!serialized.includes("LRHYL_SECRET_9317"), "no tag embeds the value, the class name, or the symbol description");
+  for (const field of ["decoy", "sym", "map", "hostile"]) {
+    assertEquals(typeof rec[field], "string", `${field} is a tag string`);
+    assert(/^\[lrhyl-uninspectable:[A-Za-z]+\]$/.test(rec[field]), `${field}'s tag is from the FIXED vocabulary (got ${rec[field]})`);
+  }
+});

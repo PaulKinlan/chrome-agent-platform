@@ -102,15 +102,36 @@ export function urlWithoutQuery(raw) {
   }
 }
 
-/** Scrub query strings from URL-like tokens inside free text (lrhyl round 2).
- * Exception messages that quote a failed URL are model-visible and are not
- * guaranteed query-free, so every model-visible error string passes through
- * here at the ledger choke points. Lexical by design: it strips `?...` to the
- * next whitespace/quote/bracket on any http(s) or protocol-relative URL token
- * without parsing, so quasi-URLs a parser would reject still get scrubbed;
- * text with no URL token passes through verbatim. */
+/** Strip credential locations from URL-like tokens inside free text (lrhyl
+ * rounds 2+5). Exception messages that quote a failed URL are model-visible
+ * and are not guaranteed clean, so every model-visible free-text string passes
+ * through here at the ledger choke points. Lexical by design: on any http(s)
+ * or protocol-relative URL token it strips (a) userinfo — 'user:pass@' — (b)
+ * the query and (c) the fragment, each to the next whitespace/quote/bracket;
+ * quasi-URLs a parser would reject still get scrubbed, and text with no URL
+ * token passes through verbatim. Round 5: userinfo and fragments are
+ * credential locations exactly like the query ('failed
+ * https://user:SECRET@h/p', 'https://h/p#SECRET' both leaked before). */
 export function scrubUrlQueries(text) {
-  return String(text ?? "").replace(/((?:https?:)?\/\/[^\s"'`)\]]*)\?[^\s"'`)\]]*/gi, "$1");
+  return String(text ?? "")
+    .replace(/((?:https?:)?\/\/)[^\s"'`@)\]]*@/gi, "$1")
+    .replace(/((?:https?:)?\/\/[^\s"'`)\]]*)[?#][^\s"'`)\]]*/gi, "$1");
+}
+
+/** The tag vocabulary for values the marshal cannot inspect — FIXED names
+ * decided by instanceof checks inside try/catch. It never reads .name,
+ * .constructor or .toString off the value: those are attacker-influenceable
+ * getters, and a tag embedding them turns the fallback itself into the leak
+ * (lrhyl round 5, review finding 4). */
+function uninspectableKind(value) {
+  try {
+    if (value instanceof Map) return "Map";
+    if (value instanceof Set) return "Set";
+    if (value instanceof Date) return "Date";
+    if (value instanceof RegExp) return "RegExp";
+    if (ArrayBuffer.isView(value)) return "View";
+  } catch { /* hostile Symbol.hasInstance — the generic tag below is safe */ }
+  return "object";
 }
 
 /** lrhyl round 4 (review finding, coord's structural spec): ONE marshal that
@@ -122,8 +143,13 @@ export function scrubUrlQueries(text) {
  * instances via toString, strip any string that PARSES as a URL carrying a
  * query, hash or userinfo (all credential locations) down to origin+path while
  * clean URLs keep their exact shape (origins must not grow a slash), lexically
- * scrub URL tokens inside free text, and TAG anything that cannot be inspected
- * — a tag is honest and model-visible; a silent skip looks like success.
+ * scrub URL tokens inside free text (userinfo, query AND fragment — round 5),
+ * marshal object KEYS exactly like values (round 5: a query-bearing URL as a
+ * key leaked before; assignment goes through defineProperty so a '__proto__'
+ * key can never repoint the prototype), and TAG anything that cannot be
+ * inspected with the FIXED uninspectableKind vocabulary — a tag is honest and
+ * model-visible; a silent skip looks like success, and an informative tag is
+ * itself a leak.
  * Circular structures and depth > 8 are tagged, never walked to death.
  * Idempotent: marshalling an already-marshalled record is a no-op, so take()
  * re-marshals at the observation boundary as defense in depth (a hypothetical
@@ -154,10 +180,20 @@ export function marshalModelReadable(value, depth = 0, path = null) {
   const proto = Object.getPrototypeOf(value);
   if (proto === Object.prototype || proto === null) {
     const out = {};
-    for (const [k, v] of Object.entries(value)) out[k] = marshalModelReadable(v, depth + 1, deeper);
+    for (const [k, v] of Object.entries(value)) {
+      // Round 5: keys are model-visible strings exactly like values — marshal
+      // them with the same walker. defineProperty so a '__proto__' key becomes
+      // a plain own property and can never repoint out's prototype.
+      Object.defineProperty(out, marshalModelReadable(k, depth + 1, deeper), {
+        value: marshalModelReadable(v, depth + 1, deeper),
+        enumerable: true,
+        writable: true,
+        configurable: true,
+      });
+    }
     return out;
   }
-  return `[lrhyl-uninspectable:${value.constructor?.name ?? "object"}]`; // class instances (Map, Date, ...): tagged wholesale
+  return `[lrhyl-uninspectable:${uninspectableKind(value)}]`; // class instances: FIXED vocabulary, never a value-derived name
 }
 
 /** Read a persisted grant list into the canonical, de-duplicated shape.

@@ -132,11 +132,15 @@ inventory and the sender/inventory guard described in INV-15.
   `?key=` pattern). The normalization is a SINGLE marshal every record passes
   through before it can be observed — `extension/lib/python-network.js#marshalModelReadable`
   (lrhyl round 4, after a review found a fourth, pre-existing writer bypassing
-  the round-3 walker): it deep-walks plain objects and arrays, converts URL
-  instances via toString, strips any string that parses as a URL to origin+path
-  (query, hash and userinfo are all credential locations), lexically scrubs URL
-  tokens in free text, and TAGS anything it cannot inspect rather than silently
-  skipping it. All four writers (begin, complete, record, abortInFlight) route
+  the round-3 walker): it deep-walks plain objects and arrays — object KEYS exactly
+  like values, so a '__proto__' key cannot repoint a prototype and a query-bearing
+  URL cannot hide in a key (round 5) — converts URL instances via toString, strips
+  any string that parses as a URL carrying a query, hash or userinfo (all credential
+  locations) to origin+path, lexically scrubs userinfo, query AND fragment from URL
+  tokens in free text, and TAGS anything it cannot inspect with a FIXED type
+  vocabulary (round 5: never a value-derived name — an informative tag is itself a
+  leak) rather than silently skipping it. All four writers (begin, complete, record,
+  abortInFlight) route
   through it and take() re-marshals at the observation boundary, so no writer
   path can smuggle a query through the `url` field, through `origin`, through a
   nested value, or through any future field arriving via a caller spread
