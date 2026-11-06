@@ -89,6 +89,15 @@ Deno.test("zw8f0: changing build script selects tests/build-once-capture.test.ts
   );
 });
 
+Deno.test("cac6c: a service-worker.js delta selects the onMessage sender-guard census", () => {
+  const reverse = buildReverseGraph();
+  const selected = selectTestFiles(["extension/background/service-worker.js"], reverse);
+  assert(
+    selected.includes("tests/onmessage-sender-guard.test.ts"),
+    "the guard that POLICES service-worker.js's listeners must run on any sw.js delta: three consecutive edits (lrhyl, hvd4s, khwi9) ran their gates without it and a P1 reply-before-trust dispatcher hole reached main (cac6c)",
+  );
+});
+
 Deno.test("select-tests: changed test files always run themselves", () => {
   const selected = selectTestFiles(["tests/security.test.ts"], null);
   assert(selected.includes("tests/security.test.ts"), "a changed test file must run itself");

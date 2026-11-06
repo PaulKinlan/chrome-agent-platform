@@ -3,11 +3,14 @@
 //
 // Invariants guarded:
 //   1. Every `chrome.runtime.onMessage.addListener` call in extension/ must accept a `sender` parameter
-//      and validate it by CALLING the vetted production predicate (isTrustedServiceWorkerSender)
+//      and validate it by CALLING a vetted production predicate (isTrustedServiceWorkerSender, or —
+//      cac6c — the central dispatcher's sender classifier authorizeToolReport, both lib/pure.js)
 //      DIRECTLY: the exact imported identifier, unshadowed, not renamed (`as`), not aliased,
 //      not re-exported — or be listed in ALLOWLISTED_SITES with a one-line justification naming
 //      what checks the sender instead. Inline sender checks, however correct, never count
-//      (69bvp round-3 re-scope: sound by construction, not by dataflow proof).
+//      (69bvp round-3 re-scope: sound by construction, not by dataflow proof). Predicate credit is
+//      binding-level and ORDER-blind, so the cac6c regression probe at the bottom of this file pins
+//      what credit cannot see: the central dispatcher must classify BEFORE it replies.
 //   2. Falsification tests verify that un-checked, ignored (_sender), single-param,
 //      id-only-checking, and inline-checked listeners fail RED, and that predicate credit
 //      requires a direct call through the exact import binding (name alone, renamed imports,
@@ -85,8 +88,16 @@ interface ListenerSite {
 // ACCEPTED RESIDUAL (deliberate, reviewer-acknowledged in round 4): credit is
 // binding-level, not execution-path - an imported vetted call inside an
 // uncalled nested function still counts. Do not re-litigate; pinned by probe18.
+// cac6c adds exactly one vetted predicate: authorizeToolReport (pure.js) — the
+// production sender CLASSIFIER for the central dispatcher, which accepts page
+// senders by design and therefore can never call isTrustedServiceWorkerSender.
+// It derives identity from the browser-attested sender (never the message
+// body) and validates the origin itself. Credit is binding-level like every
+// other vetted call, so the ORDERING (classify before any reply) is pinned
+// separately by the cac6c regression test below — the two together are what
+// the old line-coupled allowlist entry claimed but never enforced.
 const VETTED_PREDICATE_SOURCES: Record<string, Set<string>> = {
-  "extension/lib/pure.js": new Set(["isTrustedServiceWorkerSender"]),
+  "extension/lib/pure.js": new Set(["isTrustedServiceWorkerSender", "authorizeToolReport"]),
 };
 
 // True iff a binding pattern (const/let/var id, param, catch param,
@@ -395,13 +406,15 @@ function analyzeOnMessageListeners(code: string, filePath: string): ListenerSite
 // a direct vetted-predicate call (69bvp re-scope: the ONLY alternative the
 // inventory accepts). Every entry must name what checks the sender instead.
 const ALLOWLISTED_SITES = new Map<string, string>([
-  [
-    // NOTE: this key is line-coupled by design (the guard inventory reports
-    // sites by file:line) — edits ABOVE the central dispatcher in
-    // service-worker.js must renumber it. hvd4s moved it 13361 → 13365.
-    "extension/background/service-worker.js:13365",
-    "central dispatcher: accepts page/content-script senders BY DESIGN; sender classified by authorizeToolReport (lib/pure.js:912) and route authority enforced per-route (Layers 1-3)",
-  ],
+  // cac6c REMOVED the service-worker.js central-dispatcher entry that used to
+  // sit here (line-coupled by design, renumbered at every edit above it —
+  // lrhyl missed the renumber and the exposed site failed, correctly: the
+  // entry had been masking a real reply-before-trust ordering bug). The
+  // dispatcher is now credited the honest way — a direct call to the vetted
+  // classifier authorizeToolReport(sender, ...) in the listener body — and the
+  // ordering the old justification merely ASSERTED is ENFORCED by the cac6c
+  // regression test below. Nothing in this map keys to service-worker.js any
+  // more, so no line shift there can rot it.
   [
     "extension/content/content-script.js:399",
     "content script receiving SW pushes: isTrustedServiceWorkerSenderPort — faithful port of pure.js isTrustedServiceWorkerSender (KEEP IN SYNC), id + tab/documentId absence + url pins the compiled SW bundle; pinned by the behavioral content-script test below",
@@ -1238,4 +1251,42 @@ Deno.test("census: docs/SW-DISPATCH-AUTHORITY-CENSUS.md documents non-dispatcher
   assert(census.includes("extension/lib/script-host.js"), "census must list script-host.js");
   assert(census.includes("extension/offscreen/offscreen.js"), "census must list offscreen.js");
   assert(census.includes("extension/lib/provider-gate.js"), "census must list provider-gate.js");
+});
+
+// cac6c REGRESSION: the central dispatcher answered the unknown-message case
+// BEFORE authorizeToolReport ran — a reply path ahead of the trust predicate.
+// The line-coupled allowlist entry that used to cover this site had masked the
+// ordering since hvd4s; lrhyl's +63 lines moved the site off its key and the
+// guard exposed it. The entry is now GONE (the dispatcher is credited via the
+// vetted authorizeToolReport call itself), but credit is binding-level and
+// cannot see ORDER — so this probe pins what the allowlist only asserted: NO
+// reply may be emitted before the classification call, the unknown-message
+// reply must not echo the caller's type, and an unauthorized page sender must
+// get SILENCE — not a differentiated error that confirms the channel exists
+// (coord's requirement). Marker-based on the listener's identity, NEVER on a
+// line number (5q524's lesson; khwi9 moved this file 14 lines in one merge).
+Deno.test("cac6c regression: the central dispatcher classifies the sender before ANY reply", async () => {
+  const src = await Deno.readTextFile(new URL("../extension/background/service-worker.js", import.meta.url));
+  // Marker-based, never line-based: the routeLog 'route' debug call appears
+  // exactly once and opens the central dispatcher's listener body.
+  const anchor = src.indexOf('routeLog.debug("route"');
+  assert(anchor > 0, "the central dispatcher's routeLog anchor must exist");
+  const bodyStart = src.indexOf("{", src.lastIndexOf("addListener(", anchor));
+  assert(bodyStart > 0, "the dispatcher listener body must open before the routeLog anchor");
+  let depth = 0;
+  let bodyEnd = -1;
+  for (let i = bodyStart; i < src.length; i++) {
+    if (src[i] === "{") depth++;
+    else if (src[i] === "}") { depth--; if (depth === 0) { bodyEnd = i; break; } }
+  }
+  assert(bodyEnd > bodyStart, "the dispatcher listener body must close");
+  const body = src.slice(bodyStart, bodyEnd);
+  const authIdx = body.indexOf("authorizeToolReport(");
+  const replyIdx = body.indexOf("sendResponse(");
+  assert(authIdx > 0, "the dispatcher must classify via authorizeToolReport");
+  assert(replyIdx > 0, "the dispatcher must have a reply path");
+  assert(authIdx < replyIdx, "NO reply may be emitted before the sender classification runs (cac6c: the unknown-message reply preceded authorizeToolReport)");
+  assert(!body.includes("unknown message: ${"), "the unknown-message reply must not echo the caller-controlled type");
+  assert(body.includes('error: "unknown message"'), "the unknown-message reply is the generic shape");
+  assert(body.includes("if (auth.kind === \"content-script\" && auth.error) return false;"), "an unauthorized page sender gets silence: the channel closes with no reply (never a differentiated error confirming the channel exists)");
 });

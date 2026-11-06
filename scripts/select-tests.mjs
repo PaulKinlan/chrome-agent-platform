@@ -81,6 +81,14 @@ export const SOURCE_INSPECTING_GUARDS = [
   // A tools.js / memory.js / SW change has no import edge into that scan.
   "tests/enrollment-authority-reader-census.test.ts",
   "tests/sw-dispatch-authority-census.test.ts",
+  // cac6c: the AST census of EVERY runtime.onMessage listener in extension/ walks the
+  // tree with fs.readdirSync — no static import edge from the files it polices (and the
+  // source-inspecting meta-guard's walk detector does not recognise that shape, a
+  // detection gap filed separately). THREE consecutive deltas edited service-worker.js
+  // (lrhyl, hvd4s, khwi9) with this guard never selected, and a P1 reply-before-trust
+  // dispatcher hole reached main and lived there until the merger's full suite caught
+  // it. A SW-only edit must select the listener census, exactly like the o75bp entries.
+  "tests/onmessage-sender-guard.test.ts",
   "tests/sw-route-modularization.test.ts",
   // luq4w: one text-only test reads the census and launcher source; no browser launch.
   "tests/census-resolution-wiring.test.ts",

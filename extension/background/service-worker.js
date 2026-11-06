@@ -13406,20 +13406,28 @@ durableRecoveryReady.then(async () => {
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   routeLog.debug("route", message?.type, sender?.tab?.id != null ? `tab:${sender.tab.id}` : "extension");
-  if (!handlers[message?.type]) {
-    sendResponse({ ok: false, error: `unknown message: ${message?.type}` });
-    return true;
-  }
-
-  // Sender authorization: a content script may only upsert/read its OWN origin's
-  // tools; it may never touch memory/admin routes. The pure classifier in
-  // lib/pure.js derives + validates the origin (never trusts a message origin).
+  // cac6c: sender classification runs BEFORE any reply. The old shape answered
+  // the unknown-message case before authorizeToolReport — a reply path ahead
+  // of trust that also echoed the caller's `type` back to any page that could
+  // reach the channel. Unauthorized senders now get SILENCE: the channel
+  // closes with no reply, so a random page cannot fingerprint the router's
+  // existence through a differentiated error.
   const auth = authorizeToolReport(
     sender,
     message.origin,
     canonicalOrigin,
     chrome.runtime.id,
   );
+  if (!handlers[message?.type]) {
+    if (auth.kind === "content-script" && auth.error) return false;
+    sendResponse({ ok: false, error: "unknown message" });
+    return true;
+  }
+
+  // Sender authorization: a content script may only upsert/read its OWN origin's
+  // tools; it may never touch memory/admin routes. The pure classifier in
+  // lib/pure.js derives + validates the origin (never trusts a message origin).
+  // (cac6c: computed above, before any reply — the enforcement continues here.)
   let routeContext = {
     principal: "extension",
     documentId: typeof sender?.documentId === "string" ? sender.documentId : "",

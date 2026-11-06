@@ -514,11 +514,19 @@ consequences are carried by the matching register entry where one exists.
   `runtime.onMessage.addListener` registrations. It resolves simple aliases of
   `chrome.runtime` / its `onMessage` event object and fails closed on any
   reference it cannot enumerate (`chrome-agent-platform-2i86h`), and it credits
-  a listener's sender check ONLY when it calls the vetted production predicate
-  (`isTrustedServiceWorkerSender` or its exported aliases, resolved through the
+  a listener's sender check ONLY when it calls a vetted production predicate
+  (`isTrustedServiceWorkerSender`, or — since `chrome-agent-platform-cac6c` —
+  the central dispatcher's sender classifier `authorizeToolReport`, both from
+  `lib/pure.js`, resolved through the
   file's import bindings) or carries an explicit allowlist entry with a
   justification — inline sender checks, including ID-only comparisons, never
-  count per INV-15 (`chrome-agent-platform-69bvp`). `onConnect`
+  count per INV-15 (`chrome-agent-platform-69bvp`). Credit is binding-level
+  and cannot see ORDER, so cac6c pins the dispatcher's classify-before-reply
+  ordering with a dedicated regression probe in the same suite, and the suite
+  itself is always-selected (`SOURCE_INSPECTING_GUARDS`): three consecutive
+  `service-worker.js` deltas (lrhyl, hvd4s, khwi9) ran their gates without it,
+  and a P1 reply-before-trust hole reached main before the merger's full suite
+  caught it. `onConnect`
   hosts are outside its scope by design — the ACP model host validates its own
   port sender separately (`extension/lib/acp-model-host.js:5-13`), as noted in
   the controls above. Census §6.2 remains onMessage-only and does not enumerate
