@@ -10,11 +10,7 @@ import { createPanelContext } from "./panel-context.js";
 import { mount as mountSkillsPanel } from "./panels/skills.js";
 import { mount as mountUsagePanel } from "./panels/usage.js";
 import { mount as mountAboutPanel } from "./panels/about.js";
-import {
-  DEVELOPER_FEATURES_KEY,
-  DEVELOPER_SECTIONS_SET,
-  normalizeSettingsSectionId,
-} from "../lib/pure.js";
+import { DEVELOPER_FEATURES_KEY, DEVELOPER_SECTIONS_SET, normalizeSettingsSectionId } from "../lib/pure-trust.js";
 import { hydrateI18n } from "../shared/i18n.js";
 
 export const HUB_OK_PANEL_MODULES = Object.freeze({

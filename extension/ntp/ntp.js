@@ -42,7 +42,8 @@ import {
   validateTaskInstructionAdmission,
 } from "../shared/composer-commands.js";
 import { runStagedBoot } from "./ntp-boot-scheduler.js";
-import { formatSidebarAgentRole, sleep, timeAgo } from "../lib/pure.js";
+import { formatSidebarAgentRole } from "../lib/pure-tabs.js";
+import { sleep, timeAgo } from "../lib/pure-text.js";
 import { canonicalRef, findAgentByRef } from "../shared/agent-registry.js";
 import { agentScheduleMarker, backgroundAgentsForDisplay } from "../shared/agent-display.js";
 import { buildTemplateSelect } from "../lib/agent-template-select.js";
