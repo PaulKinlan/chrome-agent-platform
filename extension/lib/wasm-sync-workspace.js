@@ -195,7 +195,8 @@ function exactDenseArrayValues(value, maxLength) {
 //      count; it can never enter the dense output. Extra ENUMERABLE keys of any
 //      shape still fail, and extra own symbols fail the bounded symbol check —
 //      which runs BOTH before and after the walk (b4pei round 2), so a symbol
-//      added mid-walk fails too.
+//      added mid-walk fails too. All of that is scoped to ORDINARY arrays; for
+//      Proxy-wrapped inputs see the carve-out below.
 //   3. An extra ENUMERABLE string key ADDED by an index getter's side effect
 //      after the bounded key-set proof has run is accepted and inert: the
 //      proof is not re-run, and the fresh dense output cannot carry the key.
@@ -205,6 +206,30 @@ function exactDenseArrayValues(value, maxLength) {
 //      limit of bounded checking — not an output-purity one. Each residual is
 //      pinned behaviourally in tests/wasm-sync-workspace-validator-walk.test.ts,
 //      so code drift away from these bounds reds a suite, not just this text.
+//
+// PROXY CARVE-OUT (b4pei round 3, reviewer-demonstrated): the rejection
+// guarantees above — the double symbol check included — hold for ORDINARY
+// arrays. A Proxy turns every reflective call this validator makes
+// (getPrototypeOf, getOwnPropertyDescriptor, ownKeys/keys, own-symbols, each
+// indexed Get) into an attacker-scheduled callback, so no finite check
+// sequence can deliver them: the round-2 reviewer's repro snapshots ownKeys
+// INSIDE the final symbol check, fires an index getter that adds a symbol,
+// and returns the stale snapshot — accepted, with the symbol on the input
+// (output still pure). Two rounds each closed one window and exposed the
+// next; the honest shape is to state the boundary, not patch a third line.
+// On a Proxy, getOwnPropertySymbols additionally materialises whatever key
+// list the trap returns (measured: 100001 ownKeys for a 100000-element
+// target), so even the O(symbol-count) cost claim below is ordinary-array
+// scoped. Among ordinary-array inputs, residual 4 remains the narrowest
+// window; the carve-out is a different class, not a wider window in the same
+// class. WHAT STILL HOLDS FOR EVERY INPUT, Proxy included, IS OUTPUT PURITY:
+// the fresh dense result carries only byte-validated values and can never
+// carry an input key, symbol or accessor — pinned behaviourally with the repro
+// itself. Threat scope: no serialization boundary delivers a Proxy (JSON
+// cannot express one; structured clone / postMessage refuse one — the same
+// boundary fact the residuals intro relies on), so a Proxy seed requires
+// same-realm code: either this codebase, or an attacker who already has code
+// execution where no validator is a boundary.
 // A getter mutating the input mid-walk is re-checked at bounded cost: after the
 // walk the prototype and the `length` descriptor must be unchanged, and every
 // byte in the result passed its own range check at its own single Get.
@@ -236,11 +261,20 @@ function exactDenseByteArray(value, maxLength) {
   // chrome-agent-platform-b4pei round 2 (reviewer's live repro): the pre-walk
   // zero-symbol proof can be defeated by an index getter's side effect adding
   // a symbol mid-walk. A symbol present after the walk fails too, so the
-  // "extra own symbols fail" guarantee covers late additions; only a symbol
-  // added AND removed entirely inside the walk survives (residual 4) — it is
-  // never read and cannot reach the dense output. gOPS on a dense array is
+  // "extra own symbols fail" guarantee covers late additions ON ORDINARY
+  // ARRAYS; only a symbol added AND removed entirely inside the walk survives
+  // (residual 4) — it is never read and cannot reach the dense output.
+  // Round 3 scoping (reviewer's second repro): this re-check is ITSELF a
+  // callback window on a Proxy — an ownKeys trap can snapshot keys, fire a
+  // getter that adds a symbol, and return the stale snapshot — and gOPS on a
+  // Proxy materialises the trap's whole key list (measured: 100001 ownKeys
+  // for a 100000-element target), so neither the guarantee nor the
+  // O(symbol-count) cost claim below applies to Proxy-wrapped inputs; see the
+  // PROXY CARVE-OUT in the contract comment. On ordinary arrays gOPS is
   // O(symbol count), so unlike an Object.keys re-enumeration this does NOT
-  // reintroduce the O(n) reflective pass j7k25 removed.
+  // reintroduce the O(n) reflective pass j7k25 removed. Output purity (fresh
+  // dense result, every value byte-checked, nothing else can ride) holds for
+  // every input, Proxy included.
   if (Object.getOwnPropertySymbols(value).length !== 0) seedFail();
   return dense;
 }
@@ -252,9 +286,15 @@ function classForPath(path) {
 // Validate a trusted workspace seed. The schema is EXACTLY
 // `workspaceSeed: { files: [{ path, bytes }] }`. Every layer must be a plain
 // ordinary object/array with only own properties: no sparse indexes and no
-// custom/null prototypes. Proxy traps are caught and normalized to the stable
-// job-seed failure (transparent non-trapping proxies are not distinguishable
-// in JavaScript).
+// custom/null prototypes. A Proxy-wrapped value cannot be distinguished from
+// an ordinary one — that is JavaScript's design, and b4pei round 3 proved the
+// consequence: a trap is an attacker-scheduled callback that can answer every
+// check with exactly what the check wants to see AND run side effects between
+// checks, so while trap behaviour that TRIPS a check normalizes to the stable
+// job-seed failure, no finite check sequence can PROMISE rejection for Proxy
+// inputs. The rejection guarantees below are therefore scoped to ordinary
+// objects and arrays (see the PROXY CARVE-OUT at exactDenseByteArray); what
+// holds for EVERY input, Proxy included, is the purity of the frozen output.
 //
 // GETTERS AND EXTRA KEYS, PER LAYER (chrome-agent-platform-puykr: this
 // contract used to promise "no getters / no extra string or symbol keys"
@@ -285,12 +325,30 @@ function classForPath(path) {
 //   count; getter-less setter or invalid return: byte check), every extra
 //   ENUMERABLE string key PRESENT WHEN THE KEY-SET PROOF RUNS fails, extra own
 //   symbols fail the bounded symbol check at EITHER of its two runs (a symbol
-//   added mid-walk and still present afterwards fails), and nonenumerable
+//   added mid-walk and still present afterwards fails) — all of it on ORDINARY
+//   arrays — and nonenumerable
 //   index DATA now fails - a deliberate tightening of the pre-j7k25 ownKeys
 //   shape, not a relaxation. Each residual has a behavioural pin in
 //   tests/wasm-sync-workspace-validator-walk.test.ts; the per-layer function
 //   attributions in this paragraph are prose (no executable census pins them
 //   to the code yet).
+//   PROXY CARVE-OUT (b4pei round 3, reviewer-demonstrated and pinned with the
+//   repro itself): the rejection guarantees above do NOT extend to
+//   Proxy-wrapped inputs. Every reflective call a validator makes on a Proxy
+//   is an attacker-scheduled callback — the round-2 repro snapshots ownKeys
+//   inside the FINAL symbol check, fires an index getter that adds a symbol,
+//   and returns the stale snapshot: ACCEPTED, symbol on the input, output
+//   pure — and gOPS on a Proxy materialises the trap's whole key list
+//   (100001 ownKeys measured for a 100000-element target), so the
+//   O(symbol-count) cost claim is ordinary-array scoped too. No finite check
+//   sequence can close this; the boundary is stated instead of patched. What
+//   holds for EVERY input is OUTPUT PURITY: the fresh dense clone carries
+//   only byte-validated values, never an input key, symbol or accessor. No
+//   serialization boundary delivers a Proxy (JSON cannot express one;
+//   structured clone / postMessage refuse one), so the carve-out costs
+//   nothing at the seed's real boundary — a Proxy seed requires same-realm
+//   code, which is either this codebase or an attacker who already has code
+//   execution.
 //
 // Paths are
 // unique relative `inputs/<file>` OR `scratch/<file>` rows (mixed classes are

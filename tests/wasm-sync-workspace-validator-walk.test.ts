@@ -234,3 +234,47 @@ Deno.test("b4pei r2 source pin: the post-walk re-check re-runs the symbol proof 
     "the zero-symbol proof runs exactly twice: before the walk and after it",
   );
 });
+
+// --- b4pei round 3: the PROXY CARVE-OUT is a documented, pinned contract boundary ----------------
+//
+// The round-2 verdict proved that on a Proxy-wrapped input the post-walk
+// symbol re-check is ITSELF an attacker-scheduled callback: an ownKeys trap
+// can snapshot the keys, fire an index getter that adds a symbol, and return
+// the stale snapshot - the final gOPS sees zero symbols while the input
+// carries one. No finite check sequence closes that (every reflective call on
+// a Proxy is a trap callback), and gOPS on a Proxy materialises the trap's
+// whole key list (reviewer measured 100001 ownKeys for a 100000-element
+// target), so the rejection guarantees and the O(symbol-count) cost claim are
+// ordinary-array scoped in the contract text. This pin asserts BOTH halves of
+// the honest boundary: the documented ACCEPTANCE (if a future shape starts
+// refusing this input the pin reds and the carve-out text must change with
+// it - drift reds in both directions) and the guarantee that holds for EVERY
+// input: OUTPUT PURITY.
+
+Deno.test("b4pei r3 PROXY CARVE-OUT: a trap window inside the FINAL symbol check smuggles a symbol past it - accepted, and the frozen output is still pure", () => {
+  const target = [1, 2, 3];
+  const sym = Symbol("trap-window");
+  let getterCalls = 0;
+  Object.defineProperty(target, 0, {
+    get() {
+      getterCalls++;
+      if (getterCalls === 2) (target as any)[sym] = 9; // fires inside the final gOPS's ownKeys trap
+      return 1; // the snapshot VALUE is stable - only the side effect varies
+    },
+    enumerable: true,
+    configurable: true,
+  });
+  const proxy = new Proxy(target, {
+    ownKeys(t) {
+      const keys = Reflect.ownKeys(t); // snapshot BEFORE any side effect
+      if (getterCalls >= 1) (t as any)[0]; // fire the getter only during the POST-walk symbol check
+      return keys; // stale: excludes the just-added symbol
+    },
+  });
+  const ok = validateWorkspaceSeed({ files: [row("scratch/proxy-window.bin", proxy)] });
+  assert(getterCalls >= 2, "the getter fired during the final symbol check's ownKeys trap (the window is real)");
+  assertEquals(Object.getOwnPropertySymbols(target).length, 1, "the INPUT carries the smuggled symbol");
+  assertEquals([...ok.files[0].bytes], [1, 2, 3], "the frozen output is exactly the snapshot bytes");
+  assertEquals(Object.getOwnPropertySymbols(ok.files[0].bytes).length, 0, "OUTPUT PURITY: no symbol rides into the clone");
+  assert(Object.isFrozen(ok.files[0].bytes), "the output is frozen");
+});
