@@ -13,19 +13,32 @@ import { dirname, join } from "node:path";
 //
 // OWNER DECISION (Paul, 2026-10-05): "The limits make no sense anymore." Bundle
 // sizes are reported, not fatal, EXCEPT the store offscreen bundle's explicit
-// 259000-byte ceiling (250000 at rmoh8, ratcheted to 258000 by bwxf, then to
-// 259000 by hvd4s as an explicit tracked bridge authorised by the hub - the P2
-// unbounded-streaming-read fix measured +374 B at its shrunk floor over a
-// pristine 80 B headroom floor; the x2ux1 offscreen bundle split removes the
-// need and the ceiling is re-set from measurement when it lands - see the
-// STORE_BUNDLE_BUDGETS entry below). The integrity invariants below still throw.
+// 65000-byte ceiling (250000 at rmoh8, ratcheted to 258000 by bwxf, then to
+// 259000 by hvd4s as an explicit tracked bridge authorised by the hub, and
+// RE-BASED to 65000 from measurement by chrome-agent-platform-892u2 when the
+// x2ux1 offscreen split landed: the split entry measures 57,876 B, which retires
+// the bridge's need - see the STORE_BUNDLE_BUDGETS entry below). The integrity
+// invariants below still throw.
 // The developer build stays unminified with source maps
 // (CAP-FB-20260826-OBSERVABILITY-01).
 
 /** Store-target service-worker budget: 3.0 MB minified. */
 export const STORE_SW_BUDGET_BYTES = 3_000_000;
 
-export const STORE_AGGREGATE_CHUNKS_BUDGET_BYTES = 750_000;
+/**
+ * Store aggregate size of every emitted dynamic chunk (minified).
+ * 892u2 (2026-11-06): 750_000 -> 1_000_000, re-based ONCE from measurement, the
+ * one re-base the c2j4t/892u2 design authorised. Before the offscreen split the
+ * aggregate measured 631,172 B across 13 chunks (18.8% headroom). Offscreen then
+ * joined the UI group's splitting build, so the modules it used to inline - the
+ * wasm tool-execution cluster - became chunks the UI entries share instead of
+ * per-entry copies: measured 831,632 B across 18 chunks on the same tree. The
+ * aggregate line is what keeps entry-level dedupe honest (bytes moved to chunks
+ * are still budgeted), so it moves with the chunk SET, not with the dedupe: the
+ * shipped package total fell 5,899,085 -> 5,769,301 B in the same landing.
+ * Slack: +168,368 B (20.2%), matching the 18.8% the line carried before.
+ */
+export const STORE_AGGREGATE_CHUNKS_BUDGET_BYTES = 1_000_000;
 
 /**
  * Store-target reference sizes for EVERY generated bundle (minified bytes),
@@ -53,18 +66,29 @@ export const STORE_BUNDLE_BUDGETS = Object.freeze({
   // by the hub (relayed via coord, 2026-11-06), not a landing detail.
   // WHY the number moved: the P2 unbounded-streaming-read security fix (stream
   // responses with an exact byte ceiling + cancel instead of buffering whole
-  // bodies) adds lib/fetch-body-bound.js to script-host.js, which ships inside
+  // bodies) added lib/fetch-body-bound.js to script-host.js, which ships inside
   // this bundle. Measured at the pristine baseline origin/main 4eaf536a0:
   // 257,920 bytes - only 80 B of headroom, so ANY script-host-touching security
-  // fix of this shape trips the ceiling. The helper was shrunk to its floor
+  // fix of this shape tripped the ceiling. The helper was shrunk to its floor
   // first (no exported constant, no bytesRead API, no releaseLock finally,
   // fire-and-forget cancel, exact-cap chunk slicing): measured 258,294, a
-  // +374 B delta that cannot fit in 80 B.
-  // WHAT removes the need: chrome-agent-platform-x2ux1, the offscreen bundle
-  // split, fast-tracked by the same hub decision - dedupe shared weight, then
-  // a deliberate ceiling with stated slack, then the split. When x2ux1 lands,
-  // re-set this ceiling from measurement; do not ratchet again.
-  "offscreen.bundle.js": 259_000,
+  // +374 B delta that could not fit in 80 B. WHAT removes the need: the x2ux1
+  // offscreen bundle split, which landed as 892u2 below.
+  // 892u2 (2026-11-06): 259_000 -> 65_000, and the bridge RETIRES. This is not a
+  // ratchet in either direction: it is a re-base onto the measured POST-SPLIT
+  // entry, exactly as the hvd4s bridge said to do ("When x2ux1 lands, re-set this
+  // ceiling from measurement; do not ratchet again"). The entry moved into the UI
+  // group's splitting build (build.mjs), so its shared modules - the wasm tool
+  // execution cluster that x2ux1 measured as ~93% duplication - now ship as chunks
+  // the UI entries already carry. Measured ONCE on the landed tree, same tree
+  // pre/post split: offscreen.bundle.js 258,294 -> 57,876 B (-200,418 B); chunks
+  // aggregate 631,172 (13) -> 831,632 (18); package total 5,899,085 -> 5,769,301
+  // (-129,784 B, the dedupe gain, matching x2ux1's -130k estimate).
+  // SLACK: +7,124 B (12.3%) so an admitted offscreen host or a descriptor wave
+  // (bwxf measured ~1,300 B per tool) does not re-litigate a ceiling it cannot
+  // influence, while a re-inlined duplicate - the pre-split failure mode, +200 KB -
+  // still fails the build immediately, which is the job rmoh8 gave this line.
+  "offscreen.bundle.js": 65_000,
   "user-wasm-store-client.bundle.js": 10_000,
   "settings-view.bundle.js": 120_000,
 });

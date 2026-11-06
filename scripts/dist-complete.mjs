@@ -69,8 +69,14 @@ export const INDEXED_SOURCE_EXCLUDED_PATHS = Object.freeze(new Set([
  * - Post-split measurement: 13 chunks (615,237 B aggregate vs 750,000 B aggregate budget)
  * - Headroom: bound 15 provides +2 spare chunk slots for future dynamic code-splitting
  *   while failing closed against chunk proliferation or accidental bundle fragmentation.
+ * - 892u2 (2026-11-06): 15 -> 20. The offscreen execution host joined the UI
+ *   group's splitting build, so the modules it used to inline are now shared
+ *   chunks: measured 18 chunks (631,172 -> 831,632 B aggregate, and the package
+ *   total FELL 129,784 B - this is dedupe, not proliferation). Bound 20 keeps the
+ *   same +2 spare slots and the same fail-closed purpose: a surface that stops
+ *   sharing and starts emitting per-entry chunks reds here.
  */
-export const MAX_CHUNK_COUNT = 15;
+export const MAX_CHUNK_COUNT = 20;
 export const MAX_CHUNK_FILE_BYTES = 500 * 1024;
 export const CHUNK_PATH_RE = /^chunks\/[a-zA-Z0-9._-]+\.js$/u;
 
@@ -82,7 +88,14 @@ const MAX_SOURCE_FILES = 10_000;
 const MAX_SOURCE_PATH_BYTES = 1_024;
 const MAX_SOURCE_FILE_BYTES = 64 * 1024 * 1024;
 const MAX_SOURCE_TOTAL_BYTES = 512 * 1024 * 1024;
-const MAX_MARKER_BYTES = 4_096;
+// The marker carries one {path, sha256, size} row per shipped output, so its
+// byte length is a function of the CHUNK SET, not of any source change:
+// 892u2 (2026-11-06) moved the offscreen host into the UI splitting group, which
+// took dist/chunks/ from 13 files to 18 and the marker past the old 4,096-byte
+// bound (measured 4,1xx B) — a build failure that named neither chunks nor the
+// split. 8,192 keeps ~2 KiB (≈18 chunk rows) of headroom above the measured
+// marker while still failing closed on a runaway or hostile marker.
+const MAX_MARKER_BYTES = 8_192;
 
 /** chrome-agent-platform-1mz2: the marker binds HEAD, every indexed source byte
  * and the generated outputs, so ANY commit invalidates a built tree — including
