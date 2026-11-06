@@ -125,28 +125,32 @@ inventory and the sender/inventory guard described in INV-15.
   network position with the extension's host permission — `cap:fetch` at
   `extension/background/service-worker.js#cap:fetch` and `python.fetch` at
   `extension/background/service-worker.js#python.fetch`, both applying
-  `extension/lib/fetch-policy.js:135`. `python.fetch`'s model-visible echoes never
-  carry a query string: its response URL and every Python network-ledger record are
-  normalized to origin+path (`extension/lib/python-network.js#urlWithoutQuery`,
-  lrhyl), because the query string is exactly where callers put credentials (the
-  `?key=` pattern). The normalization is a SINGLE marshal every record passes
-  through before it can be observed — `extension/lib/python-network.js#marshalModelReadable`
-  (lrhyl round 4, after a review found a fourth, pre-existing writer bypassing
-  the round-3 walker): it deep-walks plain objects and arrays — object KEYS exactly
-  like values, so a '__proto__' key cannot repoint a prototype and a query-bearing
-  URL cannot hide in a key (round 5) — converts URL instances via toString, strips
-  any string that parses as a URL carrying a query, hash or userinfo (all credential
-  locations) to origin+path, lexically scrubs userinfo, query AND fragment from URL
-  tokens in free text, and TAGS anything it cannot inspect with a FIXED type
-  vocabulary (round 5: never a value-derived name — an informative tag is itself a
-  leak) rather than silently skipping it. All four writers (begin, complete, record,
-  abortInFlight) route
-  through it and take() re-marshals at the observation boundary, so no writer
-  path can smuggle a query through the `url` field, through `origin`, through a
-  nested value, or through any future field arriving via a caller spread
-  (`extension/lib/python-network.js#scrubUrlQueries` remains the lexical text
-  scrub the marshal uses, lrhyl round 2). INV-7 fences
-  the untrusted BODY side of this boundary, and the strip closes the REQUEST-echo
+  `extension/lib/fetch-policy.js:135`. `python.fetch`'s model-visible output carries NO
+  free text at all (lrhyl round 6, after five review rounds each found a new free-text
+  leak shape — the surface, not the scrubber, was the bug). Every Python network-ledger
+  record is projected onto a CLOSED field set
+  (`extension/lib/python-network.js#projectRecord`) before it is marshalled: method is a
+  fixed token or 'INVALID'; failures are a fixed machine code plus a STATIC per-code hint,
+  never an interpolated message; origin is re-parsed to a bare scheme+host or dropped;
+  `url` is normalized to origin+path or fails closed to "" — and a non-http(s) scheme
+  fails closed too, because an opaque-scheme string parses with origin "null" while its
+  path keeps the credential (`extension/lib/python-network.js#urlWithoutQuery`);
+  refused header names are token-charset or '<invalid-name>'; unknown fields — a caller's
+  `error` string included — are DROPPED, with field NAMES (never values) logged to a
+  debug-only console sink, and a per-writer shape test pins Object.keys() so a new field
+  cannot appear silently. Raw exception text goes only to the service-worker console,
+  which is debug-only and never model-visible. Under the closed shape, ONE marshal
+  (rounds 4-5, kept) deep-walks plain objects and arrays — object KEYS exactly like
+  values, '__proto__'-safe via defineProperty — normalizes parsing http(s) URL strings
+  (query, hash and userinfo are all credential locations), converts URL instances via
+  toString, and TAGS anything it cannot inspect with a FIXED type vocabulary, never a
+  value-derived name (`extension/lib/python-network.js#marshalModelReadable`). The
+  lexical free-text scrubber of rounds 2-5 is DELETED rather than kept as bait: a
+  scrubber over attacker-shaped text proved unfixable, so the contract no longer admits
+  the text. All four writers (begin, complete, record, abortInFlight) project and
+  marshal, and take() re-marshals at the observation boundary, so no writer path can
+  smuggle a credential through any field. INV-7 fences
+  the untrusted BODY side of this boundary, and the closed shape closes the REQUEST-echo
   side for the Python broker.
 - **TB5 — The ACP bridge.** A loopback WebSocket on the host in front of an agent
   harness that can run shell commands and write files

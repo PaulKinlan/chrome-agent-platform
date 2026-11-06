@@ -13,7 +13,7 @@
 import { assert, assertEquals, assertStringIncludes, assertThrows } from "jsr:@std/assert@1";
 import { registerPythonHost } from "../extension/lib/python-host.js";
 import { createPythonRuntimeProvider } from "../extension/lib/python-runtime.js";
-import { createPythonNetworkLedger, urlWithoutQuery, scrubUrlQueries } from "../extension/lib/python-network.js";
+import { createPythonNetworkLedger, urlWithoutQuery, marshalModelReadable, sanitizeRequestHeaders } from "../extension/lib/python-network.js";
 import { runPython } from "../extension/lib/python-execution.js";
 import { fileURLToPath } from "node:url";
 
@@ -398,15 +398,16 @@ Deno.test("lrhyl: urlWithoutQuery keeps origin+path, drops search and hash, fail
   assertEquals(urlWithoutQuery(null), "");
 });
 
-Deno.test("lrhyl: the ledger strips the query at BOTH write choke points, and an abort message never carries it", () => {
+
+Deno.test("lrhyl: the ledger strips the query at BOTH write choke points, and the abort record is a fixed code", () => {
   const ledger = createPythonNetworkLedger();
   // the direct record() path (the broker's validation/error closures)
-  ledger.record("run-lrhyl", { method: "GET", url: `https://api.example.com/a?token=${SECRET_PLACEHOLDER}`, origin: "https://api.example.com", ok: false, refused: true, error: "not granted", ms: 1 });
+  ledger.record("run-lrhyl", { method: "GET", url: `https://api.example.com/a?token=${SECRET_PLACEHOLDER}`, origin: "https://api.example.com", ok: false, refused: true, errorCode: "not_granted", ms: 1 });
   // the begin()/complete() path (dispatch-time record)
   const inflight = ledger.begin("run-lrhyl", { method: "GET", url: `https://api.example.com/b?key=${SECRET_PLACEHOLDER}`, origin: "https://api.example.com", startedAt: Date.now(), controller: null });
   inflight.complete({ ok: true, origin: "https://api.example.com", status: 200, bytes: 3 });
-  // a still-in-flight record that take() must abort — its finalized error
-  // message interpolates origin/url and must not echo the query either
+  // a still-in-flight record that take() must abort — round 6: the abort is
+  // the fixed code plus the duration, never an interpolated message
   ledger.begin("run-lrhyl", { method: "GET", url: `https://api.example.com/c?sig=${SECRET_PLACEHOLDER}`, origin: "https://api.example.com", startedAt: Date.now(), controller: { abort() {} } });
   const taken = ledger.take("run-lrhyl");
   assertEquals(taken.records.length, 3);
@@ -414,6 +415,8 @@ Deno.test("lrhyl: the ledger strips the query at BOTH write choke points, and an
   assertEquals(taken.records[1].url, "https://api.example.com/b");
   assertEquals(taken.records[2].url, "https://api.example.com/c");
   assertEquals(taken.records[2].aborted, true);
+  assertEquals(taken.records[2].errorCode, "aborted", "the abort record is the fixed code");
+  assertEquals((taken.records[2] as any).error, undefined, "the interpolated abort message no longer exists");
   const serialized = JSON.stringify(taken.records);
   assert(!serialized.includes(SECRET_PLACEHOLDER), "no model-readable record may carry the query value");
   assert(!serialized.includes("token=") && !serialized.includes("key=") && !serialized.includes("sig="), "not even the query KEYS survive");
@@ -432,33 +435,199 @@ Deno.test("lrhyl r2: a caller-supplied finalEntry.url CANNOT override the saniti
   assert(!JSON.stringify(taken.records).includes(SECRET_PLACEHOLDER), "the override's query value never reaches a model-readable record");
 });
 
-Deno.test("lrhyl r2: model-visible error text is query-scrubbed at BOTH ledger choke points", () => {
+// --- lrhyl round 6: the contract is NARROWED, not the scrubber improved -------
+//
+// Five review rounds found five leak SHAPES (query echo, error text, origin
+// field, userinfo/fragment in free text, greedy-prefix mis-scrub) because the
+// surface was any string. Round 6 removes the surface: a model-visible ledger
+// record carries NO free text at all. Failures are a fixed machine code
+// (PYTHON_FETCH_ERROR_CODES) plus structured, sanitised fields; every writer
+// projects onto a CLOSED field set before the marshal; and the lexical
+// free-text scrubber is deleted rather than left as bait. The marshal stays —
+// keys, arrays, URL normalisation, fixed tags — as the second layer under the
+// closed shape.
+
+Deno.test("lrhyl r6: caller-supplied free-text 'error' is DROPPED at both choke points - it never reaches the model in any form (coord probe: query-bearing text)", () => {
   const ledger = createPythonNetworkLedger();
-  ledger.record("run-lrhyl3", { method: "GET", origin: "https://api.example.com", ok: false, error: `fetch to https://api.example.com/p?token=${SECRET_PLACEHOLDER} failed: boom`, ms: 1 });
+  ledger.record("run-lrhyl3", { method: "GET", origin: "https://api.example.com", ok: false, errorCode: "fetch_failed", error: `fetch to https://api.example.com/p?token=${SECRET_PLACEHOLDER} failed: boom`, ms: 1 });
   const inflight = ledger.begin("run-lrhyl3", { method: "GET", url: "https://api.example.com/q", origin: "https://api.example.com", startedAt: Date.now(), controller: null });
-  inflight.complete({ ok: false, error: `fetch to https://api.example.com/q?sig=${SECRET_PLACEHOLDER} failed: network went away` });
+  inflight.complete({ ok: false, errorCode: "fetch_failed", error: `fetch to https://api.example.com/q?sig=${SECRET_PLACEHOLDER} failed: network went away` });
   const taken = ledger.take("run-lrhyl3");
-  assertEquals(taken.records[0].error, "fetch to https://api.example.com/p failed: boom", "record() scrubs error text");
-  assertEquals(taken.records[1].error, "fetch to https://api.example.com/q failed: network went away", "complete() scrubs error text");
+  for (const rec of taken.records) {
+    assertEquals((rec as any).error, undefined, "'error' is not a contract field - it is dropped, not scrubbed");
+  }
   const serialized = JSON.stringify(taken.records);
-  assert(!serialized.includes(SECRET_PLACEHOLDER), "no error text may carry the query value");
-  assert(!serialized.includes("token=") && !serialized.includes("sig="), "not even the query KEYS survive in error text");
+  assert(!serialized.includes(SECRET_PLACEHOLDER), "no record carries the query value");
+  assert(!serialized.includes("boom") && !serialized.includes("network went away"), "not even scrubbed remnants of the free text survive");
 });
 
-Deno.test("lrhyl r2: scrubUrlQueries strips queries lexically and keeps everything else verbatim", () => {
-  assertEquals(scrubUrlQueries(`x https://a.example/p?k=${SECRET_PLACEHOLDER} y`), "x https://a.example/p y");
-  assertEquals(
-    scrubUrlQueries("https://a.example/one?x=1 and //b.example/two?y=2"),
-    "https://a.example/one and //b.example/two",
-    "every URL token is scrubbed, protocol-relative ones included",
-  );
-  assertEquals(scrubUrlQueries("no url here? just a question mark"), "no url here? just a question mark", "text without a URL token passes through verbatim");
-  assertEquals(scrubUrlQueries(`see https://a.example:8443/x?key=${SECRET_PLACEHOLDER}) done`), "see https://a.example:8443/x) done", "a closing paren terminates the token");
-  assertEquals(scrubUrlQueries(""), "");
-  assertEquals(scrubUrlQueries(null), "");
+Deno.test("lrhyl r6: the r5 greedy-prefix repro and the schemeless credential have NO PATH - free text no longer exists in records", () => {
+  const ledger = createPythonNetworkLedger();
+  // the exact r5 failure shape: a query that the greedy-prefix scrub missed
+  ledger.record("run-lrhyl-r6g", { method: "GET", url: "https://h/p", ok: false, errorCode: "fetch_failed", error: `failed https://h/p?token=${SECRET_PLACEHOLDER}`, ms: 3 });
+  // stacked delimiters that survived take()'s double marshal in r5
+  ledger.record("run-lrhyl-r6g", { method: "GET", url: "https://h/p", ok: false, errorCode: "fetch_failed", error: `failed https://h/p?q=1#a#b carrying ${SECRET_PLACEHOLDER}`, ms: 3 });
+  // the schemeless credential the lexical scrubber could never see
+  ledger.record("run-lrhyl-r6g", { method: "GET", url: "https://h/p", ok: false, errorCode: "fetch_failed", error: `failed user:LRHYL_SECRET_9317@host/path?token=x`, ms: 3 });
+  const taken = ledger.take("run-lrhyl-r6g");
+  assertEquals(taken.records.length, 3);
+  const serialized = JSON.stringify(taken.records);
+  assert(!serialized.includes(SECRET_PLACEHOLDER) && !serialized.includes("LRHYL_SECRET_9317"), "no scrubber needed: the text is gone");
+  assert(!serialized.includes("user:") && !serialized.includes("failed http") && !serialized.includes("carrying"), "not a fragment of the free text survives ('fetch_failed' the CODE is fine - it is ours)");
 });
 
-Deno.test("lrhyl SW source pin: the python.fetch response echo strips, no bare echo survives, and the import exists", async () => {
+Deno.test("lrhyl r6: the free-text scrubber is DELETED, not kept as bait", async () => {
+  const lib = await import("../extension/lib/python-network.js");
+  assertEquals((lib as any).scrubUrlQueries, undefined, "rounds 2-5's lexical scrubber is gone from the module surface - a text scrubber over attacker-shaped input cannot be made correct, and keeping it invites free text back in");
+});
+
+Deno.test("lrhyl r6: the record shape is CLOSED - pinned per writer, so a new free-text field cannot be added silently (coord probe)", () => {
+  // writer 1+4: begin()'s dispatch record, finalized by take()'s abort path
+  const ledgerA = createPythonNetworkLedger();
+  ledgerA.begin("run-shape-a", { method: "GET", url: "https://h/p", origin: "https://h", startedAt: Date.now(), controller: { abort() {} } });
+  const recA = ledgerA.take("run-shape-a").records[0];
+  assertEquals(Object.keys(recA).sort(), ["aborted", "errorCode", "method", "ms", "ok", "origin", "outcome", "url"], "the abort-finalized shape is exactly the contract");
+  // writer 2: begin() + complete()
+  const ledgerB = createPythonNetworkLedger();
+  const iB = ledgerB.begin("run-shape-b", { method: "GET", url: "https://h/p", origin: "https://h", startedAt: Date.now(), controller: null });
+  iB.complete({ ok: true, status: 200, bytes: 3, sneaky: `https://h/x?s=${SECRET_PLACEHOLDER}`, error: "free text" });
+  const recB = ledgerB.take("run-shape-b").records[0];
+  assertEquals(Object.keys(recB).sort(), ["bytes", "method", "ms", "ok", "origin", "status", "url"], "non-contract fields (sneaky, error) are dropped, not scrubbed");
+  // writer 3: record()
+  const ledgerC = createPythonNetworkLedger();
+  ledgerC.record("run-shape-c", { method: "GET", url: "https://h/q", origin: "https://h", ok: false, refused: true, errorCode: "not_granted", ms: 1, label: "arbitrary", detail: { nested: "free text" } });
+  const recC = ledgerC.take("run-shape-c").records[0];
+  assertEquals(Object.keys(recC).sort(), ["errorCode", "method", "ms", "ok", "origin", "refused", "url"], "record()'s shape is exactly the contract");
+});
+
+Deno.test("lrhyl r6: EVERY string field is value-bounded - the schemeless credential cannot ride in through ANY of them", () => {
+  const ledger = createPythonNetworkLedger();
+  const evil = `user:LRHYL_SECRET_9317@host/path?token=x`;
+  ledger.record("run-lrhyl-r6v", {
+    method: `GET https://h?x=${SECRET_PLACEHOLDER}`,
+    url: evil,
+    origin: evil,
+    ok: "yes please",
+    status: `200 ${SECRET_PLACEHOLDER}`,
+    ms: 1,
+    refusedHeaders: [evil, "Cookie"],
+    outcome: `aborted ${SECRET_PLACEHOLDER}`,
+    errorCode: `not_granted ${SECRET_PLACEHOLDER}`,
+  });
+  const rec = ledger.take("run-lrhyl-r6v").records[0];
+  assertEquals(rec.method, "INVALID", "a method outside the allow-list is a fixed token");
+  assertEquals(rec.url, "", "an unparseable url fails closed to empty");
+  assertEquals((rec as any).origin, undefined, "an unparseable origin is dropped");
+  assertEquals((rec as any).ok, undefined, "a non-boolean ok is dropped");
+  assertEquals((rec as any).status, undefined, "a non-numeric status is dropped");
+  assertEquals(rec.refusedHeaders, ["<invalid-name>", "Cookie"], "the hostile name is refused under the fixed marker; a token-valid name survives");
+  assertEquals((rec as any).outcome, undefined, "an outcome outside the enum is dropped");
+  assertEquals(rec.errorCode, "fetch_failed", "an errorCode outside the vocabulary collapses to fetch_failed");
+  const serialized = JSON.stringify(rec);
+  assert(!serialized.includes("LRHYL_SECRET_9317") && !serialized.includes(SECRET_PLACEHOLDER), "no field carried the credential");
+});
+
+Deno.test("lrhyl r6: refused header NAMES from the sanitizer are token-bounded before they can reach a record", () => {
+  const { refused, headers } = sanitizeRequestHeaders({
+    [`X-Bad https://h/p?token=LRHYL_SECRET_9317`]: "1",
+    Cookie: "session=x",
+    "X-Ok": "keep me",
+  });
+  assert(refused.includes("<invalid-name>"), "a model-shaped header name is refused under the fixed marker");
+  assert(refused.includes("Cookie"), "a forbidden but well-formed name is still named (it is a token)");
+  assert(!JSON.stringify(refused).includes("LRHYL_SECRET_9317"), "the hostile name never enters the refused list verbatim");
+  assertEquals(headers["X-Ok"], "keep me", "an allowed header travels");
+});
+
+Deno.test("lrhyl r6: the marshal still scrubs nested objects and arrays of URLs (structural property preserved, tested directly)", () => {
+  const m = marshalModelReadable({
+    meta: { finalUrl: `https://api.example.com/landed?sig=${SECRET_PLACEHOLDER}`, depth: { deeper: `https://x.example/d?k=${SECRET_PLACEHOLDER}` } },
+    chain: [`https://a.example/1?next=${SECRET_PLACEHOLDER}`, "https://b.example/2", 7],
+  });
+  assertEquals(m.meta.finalUrl, "https://api.example.com/landed", "a nested object's URL field is scrubbed");
+  assertEquals(m.meta.depth.deeper, "https://x.example/d", "recursively");
+  assertEquals(m.chain[0], "https://a.example/1", "an array element URL is scrubbed");
+  assertEquals(m.chain[1], "https://b.example/2", "a clean URL element is untouched");
+  assertEquals(m.chain[2], 7, "non-string elements pass through");
+  assert(!JSON.stringify(m).includes(SECRET_PLACEHOLDER));
+});
+
+Deno.test("lrhyl r6: the marshal handles URL instances, userinfo, keys, cycles and the FIXED tag vocabulary (r4/r5 properties, direct)", () => {
+  // URL instance via toString
+  assertEquals(marshalModelReadable(new URL(`https://api.example.com/final?key=${SECRET_PLACEHOLDER}`)), "https://api.example.com/final");
+  // userinfo is a credential location too
+  assertEquals(marshalModelReadable(`https://user:${SECRET_PLACEHOLDER}@h.example/p`), "https://h.example/p");
+  // keys are marshalled exactly like values (r5)
+  const keyed = marshalModelReadable({ [`https://h/p?token=${SECRET_PLACEHOLDER}`]: "value", clean: 1 });
+  assert(Object.keys(keyed).includes("https://h/p"), "the query-bearing KEY is scrubbed");
+  assertEquals(keyed["https://h/p"], "value");
+  // '__proto__' as a key cannot pollute
+  const polluter = {};
+  Object.defineProperty(polluter, "__proto__", { value: { polluted: true }, enumerable: true });
+  const marshalled = marshalModelReadable(polluter);
+  assertEquals(Object.getPrototypeOf(marshalled), Object.prototype, "no prototype pollution through a marshalled key");
+  // cycles and depth are tagged, not walked to death
+  const circular = { name: "cyc" };
+  circular.self = circular;
+  const cm = marshalModelReadable(circular);
+  assertEquals(cm.self, "[lrhyl-uninspectable:cycle]");
+  // the tag vocabulary is FIXED - a constructor name is attacker-influenceable
+  class Decoy {}
+  Object.defineProperty(Decoy, "name", { value: `LRHYL_SECRET_9317` });
+  const tags = marshalModelReadable({ decoy: new Decoy(), sym: Symbol("LRHYL_SECRET_9317"), map: new Map([["k", "LRHYL_SECRET_9317"]]), fn: () => 1 });
+  for (const field of ["decoy", "sym", "map", "fn"]) {
+    assert(/^\[lrhyl-uninspectable:[A-Za-z]+\]$/.test(tags[field]), `${field} tags from the fixed vocabulary (got ${tags[field]})`);
+  }
+  assert(!JSON.stringify({ ...keyed, ...cm, ...tags }).includes("LRHYL_SECRET_9317"), "no tag or key embeds the value");
+  assert(!JSON.stringify(tags).includes(SECRET_PLACEHOLDER));
+});
+
+Deno.test("lrhyl r6: the marshal is idempotent and keeps honest records byte-identical", () => {
+  const ledger = createPythonNetworkLedger();
+  ledger.record("run-lrhyl-r4e", { method: "GET", url: "https://api.example.com/clean", origin: "https://api.example.com", ok: true, status: 200, bytes: 10, ms: 2 });
+  const first = ledger.take("run-lrhyl-r4e").records[0];
+  assertEquals(first.url, "https://api.example.com/clean");
+  assertEquals(first.method, "GET");
+  assertEquals(first.origin, "https://api.example.com");
+  assertEquals(first.status, 200);
+  assertEquals(first.ok, true);
+  // take() re-marshals: marshalling an already-marshalled record changes nothing
+  assertEquals(JSON.stringify(marshalModelReadable(first)), JSON.stringify(first), "idempotent");
+});
+
+Deno.test("lrhyl r6: every error code has a STATIC hint, and no hint interpolates", async () => {
+  const lib = await import("../extension/lib/python-network.js");
+  const codes = (lib as any).PYTHON_FETCH_ERROR_CODES as string[];
+  const hints = (lib as any).PYTHON_FETCH_ERROR_HINTS as Record<string, string>;
+  assert(Array.isArray(codes) && codes.length >= 4, "the fixed vocabulary exists");
+  for (const expected of ["fetch_failed", "aborted", "timeout", "invalid_url"]) {
+    assert(codes.includes(expected), `coord's four codes are in the vocabulary (missing ${expected})`);
+  }
+  for (const code of codes) {
+    assertEquals(typeof hints[code], "string", `every code has a hint: ${code}`);
+    assert(hints[code].length > 0, code);
+    assert(!hints[code].includes("${"), "hints are static prose, never templates");
+  }
+  assert(/Settings/.test(hints.not_granted), "the not_granted hint keeps the owner-guidance the old prose had");
+  assert(/cap\.fetch does GET, HEAD, POST/.test(hints.method_not_allowed), "the method hint keeps the boundary text");
+});
+
+Deno.test("lrhyl r3: the reviewer's origin repro - a caller-supplied query-bearing origin is reduced to the BARE origin at every choke point", () => {
+  const ledger = createPythonNetworkLedger();
+  const i1 = ledger.begin("run-lrhyl-r3", { method: "GET", url: "https://h/p", origin: `https://h/p?token=${SECRET_PLACEHOLDER}`, startedAt: Date.now(), controller: null });
+  i1.complete({ ok: true, status: 200, origin: `https://h/p?token=${SECRET_PLACEHOLDER}` });
+  ledger.record("run-lrhyl-r3", { method: "GET", url: "https://h/q", origin: `https://h/p?token=${SECRET_PLACEHOLDER}`, ok: false, refused: true, ms: 1 });
+  const taken = ledger.take("run-lrhyl-r3");
+  assertEquals(taken.records.length, 2);
+  for (const rec of taken.records) {
+    assertEquals(rec.origin, "https://h", "round 6: the origin field is re-parsed to scheme+host - stronger than origin+path, a caller's path cannot ride along");
+  }
+  const serialized = JSON.stringify(taken.records);
+  assert(!serialized.includes(SECRET_PLACEHOLDER), "the reviewer's repro: no model-readable record may carry the token");
+  assert(!serialized.includes("token="), "not even the query KEY survives");
+});
+
+Deno.test("lrhyl SW source pin: the python.fetch echo strips, the failure returns are CODES, and the free-text paths are gone", async () => {
   const sw = await Deno.readTextFile(new URL("../extension/background/service-worker.js", import.meta.url));
   assertEquals(
     sw.split("url: urlWithoutQuery(res.url || u.href)").length - 1, 1,
@@ -466,253 +635,27 @@ Deno.test("lrhyl SW source pin: the python.fetch response echo strips, no bare e
   );
   const withoutWrapped = sw.split("url: urlWithoutQuery(res.url || u.href)").join("");
   assert(!withoutWrapped.includes("url: res.url || u.href"), "a bare, unstripped echo must not survive anywhere in the SW");
-  assert(sw.includes("urlWithoutQuery,\n  scrubUrlQueries,\n} from \"../lib/python-network.js\""), "the SW imports both lrhyl sanitizers from the module that owns the invariant");
-  assert(sw.includes("return { ok: false, error: scrubUrlQueries(error) };"), "the Python-facing failure return scrubs the exception text (r2)");
-  // discriminating check on the ledger choke points: begin() and record() must
-  // normalize through urlWithoutQuery (reverting either reds this pin)
+  assert(sw.includes("urlWithoutQuery,\n  PYTHON_FETCH_ERROR_HINTS,\n} from \"../lib/python-network.js\""), "the SW imports the code-hint map from the module that owns the invariant");
+  assert(!sw.includes("scrubUrlQueries"), "the deleted scrubber has no surviving reference in the SW");
+  assert(sw.includes("return { ok: false, error: code, origin: verdict.origin, hint: PYTHON_FETCH_ERROR_HINTS[code] ?? \"\" };"), "the exception path returns a fixed code + sanitised origin + STATIC hint, never an interpolated message");
+  assert(sw.includes("error: verdict.errorCode"), "the policy refusal returns the verdict's code");
+  assert(sw.includes("e?.name === \"TimeoutError\""), "the catch maps exception NAMES to codes");
+  assert(sw.includes("console.error(`python.fetch to ${verdict.origin} failed [${code}]: ${e?.message ?? e}`)"), "the raw exception text goes to the DEBUG-ONLY console sink");
+  // discriminating pins on the ledger choke points
   const lib = await Deno.readTextFile(new URL("../extension/lib/python-network.js", import.meta.url));
+  assert(!lib.includes("export function scrubUrlQueries"), "the scrubber is deleted from the lib, not kept as bait");
   assert(lib.includes("const u = urlWithoutQuery(url);"), "begin() normalizes at the choke point");
-  assert(lib.includes("...(entry?.url !== undefined ? { url: urlWithoutQuery(entry.url) } : {}),"), "record() normalizes at the choke point");
+  assert(lib.includes("const projected = projectRecord(entry, \"record\");"), "record() projects onto the closed shape");
+  assert(lib.includes("if (projected.url !== undefined) projected.url = urlWithoutQuery(projected.url);"), "record() keeps the fail-closed url line");
   assert(lib.includes("if (merged.url !== undefined) merged.url = urlWithoutQuery(merged.url);"), "complete() sanitises AFTER the finalEntry spread (r2 override fix)");
-  // r4: the error-text scrub and every other field now live inside the ONE
-  // marshal; these pins hold the wiring the round-3 enumeration lost.
-  assert(lib.includes("return scrubUrlQueries(value);"), "the marshal lexically scrubs free text (the r2 error-text property lives inside it)");
+  assertEquals(
+    lib.split("marshalModelReadable(projectRecord({").length - 1, 2,
+    "begin and abortInFlight construct through projectRecord+marshal",
+  );
   assertEquals(
     lib.split("Object.freeze(marshalModelReadable(").length - 1, 5,
     "all FOUR writers (begin, complete, record, abortInFlight) plus the take() boundary construct through the single marshal",
   );
   assert(lib.includes("row.records.map((r) => Object.freeze(marshalModelReadable(r)))"), "take() re-marshals at the observation boundary (a fifth writer cannot bypass it)");
-});
-
-// --- lrhyl round 3: the reviewer's origin repro and the shape-independent fix ---
-//
-// Round 2 normalised the ENUMERATED fields (url, error) at the construction
-// point but passed `origin` through untouched: the reviewer's executed ledger
-// repro showed RECORDS=[{url: https://h/p, origin: https://h/p?token=SECRET},
-// ...] — the asserted choke-point invariant was false for a caller-supplied
-// value again, the round-1 class of finding. The production broker passes a
-// normalised verdict.origin today, but the choke point must not DEPEND on
-// caller discipline. Round 3 scrubs EVERY own string field that parses as a
-// URL with a query, so a field nobody enumerated (today origin, tomorrow a
-// new one arriving through a caller spread) cannot leak.
-
-Deno.test("lrhyl r3: the reviewer's origin repro — a caller-supplied query-bearing origin is scrubbed at EVERY choke point", () => {
-  const ledger = createPythonNetworkLedger();
-  // choke point 1: begin()'s dispatch-time record
-  const i1 = ledger.begin("run-lrhyl-r3", { method: "GET", url: "https://h/p", origin: `https://h/p?token=${SECRET_PLACEHOLDER}`, startedAt: Date.now(), controller: null });
-  // choke point 2: complete()'s merged record — finalEntry carries the origin
-  i1.complete({ ok: true, status: 200, origin: `https://h/p?token=${SECRET_PLACEHOLDER}` });
-  // choke point 3: record()'s direct writer path
-  ledger.record("run-lrhyl-r3", { method: "GET", url: "https://h/q", origin: `https://h/p?token=${SECRET_PLACEHOLDER}`, ok: false, refused: true, ms: 1 });
-  const taken = ledger.take("run-lrhyl-r3");
-  assertEquals(taken.records.length, 2);
-  for (const rec of taken.records) {
-    assertEquals(rec.origin, "https://h/p", "origin is scrubbed to origin+path like every URL-ish field");
-  }
-  const serialized = JSON.stringify(taken.records);
-  assert(!serialized.includes(SECRET_PLACEHOLDER), "the reviewer's repro: no model-readable record may carry the token");
-  assert(!serialized.includes("token="), "not even the query KEY survives");
-});
-
-Deno.test("lrhyl r3: the scrub is SHAPE-INDEPENDENT — a novel field arriving through the caller spread cannot smuggle a query", () => {
-  const ledger = createPythonNetworkLedger();
-  const inflight = ledger.begin("run-lrhyl-r3b", { method: "GET", url: "https://api.example.com/z", origin: "https://api.example.com", startedAt: Date.now(), controller: null });
-  inflight.complete({
-    ok: true,
-    status: 200,
-    redirectTarget: `https://api.example.com/elsewhere?sig=${SECRET_PLACEHOLDER}`,
-    debug: { note: "nested values are not URL fields" },
-    label: "just a string, not a url",
-    count: 42,
-  });
-  ledger.record("run-lrhyl-r3b", { method: "GET", url: "https://api.example.com/y", ok: false, effectiveUrl: `https://api.example.com/y?retry=${SECRET_PLACEHOLDER}`, ms: 1 });
-  const taken = ledger.take("run-lrhyl-r3b");
-  assertEquals(taken.records[0].redirectTarget, "https://api.example.com/elsewhere", "a field NOBODY enumerated is scrubbed because the walker covers every own string field");
-  assertEquals(taken.records[0].label, "just a string, not a url", "non-URL strings pass through untouched");
-  assertEquals(taken.records[0].count, 42, "non-string fields pass through untouched");
-  assertEquals(taken.records[1].effectiveUrl, "https://api.example.com/y", "record() writers get the same walker");
-  const serialized = JSON.stringify(taken.records);
-  assert(!serialized.includes(SECRET_PLACEHOLDER), "no novel field may carry the query value");
-  assert(!serialized.includes("sig=") && !serialized.includes("retry="), "not even the query KEYS survive");
-});
-
-// --- lrhyl round 4: ONE marshal choke point, structural not enumerated ---------
-//
-// Round 3 wired the walker into the three construction points it knew about;
-// the reviewer found a FOURTH writer that already existed — abortInFlight —
-// constructing its record directly (raw origin field, raw origin/url
-// interpolated into the abort error text). And the walker silently skipped
-// what it did not understand: nested objects, arrays, URL instances and
-// uninspectable values passed through unscrubbed, and a silent skip looks
-// like success. Round 4 (coord): one marshal function that EVERY record
-// passes through before it can be observed — deep-walking plain objects and
-// arrays, handling URL instances via toString, and TAGGING values it cannot
-// inspect rather than skipping them — routed through begin/complete/record
-// AND abortInFlight, plus re-marshalled at take() (the observation boundary)
-// so a hypothetical fifth writer cannot bypass it either.
-
-Deno.test("lrhyl r4 RED-FIXED: the abort path sanitises origin AND the interpolated error text", () => {
-  const ledger = createPythonNetworkLedger();
-  // begin() with a query-bearing origin, then let take() abort it in flight
-  ledger.begin("run-lrhyl-r4a", { method: "GET", url: "https://h/p", origin: `https://h/p?token=${SECRET_PLACEHOLDER}`, startedAt: Date.now(), controller: { abort() {} } });
-  const taken = ledger.take("run-lrhyl-r4a");
-  assertEquals(taken.records.length, 1);
-  const rec = taken.records[0];
-  assertEquals(rec.aborted, true, "sanity: this is the abort-path record");
-  assertEquals(rec.origin, "https://h/p", "the abort record's origin field is scrubbed");
-  assertStringIncludes(rec.error, "fetch to https://h/p aborted", "the interpolated error text carries the scrubbed URL");
-  const serialized = JSON.stringify(taken.records);
-  assert(!serialized.includes(SECRET_PLACEHOLDER), "the reviewer's abort-path repro: no token in any field");
-  assert(!serialized.includes("token="), "not even the query key");
-});
-
-Deno.test("lrhyl r4 RED-FIXED: nested objects and arrays of URLs are scrubbed, not silently skipped", () => {
-  const ledger = createPythonNetworkLedger();
-  const inflight = ledger.begin("run-lrhyl-r4b", { method: "GET", url: "https://api.example.com/n", origin: "https://api.example.com", startedAt: Date.now(), controller: null });
-  inflight.complete({
-    ok: true,
-    status: 200,
-    meta: { finalUrl: `https://api.example.com/landed?sig=${SECRET_PLACEHOLDER}`, depth: { deeper: `https://x.example/d?k=${SECRET_PLACEHOLDER}` } },
-    chain: [`https://a.example/1?next=${SECRET_PLACEHOLDER}`, "https://b.example/2", 7],
-  });
-  const taken = ledger.take("run-lrhyl-r4b");
-  const rec = taken.records[0];
-  assertEquals(rec.meta.finalUrl, "https://api.example.com/landed", "a nested object's URL field is scrubbed");
-  assertEquals(rec.meta.depth.deeper, "https://x.example/d", "recursively");
-  assertEquals(rec.chain[0], "https://a.example/1", "an array element URL is scrubbed");
-  assertEquals(rec.chain[1], "https://b.example/2", "a clean URL element is untouched");
-  assertEquals(rec.chain[2], 7, "non-string elements pass through");
-  const serialized = JSON.stringify(taken.records);
-  assert(!serialized.includes(SECRET_PLACEHOLDER), "nothing nested carries the secret");
-  assert(!serialized.includes("sig=") && !serialized.includes("next=") && !serialized.includes("k="), "not even the query keys");
-});
-
-Deno.test("lrhyl r4 RED-FIXED: a URL instance is marshalled via toString to origin+path", () => {
-  const ledger = createPythonNetworkLedger();
-  ledger.record("run-lrhyl-r4c", { method: "GET", url: "https://api.example.com/u", ok: true, resolved: new URL(`https://api.example.com/final?key=${SECRET_PLACEHOLDER}`), ms: 3 });
-  const taken = ledger.take("run-lrhyl-r4c");
-  assertEquals(taken.records[0].resolved, "https://api.example.com/final", "the URL instance becomes its scrubbed string form");
-  assert(!JSON.stringify(taken.records).includes(SECRET_PLACEHOLDER));
-});
-
-Deno.test("lrhyl r4 RED-FIXED: uninspectable values are TAGGED, never silently passed through", () => {
-  const ledger = createPythonNetworkLedger();
-  const circular = { name: "cyc" };
-  circular.self = circular;
-  const inflight = ledger.begin("run-lrhyl-r4d", { method: "GET", url: "https://api.example.com/i", origin: "https://api.example.com", startedAt: Date.now(), controller: null });
-  inflight.complete({
-    ok: true,
-    status: 200,
-    fn: () => SECRET_PLACEHOLDER,
-    map: new Map([["k", `https://h/p?token=${SECRET_PLACEHOLDER}`]]),
-    circular,
-  });
-  const taken = ledger.take("run-lrhyl-r4d");
-  const rec = taken.records[0];
-  for (const field of ["fn", "map"]) {
-    assertEquals(typeof rec[field], "string", `${field} became an honest tag string`);
-    assertStringIncludes(rec[field], "[lrhyl-uninspectable:", `${field} is tagged, not passed through`);
-  }
-  // the circular structure is WALKED (its plain fields survive) and the
-  // REVISIT is tagged — no stack overflow, no raw circular dump
-  assertEquals(typeof rec.circular, "object", "a circular plain object is walked, not thrown away");
-  assertEquals(rec.circular.self, "[lrhyl-uninspectable:cycle]", "the revisit is tagged");
-  const serialized = JSON.stringify(taken.records);
-  assert(!serialized.includes(SECRET_PLACEHOLDER), "a tag never carries the value's contents");
-});
-
-Deno.test("lrhyl r4: the marshal is idempotent and keeps honest records byte-identical", () => {
-  const ledger = createPythonNetworkLedger();
-  ledger.record("run-lrhyl-r4e", { method: "GET", url: "https://api.example.com/clean", origin: "https://api.example.com", ok: true, status: 200, bytes: 10, ms: 2 });
-  const first = ledger.take("run-lrhyl-r4e").records[0];
-  assertEquals(first.url, "https://api.example.com/clean");
-  assertEquals(first.method, "GET");
-  assertEquals(first.status, 200);
-  assertEquals(first.ok, true);
-  // userinfo is a credential location too: a URL that PARSES loses everything but origin+path
-  ledger.record("run-lrhyl-r4f", { method: "GET", url: "https://api.example.com/ui", ok: true, referer: `https://user:${SECRET_PLACEHOLDER}@h.example/p`, ms: 1 });
-  const second = ledger.take("run-lrhyl-r4f").records[0];
-  assertEquals(second.referer, "https://h.example/p", "userinfo credentials are stripped by the same marshal");
-});
-
-// --- lrhyl round 5: the four r4-marshal leak paths, structurally closed -------
-//
-// Review FAIL of round 4, four probes: (1) userinfo in FREE TEXT survives the
-// lexical scrub ('failed https://user:SECRET@h/p'); (2) a fragment carries a
-// secret and survived too; (3) object KEYS are not traversed - a query-bearing
-// URL as a KEY keeps it; (4) the uninspectable tag itself can embed the value
-// (a constructor name is attacker-influenceable). All four are the same
-// mistake in different clothes, so the fixes are structural: the lexical scrub
-// strips userinfo + query + fragment from every URL token, the deep walk
-// marshals keys exactly like values (via defineProperty, so a '__proto__' key
-// cannot pollute), and the tag vocabulary is FIXED - instanceof checks inside
-// try/catch, never reading .name/.toString, so no getter can smuggle the value
-// into the tag.
-
-Deno.test("lrhyl r5: free-text userinfo is scrubbed - 'failed https://user:SECRET@h/p' keeps nothing", () => {
-  const ledger = createPythonNetworkLedger();
-  ledger.record("run-lrhyl-r5a", { method: "GET", url: "https://h/p", ok: false, error: `failed https://user:LRHYL_SECRET_9317@h/p after 3ms`, ms: 3 });
-  const inflight = ledger.begin("run-lrhyl-r5a", { method: "GET", url: "https://h/q", origin: "https://h", startedAt: Date.now(), controller: null });
-  inflight.complete({ ok: false, error: `connect refused for https://admin:LRHYL_SECRET_9317@h.example:8443/x` });
-  const taken = ledger.take("run-lrhyl-r5a");
-  assertEquals(taken.records[0].error, "failed https://h/p after 3ms", "userinfo is stripped from free text at record()");
-  assertEquals(taken.records[1].error, "connect refused for https://h.example:8443/x", "and at complete(), port preserved");
-  const serialized = JSON.stringify(taken.records);
-  assert(!serialized.includes("LRHYL_SECRET_9317"), "the userinfo secret never reaches a model-readable record");
-  assert(!serialized.includes("user:") && !serialized.includes("admin:"), "not even the userinfo username");
-});
-
-Deno.test("lrhyl r5: free-text fragments are scrubbed - '#SECRET' is a credential location too", () => {
-  const ledger = createPythonNetworkLedger();
-  ledger.record("run-lrhyl-r5b", { method: "GET", url: "https://h/p", ok: false, error: `failed https://h/p#LRHYL_SECRET_9317 retrying`, ms: 3 });
-  const taken = ledger.take("run-lrhyl-r5b");
-  assertEquals(taken.records[0].error, "failed https://h/p retrying", "the fragment is dropped from the URL token");
-  assert(!JSON.stringify(taken.records).includes("LRHYL_SECRET_9317"));
-});
-
-Deno.test("lrhyl r5: object KEYS are marshalled exactly like values", () => {
-  const ledger = createPythonNetworkLedger();
-  const inflight = ledger.begin("run-lrhyl-r5c", { method: "GET", url: "https://h/k", origin: "https://h", startedAt: Date.now(), controller: null });
-  inflight.complete({
-    ok: true,
-    status: 200,
-    hdrs: { [`https://h/p?token=LRHYL_SECRET_9317`]: "value", clean: 1 },
-  });
-  const taken = ledger.take("run-lrhyl-r5c");
-  const keys = Object.keys(taken.records[0].hdrs);
-  assert(keys.includes("https://h/p"), "the query-bearing KEY is scrubbed");
-  assert(!keys.some((k) => k.includes("token=")), "no key keeps the query");
-  assertEquals(taken.records[0].hdrs["https://h/p"], "value", "the entry's value survives under the scrubbed key");
-  assertEquals(taken.records[0].hdrs.clean, 1, "clean keys untouched");
-  assert(!JSON.stringify(taken.records).includes("LRHYL_SECRET_9317"), "the key-borne secret never reaches the model");
-  // a '__proto__' key must not pollute the marshalled record's prototype
-  const ledger2 = createPythonNetworkLedger();
-  ledger2.record("run-lrhyl-r5c2", { method: "GET", url: "https://h/p2", ok: true, ms: 1, ["__proto__"]: { polluted: true } });
-  const rec2 = ledger2.take("run-lrhyl-r5c2").records[0];
-  assertEquals(Object.getPrototypeOf(rec2), Object.prototype, "the record keeps a normal prototype");
-  assertEquals((rec2 as any).polluted, undefined, "no prototype pollution through a marshalled key");
-});
-
-Deno.test("lrhyl r5: the uninspectable tag is NON-INFORMATIVE - fixed vocabulary, never the value", () => {
-  const ledger = createPythonNetworkLedger();
-  class Decoy {}
-  Object.defineProperty(Decoy, "name", { value: `LRHYL_SECRET_9317` }); // an attacker-influenceable constructor name
-  class Hostile {}
-  const inflight = ledger.begin("run-lrhyl-r5d", { method: "GET", url: "https://h/t", origin: "https://h", startedAt: Date.now(), controller: null });
-  inflight.complete({
-    ok: true,
-    status: 200,
-    decoy: new Decoy(),
-    sym: Symbol("LRHYL_SECRET_9317"),
-    map: new Map([["k", "LRHYL_SECRET_9317"]]),
-    hostile: new Hostile(),
-  });
-  const taken = ledger.take("run-lrhyl-r5d");
-  const rec = taken.records[0];
-  const serialized = JSON.stringify(taken.records);
-  assert(!serialized.includes("LRHYL_SECRET_9317"), "no tag embeds the value, the class name, or the symbol description");
-  for (const field of ["decoy", "sym", "map", "hostile"]) {
-    assertEquals(typeof rec[field], "string", `${field} is a tag string`);
-    assert(/^\[lrhyl-uninspectable:[A-Za-z]+\]$/.test(rec[field]), `${field}'s tag is from the FIXED vocabulary (got ${rec[field]})`);
-  }
+  assert(lib.includes("errorCode: \"aborted\""), "the abort writer's record is the fixed code");
 });
