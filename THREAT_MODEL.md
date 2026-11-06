@@ -125,7 +125,38 @@ inventory and the sender/inventory guard described in INV-15.
   network position with the extension's host permission — `cap:fetch` at
   `extension/background/service-worker.js#cap:fetch` and `python.fetch` at
   `extension/background/service-worker.js#python.fetch`, both applying
-  `extension/lib/fetch-policy.js:135`.
+  `extension/lib/fetch-policy.js:135`. `python.fetch`'s model-visible output carries NO
+  free text at all (lrhyl round 6, after five review rounds each found a new free-text
+  leak shape — the surface, not the scrubber, was the bug). Every Python network-ledger
+  record is projected onto a CLOSED field set
+  (`extension/lib/python-network.js#projectRecord`) before it is marshalled: method is a
+  fixed token or 'INVALID'; failures are a fixed machine code plus a STATIC per-code hint,
+  never an interpolated message; origin is re-parsed to a bare scheme+host or dropped;
+  `url` is normalized to origin+path or fails closed to "" — and a non-http(s) scheme
+  fails closed too, because an opaque-scheme string parses with origin "null" while its
+  path keeps the credential (`extension/lib/python-network.js#urlWithoutQuery`);
+  refused header names never reach a record at all — records carry the COUNT
+  (refusedHeaderCount), and the caller-controlled $VAULT keyId echo is the boolean
+  vaultKeyPresented (round 7: a code-like string carrying arbitrary data is free text
+  with extra steps); unknown fields — a caller's
+  `error` string included — are DROPPED, with field NAMES (never values) logged to the
+  sanctioned debug logger (capLog), and a per-writer shape test pins Object.keys() plus a
+  string-field contract scan (every record string is a fixed enum member or a validated
+  http(s) origin/origin+path) so a new field cannot be arbitrary text by accident.
+  Raw exception text goes only to the sanctioned service-worker logger,
+  which is debug-only and never model-visible. Under the closed shape, ONE marshal
+  (rounds 4-5, kept) deep-walks plain objects and arrays — object KEYS exactly like
+  values, '__proto__'-safe via defineProperty — normalizes parsing http(s) URL strings
+  (query, hash and userinfo are all credential locations), converts URL instances via
+  toString, and TAGS anything it cannot inspect with a FIXED type vocabulary, never a
+  value-derived name (`extension/lib/python-network.js#marshalModelReadable`). The
+  lexical free-text scrubber of rounds 2-5 is DELETED rather than kept as bait: a
+  scrubber over attacker-shaped text proved unfixable, so the contract no longer admits
+  the text. All four writers (begin, complete, record, abortInFlight) project and
+  marshal, and take() re-marshals at the observation boundary, so no writer path can
+  smuggle a credential through any field. INV-7 fences
+  the untrusted BODY side of this boundary, and the closed shape closes the REQUEST-echo
+  side for the Python broker.
 - **TB5 — The ACP bridge.** A loopback WebSocket on the host in front of an agent
   harness that can run shell commands and write files
   (`scripts/acp-bridge.ts:52` defaults to `127.0.0.1`, `:785` binds the server;

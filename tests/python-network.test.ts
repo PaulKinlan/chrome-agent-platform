@@ -20,6 +20,7 @@ import {
   isRedirect,
   normalizeGrantOrigin,
   normalizeGrants,
+  PYTHON_FETCH_ERROR_HINTS,
   removeGrant,
   sanitizeRequestHeaders,
 } from "../extension/lib/python-network.js";
@@ -29,12 +30,17 @@ const GRANTED = [{ origin: "https://api.example.com", grantedAt: 1, gesture: "se
 Deno.test("no grants means nothing is reachable — the empty list is an answer, not a gap", () => {
   const res = checkPythonNetworkRequest({ url: "https://api.example.com/x", grants: [] });
   assertEquals(res.ok, false);
-  assert(String(res.error).includes("https://api.example.com"), res.error);
-  assert(String(res.error).includes("not granted"), res.error);
-  // The refusal has to TEACH: it names the origin and where the owner grants
-  // it, so a model reads a boundary rather than an outage and stops retrying.
-  assert(/Settings/.test(res.error), res.error);
-  assert(/Nothing was sent/.test(res.error), res.error);
+  // lrhyl round 6: the verdict is a FIXED machine code plus the sanitised
+  // origin — never free text (the old prose interpolated the model's own
+  // inputs back at it). The teaching prose lives in the STATIC hint map,
+  // selected by code.
+  assertEquals(res.errorCode, "not_granted");
+  assertEquals(res.origin, "https://api.example.com");
+  assertEquals(res.error, undefined, "no free-text field on a refusal verdict");
+  // The refusal still has to TEACH: the static hint names where the owner
+  // grants, so a model reads a boundary rather than an outage and stops retrying.
+  assert(/Settings/.test(PYTHON_FETCH_ERROR_HINTS.not_granted));
+  assert(/Nothing was sent/.test(PYTHON_FETCH_ERROR_HINTS.not_granted));
 });
 
 Deno.test("a granted origin is reachable; a different origin on the same host is not", () => {
@@ -52,7 +58,7 @@ Deno.test("a granted host cannot be used to reach a private address, and no sche
   const localGrants = [{ origin: "http://localhost", grantedAt: 1, gesture: "settings" }];
   const local = checkPythonNetworkRequest({ url: "http://localhost:9222/json", grants: localGrants });
   assertEquals(local.ok, false);
-  assert(String(local.error).includes("private or loopback"), local.error);
+  assertEquals(local.errorCode, "forbidden_host", "the SSRF refusal is a fixed code (round 6)");
 
   const meta = checkPythonNetworkRequest({
     url: "http://169.254.169.254/latest/meta-data/",
@@ -73,8 +79,13 @@ Deno.test("only GET/HEAD/POST — a grant to read is not a grant to write", () =
   for (const method of ["PUT", "PATCH", "DELETE", "TRACE", "CONNECT"]) {
     const res = checkPythonNetworkRequest({ url: "https://api.example.com/", method, grants: GRANTED });
     assertEquals(res.ok, false, method);
-    assert(String(res.error).includes("cap.fetch"), res.error);
+    // Round 6: a fixed code — and the model-shaped method string is NOT
+    // echoed back (the old prose interpolated it, a free-text channel).
+    assertEquals(res.errorCode, "method_not_allowed", method);
+    assertEquals(res.error, undefined, method);
+    assert(!JSON.stringify(res).toUpperCase().includes(method), `the refusal must not echo ${method}`);
   }
+  assert(/cap\.fetch/.test(PYTHON_FETCH_ERROR_HINTS.method_not_allowed), "the static hint keeps the guidance");
 });
 
 Deno.test("a caller can never re-authenticate the anonymous request", () => {
@@ -153,12 +164,14 @@ Deno.test("granting is idempotent and keeps the FIRST timestamp; removing is the
 Deno.test("the ledger records refusals as loudly as successes, and a run's records are taken exactly once", () => {
   const ledger = createPythonNetworkLedger();
   ledger.record("run-1", { method: "GET", url: "https://api.example.com/a", ok: true, status: 200, bytes: 12, ms: 5 });
-  ledger.record("run-1", { method: "GET", url: "https://evil.example/b", ok: false, refused: true, error: "not granted", ms: 1 });
+  ledger.record("run-1", { method: "GET", url: "https://evil.example/b", ok: false, refused: true, errorCode: "not_granted", ms: 1 });
   ledger.record("run-2", { method: "GET", url: "https://api.example.com/c", ok: true, status: 200, bytes: 1, ms: 1 });
 
   const taken = ledger.take("run-1");
   assertEquals(taken.records.length, 2);
   assertEquals(taken.records[1].refused, true, "a denied origin is exactly what an owner wants to see");
+  assertEquals(taken.records[1].errorCode, "not_granted", "the refusal reason is the fixed code (round 6)");
+  assertEquals((taken.records[1] as any).error, undefined, "no free-text field survives onto a record");
   // Taken once: the second read is empty, so a service worker that lives for
   // days does not accumulate finished runs.
   assertEquals(ledger.take("run-1").records.length, 0);

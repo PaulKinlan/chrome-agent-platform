@@ -120,13 +120,13 @@ export function checkFetchTarget(url) {
   try {
     u = new URL(String(url ?? ""));
   } catch {
-    return { ok: false, error: "invalid URL" };
+    return { ok: false, error: "invalid URL", errorCode: "invalid_url" };
   }
   if (u.protocol !== "http:" && u.protocol !== "https:") {
-    return { ok: false, error: `protocol ${u.protocol} is not allowed` };
+    return { ok: false, error: `protocol ${u.protocol} is not allowed`, errorCode: "invalid_url" };
   }
   if (isPrivateOrLoopbackHost(u.hostname)) {
-    return { ok: false, error: `fetch to ${u.hostname} refused: private or loopback address` };
+    return { ok: false, error: `fetch to ${u.hostname} refused: private or loopback address`, errorCode: "forbidden_host" };
   }
   return { ok: true, url: u };
 }

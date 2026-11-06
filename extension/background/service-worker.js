@@ -1304,6 +1304,8 @@ import {
   normalizeGrants as normalizePythonNetworkGrants,
   removeGrant as removePythonNetworkGrant,
   sanitizeRequestHeaders as sanitizePythonRequestHeaders,
+  urlWithoutQuery,
+  PYTHON_FETCH_ERROR_HINTS,
 } from "../lib/python-network.js";
 import {
   acceptToolSnapshot,
@@ -7857,17 +7859,24 @@ const handlers = mergeRouteMaps(
       grants = normalizePythonNetworkGrants((await kvGet(PYTHON_NETWORK_GRANTS_KEY))?.[PYTHON_NETWORK_GRANTS_KEY] ?? []);
     } catch (e) {
       // Storage is the grant authority. If it cannot be read we do NOT fall
-      // back to "no grants, refuse" quietly, nor to allowing anything — we say
-      // which it was, and refuse.
-      const error = `network access could not be checked (the grant store failed to read: ${e?.message ?? e}); nothing was sent`;
-      record({ ok: false, error });
-      return { ok: false, error };
+      // back to "no grants, refuse" quietly, nor to allowing anything — we
+      // refuse with a fixed code (round 6). The raw exception text goes to
+      // the sanctioned swLog (owner-side DevTools + redacted ring) —
+      // DEBUG-ONLY, never model-visible.
+      swLog.error(`python.fetch: the grant store failed to read: ${e?.message ?? e}; nothing was sent`);
+      record({ ok: false, errorCode: "grant_store_failed" });
+      return { ok: false, error: "grant_store_failed", hint: PYTHON_FETCH_ERROR_HINTS.grant_store_failed };
     }
 
     const verdict = checkPythonNetworkRequest({ url, method: m, grants });
     if (!verdict.ok) {
-      record({ ok: false, origin: verdict.origin ?? null, refused: true, error: verdict.error });
-      return { ok: false, error: verdict.error };
+      record({ ok: false, origin: verdict.origin ?? null, refused: true, errorCode: verdict.errorCode });
+      return {
+        ok: false,
+        error: verdict.errorCode,
+        ...(verdict.origin ? { origin: verdict.origin } : {}),
+        hint: PYTHON_FETCH_ERROR_HINTS[verdict.errorCode] ?? "",
+      };
     }
 
     const { headers: safeHeaders, refused: refusedHeaders } = sanitizePythonRequestHeaders(headers);
@@ -7903,9 +7912,13 @@ const handlers = mergeRouteMaps(
 
         const isApproved = boundOrigins.has(verdict.origin);
         if (!isApproved) {
-          const error = `enclave proxy: ${verdict.origin} is not an approved origin for secret ${keyId}`;
-          record({ ok: false, origin: verdict.origin, refused: true, error });
-          return { ok: false, refused: true, error };
+          // Round 6: fixed code + the already-sanitised origin. Round 7: the
+          // keyId echo is GONE - the caller controls that text ($VAULT{...} in
+          // a granted URL's query is enough to smuggle a secret-shaped token
+          // through the echo), so the record and return carry only the
+          // boolean fact that a key was presented.
+          record({ ok: false, origin: verdict.origin, refused: true, errorCode: "vault_origin_not_approved", vaultKeyPresented: true });
+          return { ok: false, refused: true, error: "vault_origin_not_approved", vaultKeyPresented: true, hint: PYTHON_FETCH_ERROR_HINTS.vault_origin_not_approved };
         }
 
         let secretVal;
@@ -7915,14 +7928,12 @@ const handlers = mergeRouteMaps(
           );
           secretVal = secretObj?.value;
         } catch {
-          const error = `enclave proxy: the vault has no value for ${keyId}`;
-          record({ ok: false, origin: verdict.origin, refused: true, error });
-          return { ok: false, refused: true, error };
+          record({ ok: false, origin: verdict.origin, refused: true, errorCode: "vault_key_missing", vaultKeyPresented: true });
+          return { ok: false, refused: true, error: "vault_key_missing", vaultKeyPresented: true, hint: PYTHON_FETCH_ERROR_HINTS.vault_key_missing };
         }
         if (!secretVal) {
-          const error = `enclave proxy: the vault has no value for ${keyId}`;
-          record({ ok: false, origin: verdict.origin, refused: true, error });
-          return { ok: false, refused: true, error };
+          record({ ok: false, origin: verdict.origin, refused: true, errorCode: "vault_key_missing", vaultKeyPresented: true });
+          return { ok: false, refused: true, error: "vault_key_missing", vaultKeyPresented: true, hint: PYTHON_FETCH_ERROR_HINTS.vault_key_missing };
         }
 
         urlToFetch = urlToFetch.split(`$VAULT{${keyId}}`).join(secretVal);
@@ -7947,9 +7958,8 @@ const handlers = mergeRouteMaps(
         origins: [`${u.protocol}//${u.host}/*`],
       }).catch(() => false);
       if (hasHost === false) {
-        const error = `network access to ${u.host} is not granted by Chrome — host access is granted at install (<all_urls>); if Settings → Permissions shows it missing, reinstall the extension`;
-        record({ ok: false, origin: verdict.origin, error });
-        return { ok: false, error };
+        record({ ok: false, origin: verdict.origin, errorCode: "host_permission_missing" });
+        return { ok: false, error: "host_permission_missing", hint: PYTHON_FETCH_ERROR_HINTS.host_permission_missing };
       }
       // Record the request at dispatch with its per-run AbortController (bead
       // chrome-agent-platform-gtc8): if the 30s run fence fires while fetch() is
@@ -7966,8 +7976,7 @@ const handlers = mergeRouteMaps(
         });
       } catch { /* a ledger failure must never become a network failure */ }
       if (controller.signal.aborted) {
-        const error = `fetch to ${verdict.origin} aborted: the Python run already settled`;
-        return { ok: false, error };
+        return { ok: false, error: "aborted", hint: PYTHON_FETCH_ERROR_HINTS.aborted };
       }
       const init = {
         method: m,
@@ -7979,13 +7988,13 @@ const handlers = mergeRouteMaps(
       if (m === "POST") init.body = typeof body === "string" ? body : "";
       const res = await fetch(u.href, init);
       if (isRedirectResponse(res)) {
-        const error = `fetch to ${verdict.origin} refused: the response redirected elsewhere. A granted origin is an origin, not a starting point — grant the destination if you meant to reach it.`;
+        const entry = { ok: false, origin: verdict.origin, refused: true, status: res.status || 0, errorCode: "redirect_refused" };
         if (inflight) {
-          inflight.complete({ ok: false, origin: verdict.origin, refused: true, status: res.status || 0, error });
+          inflight.complete(entry);
         } else {
-          record({ ok: false, origin: verdict.origin, refused: true, status: res.status || 0, error });
+          record(entry);
         }
-        return { ok: false, error };
+        return { ok: false, error: "redirect_refused", status: res.status || 0, hint: PYTHON_FETCH_ERROR_HINTS.redirect_refused };
       }
       // Bodies are one-shot streams: read once, then measure what we read.
       const text = m === "HEAD" ? "" : await res.text();
@@ -7999,7 +8008,7 @@ const handlers = mergeRouteMaps(
         origin: verdict.origin,
         status: res.status,
         bytes,
-        ...(refusedHeaders.length ? { refusedHeaders } : {}),
+        ...(refusedHeaders.length ? { refusedHeaderCount: refusedHeaders.length } : {}),
       };
       if (inflight) {
         inflight.complete(okEntry);
@@ -8012,33 +8021,52 @@ const handlers = mergeRouteMaps(
       return tagUntrusted({
         ok: true,
         status: res.status,
-        url: res.url || u.href,
+        // chrome-agent-platform-lrhyl: origin+path only. This return value is
+        // model-readable (INV-7 data), and the query string is where
+        // credentials live (the '?key=' pattern) — echoing the full URL let a
+        // caller-supplied secret escape the enclave. The request itself still
+        // fetched the full URL above; only the echo is stripped.
+        url: urlWithoutQuery(res.url || u.href),
         headers: responseHeaders,
         text,
         bytes,
-        refusedHeaders,
+        // Round 7: the COUNT, never the caller's header names - a 128-char
+        // token charset still lets a secret-shaped name ride through.
+        refusedHeaderCount: refusedHeaders.length,
       });
     } catch (e) {
       const wasAborted = controller.signal.aborted;
       const runSettled = Boolean(inflight?.isSettled?.());
       const wasRevoked = wasAborted && !runSettled;
-      const error = runSettled
-        ? `fetch to ${verdict.origin} aborted when the Python run settled`
+      // lrhyl round 6: a FIXED CODE replaces the interpolated message. The raw
+      // exception text may quote the failed URL with its query — it goes to
+      // the SW's sanctioned logger, DEBUG-ONLY, never model-visible. Five
+      // review rounds
+      // found five shapes of free-text leak here; the text no longer exists.
+      const code = runSettled
+        ? "aborted"
         : wasRevoked
-        ? `fetch to ${verdict.origin} refused: grant was revoked mid-run`
-        : `fetch to ${verdict.origin} failed: ${e?.message ?? e}`;
+        ? "grant_revoked"
+        : e?.name === "TimeoutError"
+        ? "timeout"
+        : e?.name === "AbortError"
+        ? "aborted"
+        : "fetch_failed";
+      swLog.error(`python.fetch to ${verdict.origin} failed [${code}]: ${e?.message ?? e}`);
       if (inflight) {
         inflight.complete({
           ok: false,
           origin: verdict.origin,
           refused: wasRevoked,
           ...(runSettled ? { aborted: true, outcome: "aborted" } : {}),
-          error,
+          errorCode: code,
         });
       } else {
-        record({ ok: false, origin: verdict.origin, refused: wasRevoked, error });
+        record({ ok: false, origin: verdict.origin, refused: wasRevoked, errorCode: code });
       }
-      return { ok: false, error };
+      // The Python-facing return is model-visible: code + the sanitised origin
+      // + a STATIC hint, never an interpolated message.
+      return { ok: false, error: code, origin: verdict.origin, hint: PYTHON_FETCH_ERROR_HINTS[code] ?? "" };
     } finally {
       originSet.delete(controller);
       if (originSet.size === 0) activePythonFetches.delete(originKey);

@@ -40,6 +40,11 @@
 // script sandbox's "cap:fetch" bridge so the two can never drift apart.
 
 import { checkFetchTarget } from "./fetch-policy.js";
+import { capLog } from "./cap-log.js";
+
+// The sanctioned logger (code-health: no raw console.* outside cap-log.js).
+// The ledger's drop announcements are debug telemetry for the OWNER side.
+const netLog = capLog("python-network");
 
 /** Where the owner's grants persist (kv.js / chrome.storage.local). */
 export const PYTHON_NETWORK_GRANTS_KEY = "cap:pythonNetworkGrants";
@@ -84,6 +89,246 @@ export function normalizeGrantOrigin(input) {
   if (u.protocol !== "http:" && u.protocol !== "https:") return null;
   if (!u.hostname) return null;
   return u.port ? `${u.protocol}//${u.hostname}:${u.port}` : `${u.protocol}//${u.hostname}`;
+}
+
+/** chrome-agent-platform-lrhyl: the query string is where credentials live
+ * (the '?key=' pattern), and every URL that becomes model-readable — the
+ * cap.fetch response echo and the network records carried in the run envelope
+ * — must carry ORIGIN+PATH ONLY. A parse failure yields the empty string:
+ * fail closed toward saying nothing rather than echoing a raw, possibly
+ * secret-carrying string. The REQUEST still fetches the full URL — stripping
+ * is for echoes, never for dispatch.
+ * CAVEAT (lrhyl r6.1 review): failing closed on opaque schemes is right for
+ * the NETWORK LEDGER, but do not reuse this helper where opaque schemes are
+ * legitimate (data:, blob:, chrome-extension: URLs) — it would blank them. */
+export function urlWithoutQuery(raw) {
+  try {
+    const u = new URL(String(raw ?? ""));
+    // Round 6: only http(s) has a meaningful origin. An opaque-scheme string
+    // ('user:LRHYL@host/path?token=x' PARSES with scheme 'user:') has origin
+    // "null" and keeps its whole credential-bearing body as the path — so a
+    // non-special scheme fails closed to "" exactly like garbage input.
+    if (u.protocol !== "http:" && u.protocol !== "https:") return "";
+    return `${u.origin}${u.pathname}`;
+  } catch {
+    return "";
+  }
+}
+
+/** lrhyl round 6 (coord's contract narrowing): five review rounds found five
+ * leak SHAPES because the surface was any string — a scrubber over arbitrary
+ * free text cannot be made correct when the input is attacker-shaped. So the
+ * free-text scrubber (scrubUrlQueries, rounds 2-5) is DELETED and the
+ * model-visible ledger no longer carries arbitrary text at all: failures are a
+ * fixed machine code plus structured, already-sanitised fields. This is the
+ * vocabulary. The first four are the codes coord named; the rest replace the
+ * interpolations this handler actually had, one code per pre-existing
+ * distinction, so the model keeps every actionable difference it had. */
+export const PYTHON_FETCH_ERROR_CODES = Object.freeze([
+  "fetch_failed", "aborted", "timeout", "invalid_url",
+  "grant_store_failed", "method_not_allowed", "forbidden_host", "not_granted",
+  "vault_origin_not_approved", "vault_key_missing", "host_permission_missing",
+  "grant_revoked", "redirect_refused", "unauthorized_principal",
+]);
+const ERROR_CODE_SET = new Set(PYTHON_FETCH_ERROR_CODES);
+
+/** Static guidance per code — OUR words, selected by the code, NEVER
+ * interpolated with request data. This is what keeps the refusal teachable
+ * (the old prose explained the boundary to the model) without the prose being
+ * attacker-shaped: the only per-request values travel in structured,
+ * sanitised fields alongside it. */
+export const PYTHON_FETCH_ERROR_HINTS = Object.freeze({
+  fetch_failed: "The fetch failed at the network layer. Nothing more is known; the service-worker console has the raw error for debugging.",
+  aborted: "The Python run settled before this fetch finished, so it was aborted and recorded with its duration.",
+  timeout: "The fetch timed out.",
+  invalid_url: "The URL was unparseable or not http(s). Use an absolute https:// URL.",
+  grant_store_failed: "Network access could not be checked because the grant store failed to read; nothing was sent. Retry, and check extension storage if it persists.",
+  method_not_allowed: "cap.fetch does GET, HEAD, POST only.",
+  forbidden_host: "The host is private or loopback. The Python sandbox reaches public origins only.",
+  not_granted: "That origin is not in the owner's Python network grants; the request was refused and recorded. Nothing was sent. The owner can add the origin in Settings → Permissions → “Python network access”.",
+  vault_origin_not_approved: "The $VAULT secret referenced is not bound to this origin. Fetch the origin the secret was registered for.",
+  vault_key_missing: "The $VAULT key referenced has no value in the vault.",
+  host_permission_missing: "Chrome host permission is missing — it is granted at install (<all_urls>). If Settings → Permissions shows it missing, reinstall the extension.",
+  grant_revoked: "The origin's grant was revoked mid-run, so the fetch was refused; nothing more will be sent to it.",
+  redirect_refused: "The response redirected elsewhere, so the fetch was refused. A granted origin is an origin, not a starting point — grant the destination if you meant to reach it.",
+  unauthorized_principal: "Only the extension host may relay python.fetch.",
+});
+
+/** The CLOSED record shape (lrhyl round 6). A ledger record is exactly these
+ * fields; anything else a caller passes is dropped by projectRecord before the
+ * marshal ever sees it. The shape test in tests/python-network-bridge.test.ts
+ * pins Object.keys() per writer, so a new field — free-text or not — cannot be
+ * added silently. */
+const RECORD_FIELDS = Object.freeze([
+  "method", "url", "origin", "ok", "status", "bytes", "ms",
+  "refused", "aborted", "outcome", "inFlight", "errorCode", "vaultKeyPresented",
+  "refusedHeaderCount",
+]);
+const RECORD_FIELD_SET = new Set(RECORD_FIELDS);
+/** A header name per RFC 9110 token rules, length-bounded. Anything else in a
+ * model-visible list is refused under a fixed marker. */
+const HEADER_NAME_TOKEN = /^[A-Za-z0-9!#$%&'*+\-.^_`|~]{1,128}$/;
+
+/** Method is model-supplied, so it is a fixed token or nothing: the raw string
+ * once travelled into records AND into refusal prose ('method X is not
+ * allowed'), which made it a free-text leak with the model's own input in it. */
+function safeMethodToken(method) {
+  const t = String(method ?? "GET").toUpperCase();
+  return ALLOWED_METHODS.includes(t) ? t : "INVALID";
+}
+
+/** Every writer projects through here BEFORE the marshal. Unknown fields are
+ * dropped — including any free-text 'error' — and an errorCode outside the
+ * fixed vocabulary collapses to 'fetch_failed'. The drop is announced on the
+ * sanctioned debug logger (cap-log — owner-side DevTools and the redacted
+ * ring, never part of a record): field NAMES are logged, never values,
+ * because values are exactly
+ * what attacker-shaped input could poison. */
+function projectRecord(partial, where) {
+  const out = {};
+  const dropped = [];
+  for (const [k, v] of Object.entries(partial ?? {})) {
+    if (RECORD_FIELD_SET.has(k)) out[k] = v;
+    else dropped.push(k);
+  }
+  if (out.method !== undefined) out.method = safeMethodToken(out.method);
+  if (out.errorCode !== undefined && !ERROR_CODE_SET.has(out.errorCode)) {
+    dropped.push(`errorCode<${typeof out.errorCode}>`);
+    out.errorCode = "fetch_failed";
+  }
+  // Round 6, value bounds: EVERY string field of a record is now provably
+  // bounded — method (token), errorCode (enum), outcome (enum), origin
+  // (re-parsed to a bare origin or dropped), url (writers fail it closed to
+  // "" or origin+path). Round 7 removed the last two caller-controlled TEXT
+  // fields: vaultKeyId became the boolean vaultKeyPresented and
+  // refusedHeaders became the number refusedHeaderCount — a code-like string
+  // carrying arbitrary data is free text with extra steps.
+  // That is what makes the marshal's verbatim pass-through for unparseable
+  // strings sound: no free text can occupy a contract field.
+  if (out.outcome !== undefined && out.outcome !== "aborted") {
+    dropped.push("outcome");
+    delete out.outcome;
+  }
+  if (out.origin != null) {
+    // Round 6: an origin is scheme+host(+port) of an http(s) URL, or nothing.
+    // An opaque-scheme string ('user:SECRET@host/path') PARSES with origin
+    // "null" and its body in the path — dropped, same as garbage.
+    try {
+      const parsed = new URL(String(out.origin));
+      if (parsed.protocol === "http:" || parsed.protocol === "https:") out.origin = parsed.origin;
+      else { dropped.push("origin"); delete out.origin; }
+    } catch {
+      dropped.push("origin");
+      delete out.origin;
+    }
+  }
+  for (const f of ["status", "bytes", "ms", "refusedHeaderCount"]) {
+    if (out[f] === undefined) continue;
+    const n = Number(out[f]);
+    if (Number.isFinite(n)) out[f] = n;
+    else { dropped.push(f); delete out[f]; }
+  }
+  for (const f of ["ok", "refused", "aborted", "inFlight", "vaultKeyPresented"]) {
+    if (out[f] !== undefined && typeof out[f] !== "boolean") {
+      dropped.push(f);
+      delete out[f];
+    }
+  }
+  if (dropped.length > 0) {
+    // Debug-only via the sanctioned logger, NOT model-visible: names, never values.
+    netLog.error(`python-network ledger (${where}): dropped non-contract field(s): ${dropped.join(", ")}`);
+  }
+  return out;
+}
+
+/** The tag vocabulary for values the marshal cannot inspect — FIXED names
+ * decided by instanceof checks inside try/catch. It never reads .name,
+ * .constructor or .toString off the value: those are attacker-influenceable
+ * getters, and a tag embedding them turns the fallback itself into the leak
+ * (lrhyl round 5, review finding 4). */
+function uninspectableKind(value) {
+  try {
+    if (value instanceof Map) return "Map";
+    if (value instanceof Set) return "Set";
+    if (value instanceof Date) return "Date";
+    if (value instanceof RegExp) return "RegExp";
+    if (ArrayBuffer.isView(value)) return "View";
+  } catch { /* hostile Symbol.hasInstance — the generic tag below is safe */ }
+  return "object";
+}
+
+/** lrhyl round 4 (review finding, coord's structural spec): ONE marshal that
+ * EVERY record passes through before it can be observed. Round 3's walker was
+ * wired into the three construction points it knew about; the reviewer found a
+ * FOURTH writer that already existed (abortInFlight) and silent skips for
+ * nested objects, arrays, URL instances and uninspectable values. This is the
+ * shape-independent answer: deep-walk plain objects and arrays, handle URL
+ * instances via toString, strip any string that PARSES as a URL carrying a
+ * query, hash or userinfo (all credential locations) down to origin+path while
+ * clean URLs keep their exact shape (origins must not grow a slash), lexically
+ * scrub URL tokens inside free text (userinfo, query AND fragment — round 5),
+ * marshal object KEYS exactly like values (round 5: a query-bearing URL as a
+ * key leaked before; assignment goes through defineProperty so a '__proto__'
+ * key can never repoint the prototype), and TAG anything that cannot be
+ * inspected with the FIXED uninspectableKind vocabulary — a tag is honest and
+ * model-visible; a silent skip looks like success, and an informative tag is
+ * itself a leak.
+ * Circular structures and depth > 8 are tagged, never walked to death.
+ * Idempotent: marshalling an already-marshalled record is a no-op, so take()
+ * re-marshals at the observation boundary as defense in depth (a hypothetical
+ * fifth writer cannot bypass the boundary even if it bypassed the writers). */
+export function marshalModelReadable(value, depth = 0, path = null) {
+  if (typeof value === "string") {
+    try {
+      const u = new URL(value);
+      // Round 6: an opaque-scheme string parses too ('user:SECRET@host/path'),
+      // with origin "null" and the credential kept in the path — fail closed.
+      if (u.protocol !== "http:" && u.protocol !== "https:") return "";
+      // Strip only when there IS something to strip — a clean URL keeps its
+      // exact shape (origins must not grow a trailing slash). Query, hash and
+      // userinfo are all credential locations.
+      if (u.search || u.hash || u.username || u.password) return urlWithoutQuery(value);
+      return value;
+    } catch {
+      // Round 6: unparseable strings pass through VERBATIM. That is safe
+      // because the contract changed, not because the strings are trusted:
+      // records carry no free text at all (projectRecord drops any field
+      // outside the closed shape, and failures are fixed codes), so every
+      // string that can reach here is a code-generated token — a method, an
+      // outcome, an errorCode, a token-charset header name, a normalised
+      // origin+path. The old lexical scrubber is deleted: a text scrubber
+      // over attacker-shaped input cannot be made correct (five rounds,
+      // five shapes), and keeping it would invite free text back in.
+      return value;
+    }
+  }
+  if (value instanceof URL) return marshalModelReadable(value.toString(), depth, path);
+  if (value === null || value === undefined) return value;
+  const t = typeof value;
+  if (t === "number" || t === "boolean") return value;
+  if (t !== "object") return `[lrhyl-uninspectable:${t}]`; // functions, symbols, bigint: tagged, never passed
+  if (depth > 8) return "[lrhyl-uninspectable:depth]";
+  const trail = path ?? [];
+  if (trail.includes(value)) return "[lrhyl-uninspectable:cycle]";
+  const deeper = [...trail, value];
+  if (Array.isArray(value)) return value.map((v) => marshalModelReadable(v, depth + 1, deeper));
+  const proto = Object.getPrototypeOf(value);
+  if (proto === Object.prototype || proto === null) {
+    const out = {};
+    for (const [k, v] of Object.entries(value)) {
+      // Round 5: keys are model-visible strings exactly like values — marshal
+      // them with the same walker. defineProperty so a '__proto__' key becomes
+      // a plain own property and can never repoint out's prototype.
+      Object.defineProperty(out, marshalModelReadable(k, depth + 1, deeper), {
+        value: marshalModelReadable(v, depth + 1, deeper),
+        enumerable: true,
+        writable: true,
+        configurable: true,
+      });
+    }
+    return out;
+  }
+  return `[lrhyl-uninspectable:${uninspectableKind(value)}]`; // class instances: FIXED vocabulary, never a value-derived name
 }
 
 /** Read a persisted grant list into the canonical, de-duplicated shape.
@@ -142,7 +387,11 @@ export function sanitizeRequestHeaders(headers) {
   for (const [rawName, rawValue] of Object.entries(source)) {
     const name = String(rawName ?? "").trim();
     if (!name || !/^[A-Za-z0-9!#$%&'*+.^_`|~-]+$/.test(name)) {
-      refused.push(String(rawName ?? ""));
+      // Round 6: the refused list is model-visible, and header NAMES are
+      // caller-supplied strings — a hostile name like 'X-https://h?token=S'
+      // was free text in the record. Names that are not HTTP tokens are
+      // refused under a fixed marker; the attempt is still visible.
+      refused.push("<invalid-name>");
       continue;
     }
     const lower = name.toLowerCase();
@@ -169,30 +418,29 @@ export function sanitizeRequestHeaders(headers) {
  *
  * `grants` is the owner's persisted list. NO grants means NOTHING is
  * reachable — the empty list is a real answer, not a missing configuration, so
- * this fails closed with a message that names the origin and says how to grant
- * it. A silent empty response would teach the model that the network is broken
- * rather than that it is bounded.
+ * this fails closed with a machine code; the teachable prose lives in the
+ * static PYTHON_FETCH_ERROR_HINTS (round 6: a refusal message that interpolated
+ * the method string was itself a free-text leak). A silent empty response
+ * would teach the model that the network is broken rather than that it is
+ * bounded.
  *
- * Returns { ok:true, url, origin, method } or { ok:false, error, origin? }.
+ * Returns { ok:true, url, origin, method } or { ok:false, errorCode, origin? }
+ * — errorCode from the fixed PYTHON_FETCH_ERROR_CODES vocabulary, never text.
  */
 export function checkPythonNetworkRequest({ url, method = "GET", grants = [] } = {}) {
   const m = String(method ?? "GET").toUpperCase();
   if (!ALLOWED_METHODS.includes(m)) {
-    return { ok: false, error: `method ${m} is not allowed here — cap.fetch does ${ALLOWED_METHODS.join(", ")}` };
+    // Round 6: the method string is model-supplied — echoing it back in prose
+    // ('method X is not allowed') made the refusal a free-text channel.
+    return { ok: false, errorCode: "method_not_allowed" };
   }
   const target = checkFetchTarget(url);
-  if (!target.ok) return { ok: false, error: target.error };
+  if (!target.ok) return { ok: false, errorCode: target.errorCode ?? "invalid_url" };
   const u = target.url;
   const origin = normalizeGrantOrigin(u.origin);
   const allowed = normalizeGrants(grants).some((g) => g.origin === origin);
   if (!allowed) {
-    return {
-      ok: false,
-      origin,
-      error: `network access to ${origin} is not granted. Python here reaches only origins the owner has granted; ` +
-        `this request was refused and recorded. To allow it, the owner adds ${origin} in Settings → Permissions → ` +
-        `"Python network access". Nothing was sent.`,
-    };
+    return { ok: false, errorCode: "not_granted", origin };
   }
   return { ok: true, url: u.href, origin, method: m };
 }
@@ -256,7 +504,10 @@ export function createPythonNetworkLedger({ maxPerRun = MAX_RECORDS_PER_RUN, max
       count += 1;
       const ms = Math.max(0, now - inflight.startedAt);
       if (inflight.index >= 0 && inflight.index < row.records.length) {
-        row.records[inflight.index] = Object.freeze({
+        // lrhyl round 4 (review finding): abortInFlight was the FOURTH writer,
+        // pre-existing and unwired. Round 6: the interpolated abort MESSAGE is
+        // gone — an abort is the fixed code plus the duration, both structured.
+        row.records[inflight.index] = Object.freeze(marshalModelReadable(projectRecord({
           method: inflight.method,
           url: inflight.url,
           ...(inflight.origin ? { origin: inflight.origin } : {}),
@@ -264,8 +515,8 @@ export function createPythonNetworkLedger({ maxPerRun = MAX_RECORDS_PER_RUN, max
           aborted: true,
           outcome: "aborted",
           ms,
-          error: `fetch to ${inflight.origin ?? inflight.url} aborted when the Python run settled after ${ms}ms`,
-        });
+          errorCode: "aborted",
+        }, "abortInFlight")));
       }
       try {
         inflight.controller?.abort?.("run_settled");
@@ -292,28 +543,39 @@ export function createPythonNetworkLedger({ maxPerRun = MAX_RECORDS_PER_RUN, max
         return Object.freeze({ complete: () => false, isSettled: () => true });
       }
       const row = ensureRow(id);
-      const m = String(method ?? "GET").toUpperCase();
-      const u = String(url ?? "");
+      // Round 6: method is a fixed token or 'INVALID' — the model-shaped raw
+      // string never enters a record (it once did, and was echoed in refusal
+      // prose besides).
+      const m = safeMethodToken(method);
+      // lrhyl: ledger records travel to the model in the run envelope's
+      // network field — normalize at the choke point so NO writer (current or
+      // future) can put a query string into a model-readable record.
+      const u = urlWithoutQuery(url);
+      // lrhyl round 4: the in-flight closure stores the SANITISED origin, so
+      // every interpolation of it (the abort error text especially) is clean
+      // at the source — the marshal at each writer is the belt, this is the
+      // braces.
+      const o = origin == null ? null : marshalModelReadable(origin);
       const start = Number.isFinite(startedAt) ? Number(startedAt) : Date.now();
       let index = -1;
       if (row.records.length >= maxPerRun) {
         row.dropped += 1;
       } else {
         index = row.records.length;
-        row.records.push(Object.freeze({
+        row.records.push(Object.freeze(marshalModelReadable(projectRecord({
           method: m,
           url: u,
-          ...(origin ? { origin } : {}),
+          ...(o ? { origin: o } : {}),
           ok: false,
           inFlight: true,
           ms: 0,
-        }));
+        }, "begin"))));
       }
       const inflight = {
         index,
         method: m,
         url: u,
-        origin: origin ?? null,
+        origin: o,
         startedAt: start,
         controller,
         settled: false,
@@ -331,13 +593,21 @@ export function createPythonNetworkLedger({ maxPerRun = MAX_RECORDS_PER_RUN, max
             const ms = Number.isFinite(finalEntry?.ms)
               ? Number(finalEntry.ms)
               : Math.max(0, now - inflight.startedAt);
-            row.records[inflight.index] = Object.freeze({
+            // lrhyl rounds 2-6: the record is PROJECTED onto the closed shape
+            // first (round 6 — a caller's free-text 'error', or any other
+            // non-contract field, is dropped here and never reaches the
+            // marshal), then marshalled (deep walk, URL normalisation, fixed
+            // tags). The explicit url line stays: it is the fail-closed-to-
+            // empty policy for unparseable url values.
+            const merged = projectRecord({
               method: inflight.method,
               url: inflight.url,
               ...(inflight.origin ? { origin: inflight.origin } : {}),
               ms,
               ...finalEntry,
-            });
+            }, "complete");
+            if (merged.url !== undefined) merged.url = urlWithoutQuery(merged.url);
+            row.records[inflight.index] = Object.freeze(marshalModelReadable(merged));
           }
           return true;
         },
@@ -355,8 +625,12 @@ export function createPythonNetworkLedger({ maxPerRun = MAX_RECORDS_PER_RUN, max
       return abortInFlight(id, now);
     },
 
-    /** Record one attempt. `record` is already the owner-facing shape:
-     * { method, url, origin, ok, status?, bytes?, ms, error?, refusedHeaders? } */
+    /** Record one attempt. The record shape is CLOSED (round 6): exactly
+     * { method, url, origin, ok, status?, bytes?, ms, errorCode?,
+     * vaultKeyPresented?, refused?, aborted?, outcome?, refusedHeaderCount? }
+     * — anything else, and any free-text `error`, is dropped by projectRecord.
+     * `url` is normalized to origin+path — these records are model-readable
+     * via the run envelope. */
     record(runId, entry) {
       const id = String(runId ?? "");
       if (!id || takenIds.has(id) || runs.get(id)?.settled) return;
@@ -368,7 +642,12 @@ export function createPythonNetworkLedger({ maxPerRun = MAX_RECORDS_PER_RUN, max
         row.dropped += 1; // honest count, never a silent truncation
         return;
       }
-      row.records.push(Object.freeze({ ...entry }));
+      // lrhyl rounds 4+6: project onto the closed shape, then through the ONE
+      // marshal (deep-walk, URL instances, fixed tags), with the fail-closed
+      // url line kept on top.
+      const projected = projectRecord(entry, "record");
+      if (projected.url !== undefined) projected.url = urlWithoutQuery(projected.url);
+      row.records.push(Object.freeze(marshalModelReadable(projected)));
     },
 
     /** Take (and forget) a run's records. Called once when the run settles, so
@@ -382,7 +661,16 @@ export function createPythonNetworkLedger({ maxPerRun = MAX_RECORDS_PER_RUN, max
       const row = runs.get(id);
       runs.delete(id);
       if (!row) return { records: [], dropped: 0, hasSuccessfulFetch: false };
-      return { records: Object.freeze([...row.records]), dropped: row.dropped, hasSuccessfulFetch: row.hasSuccessfulFetch };
+      // lrhyl round 4: the OBSERVATION boundary — every record is re-marshalled
+      // at take() regardless of which writer produced it (the marshal is
+      // idempotent and records are bounded per run, so this costs nothing
+      // measurable). A hypothetical fifth writer that bypassed the write-time
+      // choke points still cannot hand the model an unnormalised record.
+      return {
+        records: Object.freeze(row.records.map((r) => Object.freeze(marshalModelReadable(r)))),
+        dropped: row.dropped,
+        hasSuccessfulFetch: row.hasSuccessfulFetch,
+      };
     },
 
     /** Live count, for tests and for a run still in flight. */
