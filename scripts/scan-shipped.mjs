@@ -268,7 +268,7 @@ const AGENT_WORKER_CLIENT_ALLOWED_RE = /new\s+SharedWorker\s*\(/g;
 // runtime dir). A SEPARATE canonical entry bound to the exact line/column +
 // the exact `new WorkerCtor(` shape, never a broad exemption.
 const PYTHON_WORKER_HOST_CANONICAL_PATH = "extension/lib/python-host.js";
-const PYTHON_WORKER_HOST_CANONICAL_LOCATION = { line: 81, column: 15 };
+const PYTHON_WORKER_HOST_CANONICAL_LOCATION = { line: 82, column: 15 };
 const PYTHON_WORKER_HOST_ALLOWED_RE = /new\s+WorkerCtor\s*\(/g;
 // OPFS-backed bundled-tool host: exactly one fresh module Worker, created from
 // one runtime-resolved extension URL and killed by the 180s wall deadline.
@@ -280,7 +280,7 @@ const STREAM_WORKER_HOST_ALLOWED_RE = /new\s+Worker\s*\(/g;
 // lib/emscripten-worker.js, behind the same dependency-injected factory shape
 // as the stream host; the worker is terminated on every settlement path.
 const EMSCRIPTEN_WORKER_HOST_CANONICAL_PATH = "extension/lib/emscripten-host.js";
-const EMSCRIPTEN_WORKER_HOST_CANONICAL_LOCATION = { line: 198, column: 26 };
+const EMSCRIPTEN_WORKER_HOST_CANONICAL_LOCATION = { line: 199, column: 26 };
 const EMSCRIPTEN_WORKER_HOST_ALLOWED_RE = /new\s+Worker\s*\(/g;
 // x9r8k.2's separate, SW-sender-gated STAGING host may create one fresh
 // module Worker, but only from the exact packaged Emscripten Worker URL.
