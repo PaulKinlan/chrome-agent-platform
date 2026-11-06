@@ -36,7 +36,7 @@
       "bytes": 106335
     },
     "python-worker.js": {
-      "sha256": "fde6e3f309196044d54b77b0f6af406e6a869f6e4269ab178626bc4b87e012e8",
+      "sha256": "e2a3fe2a4c8bd37ce212ffae4a56c920b02fcd7d75c7eb6bb0a3e8895079552a",
       "bytes": 26682,
       "note": "first-party classic worker (extension/lib/python-host.js spawns it per run); pinned here so the build verifies every staged byte."
     }

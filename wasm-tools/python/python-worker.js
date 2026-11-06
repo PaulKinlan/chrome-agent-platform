@@ -374,10 +374,34 @@ async def fetch(url, method="GET", headers=None, body=None):
     raw = await _bridge.request(request)
     payload = _json.loads(raw)
     if not payload.get("ok"):
-        message = payload.get("error") or "the request was refused"
-        if "failed" in message and "not granted" not in message:
+        # The broker's failure contract (lrhyl r6) is a fixed CODE plus
+        # structured, sanitised fields: error=code, origin (bare scheme+host),
+        # hint (STATIC guidance - our words, never interpolated with request
+        # data). Classification is by CODE, never by a substring of the
+        # message: the old '"failed" in message' split misclassified
+        # 'timeout'/'aborted' as refusals once r6 made the texts codes
+        # (6cwaa). The raised message composes code + origin + hint, so a
+        # refusal still names the origin and teaches how to grant it.
+        code = payload.get("error") or "refused"
+        origin = payload.get("origin") or ""
+        hint = payload.get("hint") or ""
+        message = code
+        if origin:
+            message = message + ": " + origin
+        if hint:
+            message = message + ": " + hint
+        if code in ("fetch_failed", "timeout", "aborted", "grant_store_failed"):
+            # Permitted, but did not complete - retrying may help.
             raise NetworkError(message)
-        raise NetworkRefused(message)
+        if code in ("invalid_url", "method_not_allowed", "forbidden_host", "not_granted",
+                    "vault_origin_not_approved", "vault_key_missing", "host_permission_missing",
+                    "grant_revoked", "redirect_refused", "unauthorized_principal"):
+            # Not permitted - retrying changes nothing; the owner decides.
+            raise NetworkRefused(message)
+        # unknown code: the retryable default is the safe one when the
+        # vocabulary grows - never a silent pass, never a wrong 'owner must
+        # act' claim.
+        raise NetworkError(message)
     return Response(payload)
 
 
