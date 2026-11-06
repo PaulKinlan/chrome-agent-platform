@@ -71,38 +71,39 @@ still depends on that run's permissions, origin and policy.
 
 ## Measured gates and limits
 
-Store-target bundle sizes from a fresh `npm run build:production` (measured 2026-10-16 on
-`origin/main` b6389708, v0.3.712). The reference sizes come from `STORE_SW_BUDGET_BYTES` and
+Store-target bundle sizes from a fresh `npm run build:production` (measured 2026-11-06 on
+`origin/main` 25b916ca1 with chrome-agent-platform-892u2's offscreen split applied, v0.3.739). The reference sizes come from `STORE_SW_BUDGET_BYTES` and
 `STORE_BUNDLE_BUDGETS` in `scripts/bundle-budget.mjs`, the source of truth; this table is a dated
 snapshot, so re-measure rather than trusting it. Only store `offscreen.bundle.js` has an enforced
-per-bundle ceiling (259,000 bytes, ratcheted from 250,000 by bwxf, then by hvd4s); the other twelve are reported, not enforced:
+per-bundle ceiling of 65,000 bytes (ratcheted from 250,000 by bwxf, then by hvd4s, and re-based from measurement by 892u2), and the other twelve are reported, not enforced:
 
 | Surface | Size | Ceiling | Headroom |
 | --- | ---: | ---: | ---: |
-| Store background/service-worker.js | 2,809,119 B | 3,000,000 B | 190,881 B |
-| Workers/agent-worker.js | 853,051 B | 2,000,000 B | 1,146,949 B |
-| options.bundle.js | 444,527 B | 450,000 B | 5,473 B |
-| ntp.bundle.js | 350,389 B | 500,000 B | 149,611 B |
-| sidepanel.bundle.js | 19,832 B | 250,000 B | 230,168 B |
+| Store background/service-worker.js | 2,868,049 B | 3,000,000 B | 131,951 B |
+| Workers/agent-worker.js | 857,063 B | 2,000,000 B | 1,142,937 B |
+| options.bundle.js | 291,441 B | 450,000 B | 158,559 B |
+| ntp.bundle.js | 324,241 B | 500,000 B | 175,759 B |
+| sidepanel.bundle.js | 19,985 B | 250,000 B | 230,015 B |
 | shared/diff-core.bundle.js | 16,623 B | 17,000 B | 377 B |
 | artifacts.bundle.js | 151,058 B | 200,000 B | 48,942 B |
 | artifact.bundle.js | 138,122 B | 200,000 B | 61,878 B |
 | directory.bundle.js | 61,788 B | 65,000 B | 3,212 B |
 | privacy.bundle.js | 63,912 B | 65,000 B | 1,088 B |
-| offscreen.bundle.js | 245,796 B | 259,000 B | 13,204 B |
-| settings-view.bundle.js | 85,847 B | 120,000 B | 34,153 B |
-| chunks aggregate (7 chunks) | 556,793 B | 750,000 B | 193,207 B |
+| offscreen.bundle.js | 57,876 B | 65,000 B | 7,124 B |
+| user-wasm-store-client.bundle.js | 859 B | 10,000 B | 9,141 B |
+| settings-view.bundle.js | 86,652 B | 120,000 B | 33,348 B |
+| chunks aggregate (18 chunks) | 831,632 B | 1,000,000 B | 168,368 B |
 
-Every store budget passes and none was relaxed. Five bundles sit under 5% headroom (diff-core
-377 B, privacy 1,088 B, options 5,473 B, offscreen 706 B after the hvd4s bridge ratchet, directory 3,212 B): that thin margin is
-the pattern chrome-agent-platform-3rryv tracks, not a single over-budget bundle. Note that the offscreen
-table row records the pre-wave 245,796 B snapshot; the ceiling cell tracks the enforced 259,000 B figure,
-ratcheted from the bwxf-era value by hvd4s as an explicitly tracked bridge authorised by the hub (the P2
-unbounded-streaming-read security fix measured +374 B at its shrunk floor against a pristine 80 B headroom
-floor); the x2ux1 offscreen bundle split structurally removes the need for it, and the ceiling is re-set from
-measurement when that lands (see scripts/bundle-budget.mjs); the post-bwxf
-wave-2 admission measured 255,306 B (3,694 B / ~1.4% headroom against the enforced ceiling), so active
-operational slack is narrower. The per-bundle
+Every store budget passes and none was relaxed. Three bundles sit under 5% headroom (diff-core
+377 B, privacy 1,088 B, directory 3,212 B): that thin margin is
+the pattern chrome-agent-platform-3rryv tracks, not a single over-budget bundle. The
+`chrome-agent-platform-892u2` split moved the offscreen surface OUT of that set: its entry measures
+57,876 B because the wasm tool-execution cluster it used to inline now ships as chunks the UI
+entries already carry (831,632 B across 18 chunks, against the 1,000,000 B aggregate line this
+landing re-based from 750,000 B). On the same tree the shipped package total FELL 129,784 B
+(5,899,085 → 5,769,301 B), which is the dedupe x2ux1 measured as ~130 KB; the bridge arithmetic and
+the one re-base this authorised are recorded in scripts/bundle-budget.mjs. The
+per-bundle
 ceilings quoted here earlier in this file (options 900,000, ntp 920,000, sidepanel 700,000, with
 matching sizes) predated the 20e2u code-splitting ratchet-down and were wrong on both sides of the
 comparison; since Paul's 2026-10-05 decision those other per-bundle overruns are measured and
