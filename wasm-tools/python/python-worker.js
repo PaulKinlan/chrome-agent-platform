@@ -378,7 +378,7 @@ async def fetch(url, method="GET", headers=None, body=None):
         # structured, sanitised fields: error=code, origin (bare scheme+host),
         # hint (STATIC guidance - our words, never interpolated with request
         # data). Classification is by CODE, never by a substring of the
-        # message: the old '"failed" in message' split misclassified
+        # message: the old substring-of-message split misclassified
         # 'timeout'/'aborted' as refusals once r6 made the texts codes
         # (6cwaa). The raised message composes code + origin + hint, so a
         # refusal still names the origin and teaches how to grant it.
