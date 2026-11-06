@@ -432,8 +432,9 @@ const ALLOWLISTED_SITES = new Map<string, string>([
   // justification merely ASSERTED is ENFORCED by the cac6c regression tests
   // below (source-order pin + runtime first-reply pin). Nothing in this map
   // keys to service-worker.js any more, so no line shift there can rot it.
-  // (ux4ud rebases on top of cac6c: the former 13366 renumber is moot — the
-  // entry cac6c removed is gone; the predicate is imported from pure-trust.js.)
+  // (ux4ud rebases on top of cac6c: both former renumbers (13366, 13380) are
+  // moot — the entry cac6c removed is gone; the predicate is imported from
+  // pure-trust.js.)
   [
     "extension/content/content-script.js:399",
     "content script receiving SW pushes: isTrustedServiceWorkerSenderPort — faithful port of pure.js isTrustedServiceWorkerSender (KEEP IN SYNC), id + tab/documentId absence + url pins the compiled SW bundle; pinned by the behavioral content-script test below",
