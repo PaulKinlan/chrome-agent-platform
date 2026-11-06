@@ -581,7 +581,10 @@ and each names the executable check that would catch a regression.
 - **INV-6 — A credential-shaped key never reaches a prompt, a log, a receipt or an error
   string.** `extension/lib/pure.js#SECRET_KEY_RE` classifies the credential-shaped keys that
   `extension/lib/pure.js#redactSecrets` strips recursively (`redactSecretText` and
-  `safeProviderError` cover the text and provider-error surfaces); `tests/security.test.ts:79-99`,
+  `safeProviderError` cover the text and provider-error surfaces; the caller surfaces whose
+  `redactSecrets` calls are censused live are `extension/lib/tool-summary.js`,
+  `extension/shared/components-hub.js`, `extension/background/routes/kv.js` and
+  `extension/background/service-worker.js`); `tests/security.test.ts:79-99`,
   `tests/secret-redaction.test.ts`.
 - **INV-7 — Untrusted content reaches the model only inside a per-assembly random
   boundary, and the model is told that fenced text is data.**
@@ -595,12 +598,16 @@ and each names the executable check that would catch a regression.
   finding `tm-unfenced-imported-instructions`).
 - **INV-8 — Destructive actions require an approval bound to the exact action, target and
   payload digest, and expiring.** `extension/lib/owner-approval.js#DESTRUCTIVE_ACTIONS` is the
-  destructive-action set the digest approval flow keys on;
+  destructive-action set the digest approval flow keys on (the keying uses are censused live
+  in `extension/lib/owner-approval.js`);
   `extension/lib/browser-tools.js` (`register_user_script`, `update_user_script`,
   `register_content_script`, `update_content_script` digest approval via `browser.destructive-action`).
 - **INV-9 — Origin-keyed isolation is injective and reserved namespaces are fenced.**
   `extension/lib/memory.js#isReservedMasterKey`, `extension/lib/memory.js#SITE_RESERVED_KEYS`,
-  `extension/lib/memory.js#isReservedReadKey`, `extension/lib/memory.js#isReservedWriteKey`.
+  `extension/lib/memory.js#isReservedReadKey`, `extension/lib/memory.js#isReservedWriteKey`;
+  the enforcement calls are censused live: `extension/lib/runtime-context.js` (the memory
+  digest filter calls `isReservedMasterKey`, so reserved keys never reach the model digest)
+  and the `extension/lib/memory.js` write gate.
 - **INV-10 — Imported archives strip `__proto__` and the credential keys TOGETHER in every
   recursive redacted context.** `extension/lib/archive-target-registry.js#CREDENTIAL_KEYS`
   (stripped alongside `__proto__` in every recursive redacted context);
