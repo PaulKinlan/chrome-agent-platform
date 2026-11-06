@@ -64,6 +64,13 @@ const server = Deno.serve({ port: 0, hostname: "127.0.0.1", onListen: () => {} }
       headers: { "content-type": "application/json" },
     });
   }
+  if (url.pathname === "/big") {
+    // j2mff: 10 MB + 1,000 bytes - just over the python.fetch broker's cap,
+    // so the bounded reader must cut the stream and the flag must survive all
+    // the way to the Python program (khwi9 bounded the read; j2mff proved the
+    // flag had been silently dropped by cap.Response.__slots__).
+    return new Response("A".repeat(10_001_000), { headers: { "content-type": "text/plain" } });
+  }
   return new Response("granted-origin-payload", { headers: { "content-type": "text/plain" } });
 });
 const port = (server.addr as Deno.NetAddr).port;
@@ -222,6 +229,30 @@ print("BODY:", r.text)
   const echoHits = seen.filter((r) => r.path === "/echo");
   check("caller-set Cookie/Authorization headers never reach the origin",
     echoHits.length === 1 && !echoHits[0].cookie && !echoHits[0].auth, { echoHits, headerTry });
+
+  // ── j2mff: a body over the 10 MB cap is TRUNCATED, and the Python program
+  // is TOLD - the flag rides the wire (khwi9) and survives cap.Response
+  // (__slots__ + __init__ + repr), proving the surface at the program, not
+  // just at the SW boundary.
+  const bigRun = await runPython(`
+import cap
+r = await cap.fetch("${GRANTED_ORIGIN}/big")
+print("TRUNC:", r.truncated)
+print("BYTES:", r.bytes)
+print("TEXTLEN:", len(r.text))
+print("REPR:", repr(r))
+`);
+  const bigOut = String(bigRun?.stdout ?? "");
+  check("the >10 MB body is flagged TRUNCATED at the PYTHON surface (r.truncated is True)",
+    bigOut.includes("TRUNC: True"), bigOut.slice(0, 300));
+  check("the retained body stops AT the cap - bytes and text measure the retained portion only",
+    bigOut.includes("BYTES: 10000000") && bigOut.includes("TEXTLEN: 10000000"), bigOut.slice(0, 300));
+  check("a printed Response ANNOUNCES the truncation (no silent partial)",
+    bigOut.includes("TRUNCATED at the broker's byte cap"), bigOut.slice(0, 400));
+  const bigRecords = Array.isArray(bigRun?.network) ? bigRun.network : [];
+  check("the run's network RECORD carries truncated=true with the retained byte count",
+    bigRecords.length === 1 && bigRecords[0].truncated === true && bigRecords[0].bytes === 10_000_000 && bigRecords[0].ok === true,
+    bigRecords);
 
   // ── the boundaries a grant does NOT move ─────────────────────────────────
   const redirected = await runPython(`

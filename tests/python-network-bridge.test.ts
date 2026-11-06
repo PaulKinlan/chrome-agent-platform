@@ -845,3 +845,64 @@ Deno.test("guh95 SW source pin: python.fetch echoes the PRE-SUBSTITUTION templat
   assert(sw.includes("url: urlWithoutQuery(String(url ?? \"\")),"), "the model-readable echo is the template url the model itself wrote");
   assert(!sw.includes("urlWithoutQuery(res.url || u.href)"), "the post-substitution echo (res.url/u.href - both carry substituted vault secrets) is deleted, not commented out");
 });
+// --- j2mff: the truncated flag reaches the PYTHON PROGRAM, not just the SW return ---
+//
+// khwi9's landed claim said "truncation surfaced to the Python program", but
+// cap.Response declares __slots__ — and a slots class SILENTLY DISCARDS any
+// attribute not listed. The SW return carried truncated; python-worker.js's
+// Response never copied it, so a >10 MB body was silently partial at the
+// Python surface (the container-not-content pattern: the review read the SW
+// return as the Python surface). These pins hold the CONTENT contract at the
+// Python side: the slots tuple lists the flag, __init__ copies it from the
+// payload under the SAME key the SW writes, and both live in class Response.
+
+Deno.test("j2mff: cap.Response carries truncated - slots list it, __init__ copies it, same key the SW writes", async () => {
+  const worker = await Deno.readTextFile(new URL("../wasm-tools/python/python-worker.js", import.meta.url));
+  assert(
+    worker.includes('__slots__ = ("status", "url", "headers", "text", "bytes", "truncated")'),
+    "cap.Response.__slots__ must list truncated - a slots class silently discards any attribute not listed, which is exactly how khwi9's flag vanished",
+  );
+  assert(
+    worker.includes('self.truncated = bool(payload.get("truncated"))'),
+    "__init__ must copy the flag from the payload as a bool",
+  );
+  const respStart = worker.indexOf("class Response:");
+  const slotsIdx = worker.indexOf('__slots__ = ("status"');
+  const copyIdx = worker.indexOf('self.truncated = bool(payload.get("truncated"))');
+  assert(respStart > 0 && slotsIdx > respStart && copyIdx > slotsIdx, "the slots entry and the init copy live in class Response, slots before the copy");
+  // Cross-surface key contract: the worker reads the same literal key the SW
+  // return writes (khwi9's SW pin covers the write side; this covers the read).
+  assert(worker.includes('payload.get("truncated")'), "the worker reads the key 'truncated' - the same literal the SW's tagUntrusted return writes");
+  // A printed Response announces truncation - silent partiality is the defect.
+  assert(worker.includes('", TRUNCATED at the broker\'s byte cap" if self.truncated else ""'), "__repr__ must announce a truncated body");
+  // The flag is documented where a Python author reads docs: the class docstring.
+  assert(/class Response:[\s\S]{0,400}?truncated/.test(worker), "the Response docstring must mention the truncated flag");
+});
+
+// --- 6cwaa folded into j2mff (coord notified): the worker error path speaks r6 ---
+//
+// lrhyl r6 made the broker's failure contract a fixed CODE plus structured
+// sanitised fields (origin: bare scheme+host; hint: STATIC guidance). The
+// worker's error path never learned the contract: it substring-matched the
+// message ('failed' in it) to split NetworkError/NetworkRefused - so 'timeout'
+// and 'aborted' raised NetworkRefused ("retrying changes nothing", materially
+// wrong guidance) - and it raised the bare code, DISCARDING the origin and the
+// hint, which is why kat-python-permissioned-fetch's 'the refusal names the
+// origin and how to grant it' has been deterministic RED on main's heavy tier
+// since lrhyl landed. Fix: classify by CODE, compose the message from the
+// structured fields, fail safe on unknown codes.
+
+Deno.test("6cwaa: the worker error path classifies by CODE and composes the message from the sanitised fields", async () => {
+  const worker = await Deno.readTextFile(new URL("../wasm-tools/python/python-worker.js", import.meta.url));
+  assert(!worker.includes('"failed" in message'), "the substring-based classification is gone - it misclassified timeout/aborted once messages became codes");
+  assert(worker.includes('if code in ("fetch_failed", "timeout", "aborted", "grant_store_failed"):'), "the retryable class is a CODE set: permitted-but-did-not-complete");
+  assert(worker.includes('if code in ("invalid_url", "method_not_allowed", "forbidden_host", "not_granted",'), "the permission class is a CODE set");
+  assert(worker.includes("raise NetworkError(message)") && worker.includes("raise NetworkRefused(message)"), "both exception classes are raised from the code sets");
+  // unknown codes: the retryable default is the safe one when the vocabulary grows
+  const errIdx = worker.indexOf("payload = _json.loads(raw)");
+  const fallbackIdx = worker.indexOf("# unknown code: the retryable default");
+  assert(errIdx > 0 && fallbackIdx > errIdx, "an unknown code falls back to NetworkError (retryable), never a silent pass");
+  // the r6 structured fields reach the program: refusals stay teachable
+  assert(worker.includes('payload.get("hint")'), "the STATIC hint reaches the Python program (how to grant, what to change)");
+  assert(worker.includes('payload.get("origin")'), "the sanitised origin reaches the Python program (which origin was refused)");
+});

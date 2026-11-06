@@ -315,9 +315,15 @@ class NetworkError(Exception):
 
 
 class Response:
-    """One HTTP response. Bodies are text; use .json() to parse."""
+    """One HTTP response. Bodies are text; use .json() to parse.
 
-    __slots__ = ("status", "url", "headers", "text", "bytes")
+    'truncated' is True when the body exceeded the broker's byte cap (10 MB)
+    and was cut at the stream: 'text' and 'bytes' describe only the RETAINED
+    portion. A truncated body is never an error - check the flag before
+    treating a partial document as a complete one (j2mff).
+    """
+
+    __slots__ = ("status", "url", "headers", "text", "bytes", "truncated")
 
     def __init__(self, payload):
         self.status = payload.get("status")
@@ -325,6 +331,10 @@ class Response:
         self.headers = dict(payload.get("headers") or {})
         self.text = payload.get("text") or ""
         self.bytes = payload.get("bytes") or 0
+        # j2mff: __slots__ silently discards anything not listed - khwi9 put
+        # the flag on the wire and this class dropped it, so a >10 MB body was
+        # silently partial here. Copy it explicitly, as a bool.
+        self.truncated = bool(payload.get("truncated"))
 
     @property
     def ok(self):
@@ -335,7 +345,12 @@ class Response:
         return _json.loads(self.text)
 
     def __repr__(self):
-        return "<cap.Response %s %s (%s bytes)>" % (self.status, self.url, self.bytes)
+        # j2mff: a truncated body announces itself wherever the object is
+        # printed - silent partiality is the defect this bead exists for.
+        return "<cap.Response %s %s (%s bytes%s)>" % (
+            self.status, self.url, self.bytes,
+            ", TRUNCATED at the broker's byte cap" if self.truncated else "",
+        )
 
 
 async def fetch(url, method="GET", headers=None, body=None):
@@ -359,10 +374,34 @@ async def fetch(url, method="GET", headers=None, body=None):
     raw = await _bridge.request(request)
     payload = _json.loads(raw)
     if not payload.get("ok"):
-        message = payload.get("error") or "the request was refused"
-        if "failed" in message and "not granted" not in message:
+        # The broker's failure contract (lrhyl r6) is a fixed CODE plus
+        # structured, sanitised fields: error=code, origin (bare scheme+host),
+        # hint (STATIC guidance - our words, never interpolated with request
+        # data). Classification is by CODE, never by a substring of the
+        # message: the old substring-of-message split misclassified
+        # 'timeout'/'aborted' as refusals once r6 made the texts codes
+        # (6cwaa). The raised message composes code + origin + hint, so a
+        # refusal still names the origin and teaches how to grant it.
+        code = payload.get("error") or "refused"
+        origin = payload.get("origin") or ""
+        hint = payload.get("hint") or ""
+        message = code
+        if origin:
+            message = message + ": " + origin
+        if hint:
+            message = message + ": " + hint
+        if code in ("fetch_failed", "timeout", "aborted", "grant_store_failed"):
+            # Permitted, but did not complete - retrying may help.
             raise NetworkError(message)
-        raise NetworkRefused(message)
+        if code in ("invalid_url", "method_not_allowed", "forbidden_host", "not_granted",
+                    "vault_origin_not_approved", "vault_key_missing", "host_permission_missing",
+                    "grant_revoked", "redirect_refused", "unauthorized_principal"):
+            # Not permitted - retrying changes nothing; the owner decides.
+            raise NetworkRefused(message)
+        # unknown code: the retryable default is the safe one when the
+        # vocabulary grows - never a silent pass, never a wrong 'owner must
+        # act' claim.
+        raise NetworkError(message)
     return Response(payload)
 
 
