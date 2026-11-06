@@ -94,15 +94,22 @@ per-bundle ceiling of 65,000 bytes (ratcheted from 250,000 by bwxf, then by hvd4
 | settings-view.bundle.js | 86,652 B | 120,000 B | 33,348 B |
 | chunks aggregate (18 chunks) | 831,632 B | 1,000,000 B | 168,368 B |
 
-Every store budget passes and none was relaxed. Three bundles sit under 5% headroom (diff-core
+Every store budget passes. This landing moved TWO of the numbers it reports, deliberately and from
+measurement, and this paragraph says so instead of claiming that nothing was relaxed: the offscreen
+entry's enforced cap was re-based DOWN 259,000 B → 65,000 B (the split entry measures 57,876 B, so
+the realised headroom is 7,124 B rather than the 706 B the bridge carried), and the aggregate
+chunks line was re-based UP 750,000 B → 1,000,000 B (measured 831,632 B, realised headroom
+168,368 B) because the chunk set grew from 13 files to 18 when offscreen's shared modules became
+chunks the UI entries already carry. The aggregate exists precisely so dedupe at entry level cannot
+hide bytes, and it still budgets all of them; the package total FELL 129,784 B on the same tree
+(5,899,085 → 5,769,301 B), which is the dedupe x2ux1 measured as ~130 KB. The bridge arithmetic and
+the one re-base it authorised are recorded in scripts/bundle-budget.mjs. All of these numbers were
+printed by `npm run build:production` on 2026-11-06 against origin/main 25b916ca1 with this landing
+applied (v0.3.739). Three bundles sit under 5% headroom (diff-core
 377 B, privacy 1,088 B, directory 3,212 B): that thin margin is
 the pattern chrome-agent-platform-3rryv tracks, not a single over-budget bundle. The
-`chrome-agent-platform-892u2` split moved the offscreen surface OUT of that set: its entry measures
-57,876 B because the wasm tool-execution cluster it used to inline now ships as chunks the UI
-entries already carry (831,632 B across 18 chunks, against the 1,000,000 B aggregate line this
-landing re-based from 750,000 B). On the same tree the shipped package total FELL 129,784 B
-(5,899,085 → 5,769,301 B), which is the dedupe x2ux1 measured as ~130 KB; the bridge arithmetic and
-the one re-base this authorised are recorded in scripts/bundle-budget.mjs. The
+`chrome-agent-platform-892u2` split moved the offscreen surface OUT of that set - the wasm
+tool-execution cluster it used to inline now ships as chunks the UI entries already carry. The
 per-bundle
 ceilings quoted here earlier in this file (options 900,000, ntp 920,000, sidepanel 700,000, with
 matching sizes) predated the 20e2u code-splitting ratchet-down and were wrong on both sides of the

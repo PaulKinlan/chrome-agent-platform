@@ -1142,7 +1142,7 @@ Deno.test("9epn.5 surfaces are bundled: HTML documents and dynamic imports load 
   }
 });
 
-Deno.test("9epn.5 bundle budget: offscreen.bundle.js <= 259 KB minified and all surface bundles have metafile reports", async () => {
+Deno.test("9epn.5 bundle budget: offscreen.bundle.js <= the enforced entry ceiling (892u2 re-base) and all surface bundles have metafile reports", async () => {
   const repo = fileURLToPath(new URL("../", import.meta.url));
   const offscreenBundle = join(repo, "extension", "dist", "offscreen.bundle.js");
 

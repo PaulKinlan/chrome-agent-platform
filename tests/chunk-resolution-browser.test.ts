@@ -329,7 +329,8 @@ Deno.test("20e2u condition (e): load ntp, sidepanel, options in real Chrome; all
       console.log(`Loaded ${surface.path} successfully. Chunks verified against import graph: ${[...loadedChunkNames].join(", ")}`);
 
       // 5. Exercise lazy dynamic imports separately in the surface context
-      if (surface.bundle === "options.bundle.js") {        const lazyStoreResult = await client.eval(
+      if (surface.bundle === "options.bundle.js") {
+        const lazyStoreResult = await client.eval(
           sessionId,
           `import(chrome.runtime.getURL("dist/user-wasm-store-client.bundle.js")).then(m => typeof m.runOwnerBlobStore === "function")`,
         );
