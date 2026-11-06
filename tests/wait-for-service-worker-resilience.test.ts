@@ -31,6 +31,7 @@ import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
 import { ENVIRONMENTAL_REFUSAL_MARKER } from "../scripts/lib/environmental-verdict.mjs";
 import {
   waitForServiceWorker,
+  withTimeoutViaSleep,
   SW_MATCH,
   ServiceWorkerTargetTimeoutError,
   countLiveChromeProcesses,
@@ -386,4 +387,23 @@ Deno.test("3nurz: countLiveChromeProcesses executes safely and returns non-negat
 
 Deno.test("3nurz: SW_MATCH still identifies the loaded extension's service worker target", () => {
   assert(SW_MATCH(EXTENSION_SW), "the loaded extension SW target must match");
+});
+
+// ---------------------------------------------------------------------------
+// Mutation-drill pin (ilhra). This pin was born from an EXECUTED drill, not an
+// assumed one: removing `.finally(() => t.cancel())` from withTimeoutViaSleep
+// left the original ten-case suite GREEN — nothing observed the dangling
+// losing timer, yet on a virtual clock it fires later and drags time forward
+// between polls (exactly what the seam's docblock warns about). The assertion
+// below kills that mutant: with the cancel removed, pending() is 1 here.
+// ---------------------------------------------------------------------------
+Deno.test("ilhra mutation drill: withTimeoutViaSleep cancels its race timer the moment the wrapped call settles — zero pending virtual timers afterwards", async () => {
+  const clock = virtualClock();
+  const result = await withTimeoutViaSleep(Promise.resolve(EXTENSION_SW), 250, clock);
+  assertEquals(result, EXTENSION_SW, "the settled value passes through");
+  assertEquals(
+    clock.pending(),
+    0,
+    "the losing 250ms race timer must be cancelled at settlement — a dangling timer would fire later and drag virtual time between polls",
+  );
 });
