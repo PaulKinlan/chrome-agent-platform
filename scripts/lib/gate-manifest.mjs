@@ -531,3 +531,23 @@ export function formatFleetCoverageManifest({ graph, failed, ran, rc, changed = 
   }
   return parts.join(" ");
 }
+
+/**
+ * The receipt line for a gate exiting with `rc` (chrome-agent-platform-j677e).
+ * THE CONDITIONAL PROPERTY, in one place: `failed` defaults to the outcome
+ * encoding (rc===0 -> 0, else 1), so a RED run can never emit a receipt that
+ * reads green - proven end-to-end by the executed emission falsifier of
+ * 2026-11-06 (a planted throw through the real gate flipped the receipt's
+ * final line to `failed=1 ran=807 rc=1` against the same tip's green
+ * `failed=0 ran=807 rc=0`). Non-certifying modes pass failed:1 EXPLICITLY so
+ * even a green --always-on/--core run can never read as a certified gate.
+ */
+export function fleetReceiptForExit(rc, { graph, ran, changed = null, failed = null }) {
+  return formatFleetCoverageManifest({
+    graph,
+    failed: failed ?? (rc === 0 ? 0 : 1),
+    ran,
+    rc,
+    changed,
+  });
+}

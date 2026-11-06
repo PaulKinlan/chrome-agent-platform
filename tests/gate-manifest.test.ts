@@ -19,6 +19,7 @@ import {
   emitGateLedger,
   explainChangedFileMapping,
   formatFleetCoverageManifest,
+  fleetReceiptForExit,
   formatGateManifest,
   formatGateUnmapped,
   formatGateUnknown,
@@ -624,4 +625,50 @@ Deno.test("j677e: select-tests.mjs has exactly one process.exit and it lives ins
   assert(gate, "the single process.exit must be the last statement of exitGate");
   const calls = code.match(/exitGate\(/g) ?? [];
   assert(calls.length >= 7, `definition + all six gate terminals must call exitGate, found ${calls.length}`);
+});
+
+// The CONDITIONAL property, pinned at unit level after the executed emission falsifier of
+// 2026-11-06 proved it end to end (coord: "the DRILL proves the receipt works while the SUITE
+// still only checks formatting"). The falsifier: a planted throw in THIS file's first test,
+// through the real gate - exit 1, 285s - flipped the receipt's complete final line from the
+// same tip's green `failed=0 ran=807 rc=0 changed=4` to `failed=1 ran=807 rc=1 changed=4`,
+// with outcome:failed in the JSON ledger. These pins replay that exact pair through the
+// shared formatter so the property outlives the drill: a red gate can never emit a green
+// receipt, because `failed` defaults to the outcome encoding in ONE place.
+Deno.test("j677e: fleetReceiptForExit encodes the run outcome - a red exit can never format as green", () => {
+  // The falsifier pair, verbatim from the executed drill at tip 296257440:
+  assertEquals(
+    fleetReceiptForExit(0, { graph: "FULL", ran: 807, changed: 4 }),
+    "GATE-COVERAGE-MANIFEST graph=FULL failed=0 ran=807 rc=0 changed=4",
+  );
+  const red = fleetReceiptForExit(1, { graph: "FULL", ran: 807, changed: 4 });
+  assertEquals(red, "GATE-COVERAGE-MANIFEST graph=FULL failed=1 ran=807 rc=1 changed=4");
+  assert(!red.includes("failed=0"), "a red receipt carries no green failed field");
+  assert(!/ rc=0( |$)/.test(red), "a red receipt carries no green rc field");
+  // Any non-zero exit encodes failed>=1, whatever the code means (refusals, signals, npm trailers):
+  for (const rc of [1, 2, 75, 124, 137, 143]) {
+    const line = fleetReceiptForExit(rc, { graph: "INCOMPLETE", ran: 0 });
+    assert(line.includes(`failed=1 ran=0 rc=${rc}`), `rc=${rc} must encode failed=1: ${line}`);
+  }
+  // An explicit failed always survives (non-certifying modes force failed:1 even at rc=0):
+  assert(fleetReceiptForExit(0, { graph: "INCOMPLETE", ran: 19, failed: 1 }).includes("failed=1"));
+  // and an explicit count is never overwritten by the encoding:
+  assert(fleetReceiptForExit(1, { graph: "FULL", ran: 807, failed: 3 }).includes("failed=3"));
+});
+
+Deno.test("j677e source pin: exitGate derives the receipt via fleetReceiptForExit - the outcome encoding lives in ONE place", async () => {
+  const src = await Deno.readTextFile(new URL("../scripts/select-tests.mjs", import.meta.url));
+  const start = src.indexOf("function exitGate(");
+  assert(start >= 0, "exitGate exists");
+  const region = src.slice(start, src.indexOf("\n}", start) + 2);
+  assert(region.includes("fleetReceiptForExit(rc,"), "the receipt line comes from the shared conditional formatter");
+  assert(!region.includes("failed ?? ("), "the outcome-encoding default is NOT re-inlined at the exit (single source)");
+  assert(!region.includes("formatFleetCoverageManifest"), "exitGate no longer calls the bare formatter");
+  assert(region.includes("process.exit(rc)"), "the true exit code still lands even if formatting throws");
+  assert(region.includes("receipt withheld"), "a formatting failure is announced, never silent");
+  const lib = await Deno.readTextFile(new URL("../scripts/lib/gate-manifest.mjs", import.meta.url));
+  const fnStart = lib.indexOf("export function fleetReceiptForExit");
+  assert(fnStart >= 0, "the shared formatter is exported from gate-manifest.mjs");
+  const fn = lib.slice(fnStart, lib.indexOf("\n}", fnStart) + 2);
+  assert(fn.includes("failed ?? (rc === 0 ? 0 : 1)"), "the outcome encoding is the formatter's default");
 });

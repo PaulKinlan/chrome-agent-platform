@@ -56,7 +56,7 @@ import {
   specifierNamesPackage,
 } from "./lib/lockfile-delta.mjs";
 import { isPassiveContentFile } from "./lib/content-exemptions.mjs";
-import { emitGateLedger, explainChangedFileMapping, formatFleetCoverageManifest } from "./lib/gate-manifest.mjs";
+import { emitGateLedger, explainChangedFileMapping, fleetReceiptForExit } from "./lib/gate-manifest.mjs";
 import { decideBuild, ensureStoreBuild, findDistConsumers } from "./build-if-needed.mjs";
 import { checkBrowserPrerequisite } from "./lib/browser-prerequisite.mjs";
 import { ENVIRONMENTAL_REFUSAL_EXIT, combinePhaseExitCodes } from "./lib/environmental-verdict.mjs";
@@ -1205,13 +1205,7 @@ async function prepareBuild(decision, enabled) {
  */
 function exitGate(rc, { graph, ran, changed = null, failed = null }) {
   try {
-    console.error(formatFleetCoverageManifest({
-      graph,
-      failed: failed ?? (rc === 0 ? 0 : 1),
-      ran,
-      rc,
-      changed,
-    }));
+    console.error(fleetReceiptForExit(rc, { graph, ran, changed, failed }));
   } catch (err) {
     console.error(`select-tests: GATE-COVERAGE-MANIFEST receipt withheld (${err?.message ?? err}); the exit code below is the contract`);
   }
