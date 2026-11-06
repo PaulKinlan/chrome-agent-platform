@@ -477,3 +477,55 @@ Deno.test("lrhyl SW source pin: the python.fetch response echo strips, no bare e
   assert(lib.includes("...(typeof entry?.error === \"string\" ? { error: scrubUrlQueries(entry.error) } : {}),"), "record() scrubs error text at the choke point (r2)");
   assert(lib.includes("if (typeof merged.error === \"string\") merged.error = scrubUrlQueries(merged.error);"), "complete() scrubs error text at the choke point (r2)");
 });
+
+// --- lrhyl round 3: the reviewer's origin repro and the shape-independent fix ---
+//
+// Round 2 normalised the ENUMERATED fields (url, error) at the construction
+// point but passed `origin` through untouched: the reviewer's executed ledger
+// repro showed RECORDS=[{url: https://h/p, origin: https://h/p?token=SECRET},
+// ...] — the asserted choke-point invariant was false for a caller-supplied
+// value again, the round-1 class of finding. The production broker passes a
+// normalised verdict.origin today, but the choke point must not DEPEND on
+// caller discipline. Round 3 scrubs EVERY own string field that parses as a
+// URL with a query, so a field nobody enumerated (today origin, tomorrow a
+// new one arriving through a caller spread) cannot leak.
+
+Deno.test("lrhyl r3: the reviewer's origin repro — a caller-supplied query-bearing origin is scrubbed at EVERY choke point", () => {
+  const ledger = createPythonNetworkLedger();
+  // choke point 1: begin()'s dispatch-time record
+  const i1 = ledger.begin("run-lrhyl-r3", { method: "GET", url: "https://h/p", origin: `https://h/p?token=${SECRET_PLACEHOLDER}`, startedAt: Date.now(), controller: null });
+  // choke point 2: complete()'s merged record — finalEntry carries the origin
+  i1.complete({ ok: true, status: 200, origin: `https://h/p?token=${SECRET_PLACEHOLDER}` });
+  // choke point 3: record()'s direct writer path
+  ledger.record("run-lrhyl-r3", { method: "GET", url: "https://h/q", origin: `https://h/p?token=${SECRET_PLACEHOLDER}`, ok: false, refused: true, ms: 1 });
+  const taken = ledger.take("run-lrhyl-r3");
+  assertEquals(taken.records.length, 2);
+  for (const rec of taken.records) {
+    assertEquals(rec.origin, "https://h/p", "origin is scrubbed to origin+path like every URL-ish field");
+  }
+  const serialized = JSON.stringify(taken.records);
+  assert(!serialized.includes(SECRET_PLACEHOLDER), "the reviewer's repro: no model-readable record may carry the token");
+  assert(!serialized.includes("token="), "not even the query KEY survives");
+});
+
+Deno.test("lrhyl r3: the scrub is SHAPE-INDEPENDENT — a novel field arriving through the caller spread cannot smuggle a query", () => {
+  const ledger = createPythonNetworkLedger();
+  const inflight = ledger.begin("run-lrhyl-r3b", { method: "GET", url: "https://api.example.com/z", origin: "https://api.example.com", startedAt: Date.now(), controller: null });
+  inflight.complete({
+    ok: true,
+    status: 200,
+    redirectTarget: `https://api.example.com/elsewhere?sig=${SECRET_PLACEHOLDER}`,
+    debug: { note: "nested values are not URL fields" },
+    label: "just a string, not a url",
+    count: 42,
+  });
+  ledger.record("run-lrhyl-r3b", { method: "GET", url: "https://api.example.com/y", ok: false, effectiveUrl: `https://api.example.com/y?retry=${SECRET_PLACEHOLDER}`, ms: 1 });
+  const taken = ledger.take("run-lrhyl-r3b");
+  assertEquals(taken.records[0].redirectTarget, "https://api.example.com/elsewhere", "a field NOBODY enumerated is scrubbed because the walker covers every own string field");
+  assertEquals(taken.records[0].label, "just a string, not a url", "non-URL strings pass through untouched");
+  assertEquals(taken.records[0].count, 42, "non-string fields pass through untouched");
+  assertEquals(taken.records[1].effectiveUrl, "https://api.example.com/y", "record() writers get the same walker");
+  const serialized = JSON.stringify(taken.records);
+  assert(!serialized.includes(SECRET_PLACEHOLDER), "no novel field may carry the query value");
+  assert(!serialized.includes("sig=") && !serialized.includes("retry="), "not even the query KEYS survive");
+});

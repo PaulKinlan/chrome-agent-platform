@@ -113,6 +113,31 @@ export function scrubUrlQueries(text) {
   return String(text ?? "").replace(/((?:https?:)?\/\/[^\s"'`)\]]*)\?[^\s"'`)\]]*/gi, "$1");
 }
 
+/** lrhyl round 3 (review finding): per-field ENUMERATION kept losing — round 1
+ * missed the post-spread `url`, round 2 missed `origin`. A ledger record's
+ * fields are not a closed set: callers can add fields through the finalEntry /
+ * entry spreads, so the choke-point invariant must not depend on which names
+ * were remembered. This walks every own string field and scrubs any value that
+ * PARSES as a URL carrying a query — shape-independent by construction. Values
+ * that do not parse (free text, quasi-URLs) are left to the dedicated error
+ * scrub (scrubUrlQueries); non-string fields pass through untouched. Returns
+ * the same object when nothing needed scrubbing (the common, honest case). */
+export function scrubUrlFields(record) {
+  if (!record || typeof record !== "object") return record;
+  let out = null;
+  for (const [key, value] of Object.entries(record)) {
+    if (typeof value !== "string") continue;
+    try {
+      const u = new URL(value);
+      if (!u.search) continue;
+    } catch {
+      continue;
+    }
+    (out ??= { ...record })[key] = urlWithoutQuery(value);
+  }
+  return out ?? record;
+}
+
 /** Read a persisted grant list into the canonical, de-duplicated shape.
  * Anything unreadable is DROPPED, never guessed at: a grant that cannot be
  * parsed is not a grant. */
@@ -330,14 +355,14 @@ export function createPythonNetworkLedger({ maxPerRun = MAX_RECORDS_PER_RUN, max
         row.dropped += 1;
       } else {
         index = row.records.length;
-        row.records.push(Object.freeze({
+        row.records.push(Object.freeze(scrubUrlFields({
           method: m,
           url: u,
           ...(origin ? { origin } : {}),
           ok: false,
           inFlight: true,
           ms: 0,
-        }));
+        })));
       }
       const inflight = {
         index,
@@ -362,11 +387,13 @@ export function createPythonNetworkLedger({ maxPerRun = MAX_RECORDS_PER_RUN, max
               ? Number(finalEntry.ms)
               : Math.max(0, now - inflight.startedAt);
             // lrhyl round 2 (review finding): sanitise where the record is
-            // CONSTRUCTED - AFTER the spread, not before. Pre-fix, a caller
-            // supplying finalEntry.url overrode the sanitised inflight.url
-            // (the spread came last), making the ledger's query-free claim a
-            // false invariant; and finalEntry.error text could quote the
-            // failed URL, query included.
+            // CONSTRUCTED - AFTER the spread, not before. Round 3 (second
+            // review finding): enumerated fields kept losing (round 2 missed
+            // `origin`), so the construction point now walks EVERY own string
+            // field through scrubUrlFields - shape-independent, no name list
+            // to forget. The explicit url line stays (it also fails closed on
+            // strings that do not PARSE, which the walker leaves alone), and
+            // error text keeps its lexical free-text scrub.
             const merged = {
               method: inflight.method,
               url: inflight.url,
@@ -376,7 +403,7 @@ export function createPythonNetworkLedger({ maxPerRun = MAX_RECORDS_PER_RUN, max
             };
             if (merged.url !== undefined) merged.url = urlWithoutQuery(merged.url);
             if (typeof merged.error === "string") merged.error = scrubUrlQueries(merged.error);
-            row.records[inflight.index] = Object.freeze(merged);
+            row.records[inflight.index] = Object.freeze(scrubUrlFields(merged));
           }
           return true;
         },
@@ -411,13 +438,14 @@ export function createPythonNetworkLedger({ maxPerRun = MAX_RECORDS_PER_RUN, max
       }
       // lrhyl: same choke-point normalization as begin() — record() writers
       // pass raw URLs and the records are model-readable. Round 2: error text
-      // is scrubbed here too, so EVERY ledger writer is covered at the choke
-      // point and no caller can smuggle a query in through either field.
-      row.records.push(Object.freeze({
+      // is scrubbed here too. Round 3: EVERY own string field that parses as a
+      // query-bearing URL is scrubbed (the reviewer's origin repro), so no
+      // caller-supplied or future field can smuggle a query in.
+      row.records.push(Object.freeze(scrubUrlFields({
         ...entry,
         ...(entry?.url !== undefined ? { url: urlWithoutQuery(entry.url) } : {}),
         ...(typeof entry?.error === "string" ? { error: scrubUrlQueries(entry.error) } : {}),
-      }));
+      })));
     },
 
     /** Take (and forget) a run's records. Called once when the run settles, so

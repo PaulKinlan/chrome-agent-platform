@@ -130,10 +130,15 @@ inventory and the sender/inventory guard described in INV-15.
   normalized to origin+path (`extension/lib/python-network.js#urlWithoutQuery`,
   lrhyl), because the query string is exactly where callers put credentials (the
   `?key=` pattern). The normalization is applied where each record is CONSTRUCTED —
-  after any caller-supplied override is spread in — so no writer path can smuggle a
-  query through the `url` field, and model-visible error text (exception messages
-  may quote the failed URL) is query-scrubbed at the same ledger choke points
-  (`extension/lib/python-network.js#scrubUrlQueries`, lrhyl round 2). INV-7 fences
+  after any caller-supplied override is spread in — and is SHAPE-INDEPENDENT: every
+  own string field of a record that parses as a query-bearing URL is scrubbed
+  (`extension/lib/python-network.js#scrubUrlFields`, lrhyl round 3, after a review
+  found the round-2 field enumeration missed a caller-supplied `origin`), so no
+  writer path can smuggle a query through the `url` field, through `origin`, or
+  through any future field arriving via a caller spread; model-visible error text
+  (exception messages may quote the failed URL) is query-scrubbed at the same
+  ledger choke points (`extension/lib/python-network.js#scrubUrlQueries`, lrhyl
+  round 2). INV-7 fences
   the untrusted BODY side of this boundary, and the strip closes the REQUEST-echo
   side for the Python broker.
 - **TB5 — The ACP bridge.** A loopback WebSocket on the host in front of an agent
