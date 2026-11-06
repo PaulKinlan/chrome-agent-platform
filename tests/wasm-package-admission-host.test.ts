@@ -77,6 +77,6 @@ Deno.test("admission host: the trusted SW sender passes the fence (positive cont
 Deno.test("admission host: the fence test's SW path matches the runtime's declared service worker", () => {
   // If SERVICE_WORKER_BUNDLE_PATH ever moves, the positive control above would
   // silently degrade into a second negative test. Bind the literal here.
-  const pure = Deno.readTextFileSync(fileURLToPath(new URL("../extension/lib/pure.js", import.meta.url)));
+  const pure = Deno.readTextFileSync(fileURLToPath(new URL("../extension/lib/pure-trust.js", import.meta.url)));
   assert(pure.includes('export const SERVICE_WORKER_BUNDLE_PATH = "dist/background/service-worker.js"'), "SW bundle path moved — update this test's SW_PATH");
 });
