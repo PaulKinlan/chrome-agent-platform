@@ -9,6 +9,8 @@
 import { assert, assertEquals, assertThrows } from "jsr:@std/assert@1";
 import {
   BUILD_GATE_DEFERRAL_SUFFIX,
+  FLEET_MANIFEST_GRAPHS,
+  FLEET_MANIFEST_PREFIX,
   GATE_MANIFEST_PREFIX,
   GATE_UNKNOWN_PREFIX,
   GATE_UNMAPPED_PREFIX,
@@ -16,6 +18,7 @@ import {
   deferredTierEntries,
   emitGateLedger,
   explainChangedFileMapping,
+  formatFleetCoverageManifest,
   formatGateManifest,
   formatGateUnmapped,
   formatGateUnknown,
@@ -543,4 +546,82 @@ Deno.test("fhh50 ledger: repo metadata is not-applicable, agent tooling is unmap
     !written.some((line) => line.includes(".beads/issues.jsonl")),
     "declared metadata is exempt, so it must not be reported as unmapped",
   );
+});
+
+// chrome-agent-platform-j677e: the fleet-shaped terminal receipt. The wire contract belongs to
+// ~/fleet/remote/producer-verdict.py, not to us — these pins replay ITS parser rules verbatim so a
+// green gate run can be certified on the strongest producer form (a structured final line with
+// graph= and numeric failed=) instead of only the weaker PASS-line regex.
+Deno.test("j677e: formatFleetCoverageManifest emits the exact fleet wire shape, fields in stable order", () => {
+  const line = formatFleetCoverageManifest({ graph: "PARTIAL", failed: 0, ran: 53, rc: 0, changed: 7 });
+  assertEquals(line, "GATE-COVERAGE-MANIFEST graph=PARTIAL failed=0 ran=53 rc=0 changed=7");
+  assert(!line.includes("\n"), "the receipt is exactly one line");
+});
+
+Deno.test("j677e: the receipt satisfies producer-verdict.py's parser rules verbatim", () => {
+  // Replay of ~/fleet/remote/producer-verdict.py: fields = last_line.split(); fields[0] must be
+  // the prefix; every other field is key=value with key fullmatching [a-z][a-z0-9_-]*, no
+  // duplicate keys, non-empty values; graph must be non-empty; failed must fullmatch [0-9]+ and
+  // be 0 for a PASS; the repo declaration '^GATE-COVERAGE-MANIFEST .+$' must fullmatch the line.
+  const declaration = /^GATE-COVERAGE-MANIFEST .+$/;
+  for (
+    const line of [
+      formatFleetCoverageManifest({ graph: "FULL", failed: 0, ran: 747, rc: 0, changed: 12 }),
+      formatFleetCoverageManifest({ graph: "PARTIAL", failed: 0, ran: 53, rc: 0 }),
+      formatFleetCoverageManifest({ graph: "INCOMPLETE", failed: 1, ran: 0, rc: 75 }),
+    ]
+  ) {
+    assert(declaration.test(line), `declared regex must fullmatch: ${line}`);
+    const fields = line.split(" ");
+    assertEquals(fields[0], FLEET_MANIFEST_PREFIX);
+    const values: Record<string, string> = {};
+    for (const field of fields.slice(1)) {
+      const i = field.indexOf("=");
+      assert(i > 0, `field must be key=value: ${field}`);
+      const key = field.slice(0, i);
+      const value = field.slice(i + 1);
+      assert(/^[a-z][a-z0-9_-]*$/.test(key), `key must fullmatch the fleet key rule: ${key}`);
+      assert(value.length > 0, `value must be non-empty: ${key}`);
+      assert(!(key in values), `duplicate key: ${key}`);
+      values[key] = value;
+    }
+    assert((values.graph ?? "").length > 0, "graph must be present and non-empty");
+    assert(/^[0-9]+$/.test(values.failed ?? ""), "failed must be numeric");
+  }
+});
+
+Deno.test("j677e: the formatter refuses lines the fleet parser would reject", () => {
+  for (
+    const bad of [
+      { graph: "SKIPPED", failed: 0, ran: 1, rc: 0 }, // not in the declared vocabulary
+      { graph: "PARTIAL", failed: -1, ran: 1, rc: 1 }, // negative outcome
+      { graph: "PARTIAL", failed: 0.5, ran: 1, rc: 0 }, // non-integer
+      { graph: "PARTIAL", failed: 0, ran: 1, rc: 0, changed: "two words" as unknown as number }, // space in value
+    ]
+  ) {
+    assertThrows(() => formatFleetCoverageManifest(bad as never), Error, "fleet manifest");
+  }
+  assertEquals(FLEET_MANIFEST_GRAPHS, ["FULL", "PARTIAL", "INCOMPLETE"]);
+});
+
+Deno.test("j677e: a non-certifying mode can never format as a PASS receipt, even with rc=0", () => {
+  // --always-on/--core pass failed:1 explicitly: producer-verdict.py refuses certification on any
+  // non-zero failed, so a green guards-only run cannot read as a certified fast gate.
+  const line = formatFleetCoverageManifest({ graph: "INCOMPLETE", failed: 1, ran: 19, rc: 0 });
+  assert(line.includes("failed=1"), `rc=0 must still carry failed=1: ${line}`);
+  assert(line.includes("rc=0"), "the true exit code still rides along for diagnosis");
+});
+
+Deno.test("j677e: select-tests.mjs has exactly one process.exit and it lives inside exitGate", async () => {
+  // The final-line property is only true if EVERY gate terminal routes through the receipt
+  // emitter. A bare process.exit re-added anywhere in the runner silently reopens the original
+  // defect (final line is not a manifest -> fleet records UNKNOWN for a green run).
+  const src = await Deno.readTextFile(new URL("../scripts/select-tests.mjs", import.meta.url));
+  const code = src.split("\n").filter((l) => !l.trimStart().startsWith("*") && !l.trimStart().startsWith("//")).join("\n");
+  const exits = code.match(/process\.exit\(/g) ?? [];
+  assertEquals(exits.length, 1, "exactly one process.exit may remain in the runner (inside exitGate)");
+  const gate = code.match(/function exitGate\([\s\S]*?process\.exit\(rc\);\n\}/);
+  assert(gate, "the single process.exit must be the last statement of exitGate");
+  const calls = code.match(/exitGate\(/g) ?? [];
+  assert(calls.length >= 7, `definition + all six gate terminals must call exitGate, found ${calls.length}`);
 });

@@ -35,6 +35,29 @@ import { ENVIRONMENTAL_REFUSAL_EXIT } from "./environmental-verdict.mjs";
 export const GATE_OUTCOMES = ["passed", "failed", "refused", "incomplete"];
 
 export const GATE_MANIFEST_PREFIX = "fast-gate: manifest: ";
+/**
+ * The FLEET's structured terminal receipt (chrome-agent-platform-j677e): ~/fleet/remote/
+ * producer-verdict.py certifies a run ONLY when the COMPLETE FINAL LINE of the gate log matches
+ * the repo's declared CHECK_FAST_MANIFEST_RE and parses as space-separated key=value fields with
+ * graph=<decision> and a numeric failed= outcome. CAP's rich JSON manifest (`fast-gate: manifest:`)
+ * is emitted mid-log and can never BE the final line, which is why the strongest producer form was
+ * unavailable and the fast gate certified on a PASS-line regex instead. This formatter emits the
+ * fleet-shaped line; the runner prints it as its last act before exiting.
+ * The wire rules encoded here mirror producer-verdict.py: first token is the prefix; every field
+ * is key=value; keys fullmatch [a-z][a-z0-9_-]* and are unique; values are non-empty and contain
+ * no whitespace (the parser is str.split()); graph must be non-empty; failed must be numeric and
+ * 0 for a PASS.
+ */
+export const FLEET_MANIFEST_PREFIX = "GATE-COVERAGE-MANIFEST";
+/**
+ * graph names the COVERAGE decision, not the outcome (failed= carries the outcome):
+ * FULL      - the full suite executed (fail-closed full run).
+ * PARTIAL   - a selected subset executed and covered the delta.
+ * INCOMPLETE- the run cannot certify the change (refusal, non-certifying mode, build failure,
+ *             empty selection). The fleet escalates graph=INCOMPLETE even when failed=0, and
+ *             non-certifying modes force failed=1 so the receipt can never read as a PASS.
+ */
+export const FLEET_MANIFEST_GRAPHS = ["FULL", "PARTIAL", "INCOMPLETE"];
 /** The Class-1 lockfile certification trail (chrome-agent-platform-lezl0). */
 export const LOCKFILE_DELTA_PREFIX = "lockfile-delta: ";
 export const GATE_UNMAPPED_PREFIX = "fast-gate: unmapped: ";
@@ -463,4 +486,48 @@ export function emitGateLedger({ manifest = null, unmapped = [], fileMapping = [
   if (unknown) lines.push(formatGateUnknown(unknown));
   for (const line of lines) log(line);
   return lines;
+}
+
+/**
+ * Format the fleet-shaped terminal receipt line (chrome-agent-platform-j677e).
+ *
+ * Field order is fixed (graph, failed, ran, rc, changed?) so the line is byte-stable for pins.
+ * `failed` is the producer's OUTCOME: 0 certifies, any non-zero refuses certification. The gate
+ * runner does not parse deno's per-test counts (that would mean teeing the suite output - a
+ * behaviour change to the runner this bead must not make), so a red run reports failed=1 and the
+ * true process exit code rides along in rc= for diagnosis. `ran` counts SELECTED suites (ran=0 is
+ * valid per the fleet contract - the graph says whether that run certifies anything).
+ *
+ * @param {{ graph: "FULL" | "PARTIAL" | "INCOMPLETE", failed: number, ran: number, rc: number, changed?: number | null }} fields
+ * @returns {string} one line, no trailing newline
+ */
+export function formatFleetCoverageManifest({ graph, failed, ran, rc, changed = null }) {
+  if (!FLEET_MANIFEST_GRAPHS.includes(graph)) {
+    throw new Error(`fleet manifest: graph must be one of ${JSON.stringify(FLEET_MANIFEST_GRAPHS)}, got ${JSON.stringify(graph)}`);
+  }
+  for (const [name, value] of [["failed", failed], ["ran", ran], ["rc", rc], ["changed", changed]]) {
+    if (value === null || value === undefined) continue;
+    if (!Number.isInteger(value)) {
+      throw new Error(`fleet manifest: ${name} must be an integer, got ${JSON.stringify(value)}`);
+    }
+  }
+  if (failed < 0 || ran < 0) {
+    throw new Error(`fleet manifest: failed and ran must be non-negative, got failed=${failed} ran=${ran}`);
+  }
+  const fields = { graph, failed, ran, rc };
+  if (changed !== null && changed !== undefined) fields.changed = changed;
+  const parts = [FLEET_MANIFEST_PREFIX];
+  const seen = new Set();
+  for (const [key, value] of Object.entries(fields)) {
+    if (!/^[a-z][a-z0-9_-]*$/.test(key) || seen.has(key)) {
+      throw new Error(`fleet manifest: bad or duplicate field key ${JSON.stringify(key)}`);
+    }
+    seen.add(key);
+    const text = String(value);
+    if (!text || /\s/.test(text)) {
+      throw new Error(`fleet manifest: value for ${key} must be non-empty and space-free, got ${JSON.stringify(text)}`);
+    }
+    parts.push(`${key}=${text}`);
+  }
+  return parts.join(" ");
 }

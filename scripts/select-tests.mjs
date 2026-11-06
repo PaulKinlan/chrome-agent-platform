@@ -56,7 +56,7 @@ import {
   specifierNamesPackage,
 } from "./lib/lockfile-delta.mjs";
 import { isPassiveContentFile } from "./lib/content-exemptions.mjs";
-import { emitGateLedger, explainChangedFileMapping } from "./lib/gate-manifest.mjs";
+import { emitGateLedger, explainChangedFileMapping, formatFleetCoverageManifest } from "./lib/gate-manifest.mjs";
 import { decideBuild, ensureStoreBuild, findDistConsumers } from "./build-if-needed.mjs";
 import { checkBrowserPrerequisite } from "./lib/browser-prerequisite.mjs";
 import { ENVIRONMENTAL_REFUSAL_EXIT, combinePhaseExitCodes } from "./lib/environmental-verdict.mjs";
@@ -1181,9 +1181,41 @@ async function prepareBuild(decision, enabled) {
   console.error(`select-tests: build-if-needed: ${build.disposition} in ${build.secs.toFixed(1)}s — ${build.reason}`);
   if (build.disposition === "failed") {
     emitGateLedger({ unknown: `the store build could not produce a certified dist: ${build.reason}` });
-    process.exit(1);
+    exitGate(1, { graph: "INCOMPLETE", ran: 0 });
   }
   return build;
+}
+
+/**
+ * The ONE terminal exit for gate runs (chrome-agent-platform-j677e). Prints the fleet-shaped
+ * GATE-COVERAGE-MANIFEST receipt as the FINAL log line - the wire form ~/fleet/remote/
+ * producer-verdict.py can certify - then exits with the true rc. Ordering contract: every other
+ * producer output (phase lines, the JSON ledger) has already been written synchronously to stderr
+ * by the time this runs, so the receipt is last; on red runs npm appends its own trailer AFTER
+ * node exits, which cannot displace a PASS (a red receipt says failed=1 anyway) and leaves the
+ * run UNKNOWN, exactly as honest as today's PASS-line contract.
+ *
+ * `failed` defaults to the outcome encoding (rc===0 -> 0, else 1); non-certifying modes pass
+ * failed:1 explicitly so a green --always-on/--core run can NEVER read as a certified fast gate.
+ * The receipt is best-effort: if formatting ever throws, the true exit code still lands - a gate
+ * must not be lost to its own receipt.
+ *
+ * @param {number} rc the process exit code the run earned
+ * @param {{ graph: "FULL" | "PARTIAL" | "INCOMPLETE", ran: number, changed?: number | null, failed?: number }} receipt
+ */
+function exitGate(rc, { graph, ran, changed = null, failed = null }) {
+  try {
+    console.error(formatFleetCoverageManifest({
+      graph,
+      failed: failed ?? (rc === 0 ? 0 : 1),
+      ran,
+      rc,
+      changed,
+    }));
+  } catch (err) {
+    console.error(`select-tests: GATE-COVERAGE-MANIFEST receipt withheld (${err?.message ?? err}); the exit code below is the contract`);
+  }
+  process.exit(rc);
 }
 
 /**
@@ -1400,7 +1432,8 @@ async function main() {
           "--always-on executes only the always-on guard set: it does not run the changed files' tests " +
           "and does not run the full suite, so it cannot certify the change",
       });
-      process.exit(await runDeno(files, { omittedReason: OMITTED_GUARDS_ONLY_REASON }));
+      exitGate(await runDeno(files, { omittedReason: OMITTED_GUARDS_ONLY_REASON }),
+        { graph: "INCOMPLETE", ran: files.length, failed: 1 });
     }
     return;
   }
@@ -1409,7 +1442,8 @@ async function main() {
     if (list) console.log(files.join("\n"));
     else {
       emitGateLedger({ unknown: "--core executes only the always-on core: it cannot certify the change" });
-      process.exit(await runDeno(files, { omittedReason: OMITTED_CORE_ONLY_REASON }));
+      exitGate(await runDeno(files, { omittedReason: OMITTED_CORE_ONLY_REASON }),
+        { graph: "INCOMPLETE", ran: files.length, failed: 1 });
     }
     return;
   }
@@ -1461,7 +1495,7 @@ async function main() {
     } else if (rc === 75) {
       console.error("select-tests: parallel phase REFUSED (environmental verdict, exit 75)");
     }
-    process.exit(rc);
+    exitGate(rc, { graph: "FULL", ran: allTestFiles().length, changed: plan.changed?.length ?? null });
   }
 
   if (list) {
@@ -1479,7 +1513,7 @@ async function main() {
     emitGateLedger({
       unknown: `PREREQUISITE MISSING: chrome - ${prereq.refusal.payload.filesNotRun} files not run (${prereq.report.tried.join("; ")})`,
     });
-    process.exit(prereq.refusal.exit);
+    exitGate(prereq.refusal.exit, { graph: "INCOMPLETE", ran: 0, changed: plan.changed?.length ?? null });
   }
 
   const reachableModules = plan.reverse ? reachableModulesFrom(plan.reverse) : null;
@@ -1497,9 +1531,14 @@ async function main() {
     distPresent,
   });
   const build = await prepareBuild(decision, buildIfNeeded);
-  process.exit(await runDeno(plan.files, {
+  const rc = await runDeno(plan.files, {
     build, omittedReason: plan.omittedReason, fileMappingContext: fileMappingContextForPlan(plan),
-  }));
+  });
+  exitGate(rc, {
+    graph: plan.files.length ? "PARTIAL" : "INCOMPLETE",
+    ran: plan.files.length,
+    changed: plan.changed?.length ?? null,
+  });
 }
 
 if (resolve(process.argv[1] ?? "") === fileURLToPath(import.meta.url)) main();
