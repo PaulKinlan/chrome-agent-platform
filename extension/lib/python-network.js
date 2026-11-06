@@ -102,6 +102,17 @@ export function urlWithoutQuery(raw) {
   }
 }
 
+/** Scrub query strings from URL-like tokens inside free text (lrhyl round 2).
+ * Exception messages that quote a failed URL are model-visible and are not
+ * guaranteed query-free, so every model-visible error string passes through
+ * here at the ledger choke points. Lexical by design: it strips `?...` to the
+ * next whitespace/quote/bracket on any http(s) or protocol-relative URL token
+ * without parsing, so quasi-URLs a parser would reject still get scrubbed;
+ * text with no URL token passes through verbatim. */
+export function scrubUrlQueries(text) {
+  return String(text ?? "").replace(/((?:https?:)?\/\/[^\s"'`)\]]*)\?[^\s"'`)\]]*/gi, "$1");
+}
+
 /** Read a persisted grant list into the canonical, de-duplicated shape.
  * Anything unreadable is DROPPED, never guessed at: a grant that cannot be
  * parsed is not a grant. */
@@ -350,13 +361,22 @@ export function createPythonNetworkLedger({ maxPerRun = MAX_RECORDS_PER_RUN, max
             const ms = Number.isFinite(finalEntry?.ms)
               ? Number(finalEntry.ms)
               : Math.max(0, now - inflight.startedAt);
-            row.records[inflight.index] = Object.freeze({
+            // lrhyl round 2 (review finding): sanitise where the record is
+            // CONSTRUCTED - AFTER the spread, not before. Pre-fix, a caller
+            // supplying finalEntry.url overrode the sanitised inflight.url
+            // (the spread came last), making the ledger's query-free claim a
+            // false invariant; and finalEntry.error text could quote the
+            // failed URL, query included.
+            const merged = {
               method: inflight.method,
               url: inflight.url,
               ...(inflight.origin ? { origin: inflight.origin } : {}),
               ms,
               ...finalEntry,
-            });
+            };
+            if (merged.url !== undefined) merged.url = urlWithoutQuery(merged.url);
+            if (typeof merged.error === "string") merged.error = scrubUrlQueries(merged.error);
+            row.records[inflight.index] = Object.freeze(merged);
           }
           return true;
         },
@@ -390,10 +410,13 @@ export function createPythonNetworkLedger({ maxPerRun = MAX_RECORDS_PER_RUN, max
         return;
       }
       // lrhyl: same choke-point normalization as begin() — record() writers
-      // pass raw URLs and the records are model-readable.
+      // pass raw URLs and the records are model-readable. Round 2: error text
+      // is scrubbed here too, so EVERY ledger writer is covered at the choke
+      // point and no caller can smuggle a query in through either field.
       row.records.push(Object.freeze({
         ...entry,
         ...(entry?.url !== undefined ? { url: urlWithoutQuery(entry.url) } : {}),
+        ...(typeof entry?.error === "string" ? { error: scrubUrlQueries(entry.error) } : {}),
       }));
     },
 

@@ -1305,6 +1305,7 @@ import {
   removeGrant as removePythonNetworkGrant,
   sanitizeRequestHeaders as sanitizePythonRequestHeaders,
   urlWithoutQuery,
+  scrubUrlQueries,
 } from "../lib/python-network.js";
 import {
   acceptToolSnapshot,
@@ -8044,7 +8045,9 @@ const handlers = mergeRouteMaps(
       } else {
         record({ ok: false, origin: verdict.origin, refused: wasRevoked, error });
       }
-      return { ok: false, error };
+      // lrhyl round 2: the direct Python-facing return is model-visible too,
+      // and an exception message may quote the failed URL with its query.
+      return { ok: false, error: scrubUrlQueries(error) };
     } finally {
       originSet.delete(controller);
       if (originSet.size === 0) activePythonFetches.delete(originKey);

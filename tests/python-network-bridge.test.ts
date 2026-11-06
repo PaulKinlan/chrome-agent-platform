@@ -13,7 +13,7 @@
 import { assert, assertEquals, assertStringIncludes, assertThrows } from "jsr:@std/assert@1";
 import { registerPythonHost } from "../extension/lib/python-host.js";
 import { createPythonRuntimeProvider } from "../extension/lib/python-runtime.js";
-import { createPythonNetworkLedger, urlWithoutQuery } from "../extension/lib/python-network.js";
+import { createPythonNetworkLedger, urlWithoutQuery, scrubUrlQueries } from "../extension/lib/python-network.js";
 import { runPython } from "../extension/lib/python-execution.js";
 import { fileURLToPath } from "node:url";
 
@@ -419,6 +419,45 @@ Deno.test("lrhyl: the ledger strips the query at BOTH write choke points, and an
   assert(!serialized.includes("token=") && !serialized.includes("key=") && !serialized.includes("sig="), "not even the query KEYS survive");
 });
 
+Deno.test("lrhyl r2: a caller-supplied finalEntry.url CANNOT override the sanitised ledger URL (construction-point fix)", () => {
+  const ledger = createPythonNetworkLedger();
+  const inflight = ledger.begin("run-lrhyl2", { method: "GET", url: "https://api.example.com/b", origin: "https://api.example.com", startedAt: Date.now(), controller: null });
+  // The review finding: complete() built `{url: inflight.url, ...finalEntry}` -
+  // the spread came LAST, so a caller supplying `url` here overrode the
+  // sanitised value un-normalised. The fix sanitises AFTER the spread.
+  inflight.complete({ ok: true, url: `https://api.example.com/b?key=${SECRET_PLACEHOLDER}`, status: 200 });
+  const taken = ledger.take("run-lrhyl2");
+  assertEquals(taken.records.length, 1);
+  assertEquals(taken.records[0].url, "https://api.example.com/b", "the override is sanitised at construction, after the spread");
+  assert(!JSON.stringify(taken.records).includes(SECRET_PLACEHOLDER), "the override's query value never reaches a model-readable record");
+});
+
+Deno.test("lrhyl r2: model-visible error text is query-scrubbed at BOTH ledger choke points", () => {
+  const ledger = createPythonNetworkLedger();
+  ledger.record("run-lrhyl3", { method: "GET", origin: "https://api.example.com", ok: false, error: `fetch to https://api.example.com/p?token=${SECRET_PLACEHOLDER} failed: boom`, ms: 1 });
+  const inflight = ledger.begin("run-lrhyl3", { method: "GET", url: "https://api.example.com/q", origin: "https://api.example.com", startedAt: Date.now(), controller: null });
+  inflight.complete({ ok: false, error: `fetch to https://api.example.com/q?sig=${SECRET_PLACEHOLDER} failed: network went away` });
+  const taken = ledger.take("run-lrhyl3");
+  assertEquals(taken.records[0].error, "fetch to https://api.example.com/p failed: boom", "record() scrubs error text");
+  assertEquals(taken.records[1].error, "fetch to https://api.example.com/q failed: network went away", "complete() scrubs error text");
+  const serialized = JSON.stringify(taken.records);
+  assert(!serialized.includes(SECRET_PLACEHOLDER), "no error text may carry the query value");
+  assert(!serialized.includes("token=") && !serialized.includes("sig="), "not even the query KEYS survive in error text");
+});
+
+Deno.test("lrhyl r2: scrubUrlQueries strips queries lexically and keeps everything else verbatim", () => {
+  assertEquals(scrubUrlQueries(`x https://a.example/p?k=${SECRET_PLACEHOLDER} y`), "x https://a.example/p y");
+  assertEquals(
+    scrubUrlQueries("https://a.example/one?x=1 and //b.example/two?y=2"),
+    "https://a.example/one and //b.example/two",
+    "every URL token is scrubbed, protocol-relative ones included",
+  );
+  assertEquals(scrubUrlQueries("no url here? just a question mark"), "no url here? just a question mark", "text without a URL token passes through verbatim");
+  assertEquals(scrubUrlQueries(`see https://a.example:8443/x?key=${SECRET_PLACEHOLDER}) done`), "see https://a.example:8443/x) done", "a closing paren terminates the token");
+  assertEquals(scrubUrlQueries(""), "");
+  assertEquals(scrubUrlQueries(null), "");
+});
+
 Deno.test("lrhyl SW source pin: the python.fetch response echo strips, no bare echo survives, and the import exists", async () => {
   const sw = await Deno.readTextFile(new URL("../extension/background/service-worker.js", import.meta.url));
   assertEquals(
@@ -427,10 +466,14 @@ Deno.test("lrhyl SW source pin: the python.fetch response echo strips, no bare e
   );
   const withoutWrapped = sw.split("url: urlWithoutQuery(res.url || u.href)").join("");
   assert(!withoutWrapped.includes("url: res.url || u.href"), "a bare, unstripped echo must not survive anywhere in the SW");
-  assert(sw.includes("urlWithoutQuery,\n} from \"../lib/python-network.js\""), "the SW imports urlWithoutQuery from the module that owns the invariant");
+  assert(sw.includes("urlWithoutQuery,\n  scrubUrlQueries,\n} from \"../lib/python-network.js\""), "the SW imports both lrhyl sanitizers from the module that owns the invariant");
+  assert(sw.includes("return { ok: false, error: scrubUrlQueries(error) };"), "the Python-facing failure return scrubs the exception text (r2)");
   // discriminating check on the ledger choke points: begin() and record() must
   // normalize through urlWithoutQuery (reverting either reds this pin)
   const lib = await Deno.readTextFile(new URL("../extension/lib/python-network.js", import.meta.url));
   assert(lib.includes("const u = urlWithoutQuery(url);"), "begin() normalizes at the choke point");
   assert(lib.includes("...(entry?.url !== undefined ? { url: urlWithoutQuery(entry.url) } : {}),"), "record() normalizes at the choke point");
+  assert(lib.includes("if (merged.url !== undefined) merged.url = urlWithoutQuery(merged.url);"), "complete() sanitises AFTER the finalEntry spread (r2 override fix)");
+  assert(lib.includes("...(typeof entry?.error === \"string\" ? { error: scrubUrlQueries(entry.error) } : {}),"), "record() scrubs error text at the choke point (r2)");
+  assert(lib.includes("if (typeof merged.error === \"string\") merged.error = scrubUrlQueries(merged.error);"), "complete() scrubs error text at the choke point (r2)");
 });
