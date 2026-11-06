@@ -162,7 +162,7 @@ export const PYTHON_FETCH_ERROR_HINTS = Object.freeze({
 const RECORD_FIELDS = Object.freeze([
   "method", "url", "origin", "ok", "status", "bytes", "ms",
   "refused", "aborted", "outcome", "inFlight", "errorCode", "vaultKeyPresented",
-  "refusedHeaderCount",
+  "refusedHeaderCount", "truncated",
 ]);
 const RECORD_FIELD_SET = new Set(RECORD_FIELDS);
 /** A header name per RFC 9110 token rules, length-bounded. Anything else in a
@@ -228,7 +228,7 @@ function projectRecord(partial, where) {
     if (Number.isFinite(n)) out[f] = n;
     else { dropped.push(f); delete out[f]; }
   }
-  for (const f of ["ok", "refused", "aborted", "inFlight", "vaultKeyPresented"]) {
+  for (const f of ["ok", "refused", "aborted", "inFlight", "vaultKeyPresented", "truncated"]) {
     if (out[f] !== undefined && typeof out[f] !== "boolean") {
       dropped.push(f);
       delete out[f];
@@ -627,8 +627,10 @@ export function createPythonNetworkLedger({ maxPerRun = MAX_RECORDS_PER_RUN, max
 
     /** Record one attempt. The record shape is CLOSED (round 6): exactly
      * { method, url, origin, ok, status?, bytes?, ms, errorCode?,
-     * vaultKeyPresented?, refused?, aborted?, outcome?, refusedHeaderCount? }
-     * — anything else, and any free-text `error`, is dropped by projectRecord.
+     * vaultKeyPresented?, refused?, aborted?, outcome?, refusedHeaderCount?,
+     * truncated? } — anything else, and any free-text `error`, is dropped by
+     * projectRecord. `truncated` (khwi9) is the boolean fact that a bounded
+     * body read hit its ceiling — surfaced honestly, never guessed.
      * `url` is normalized to origin+path — these records are model-readable
      * via the run envelope. */
     record(runId, entry) {
