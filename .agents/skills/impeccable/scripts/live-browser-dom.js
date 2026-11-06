@@ -61,7 +61,27 @@
     root.addEventListener('scroll', invalidate, { capture: true, passive: true });
     root.addEventListener('resize', invalidate, { passive: true });
     if (typeof MutationObserver === 'function') {
-      new MutationObserver(invalidate).observe(doc, { childList: true, subtree: true, attributes: true });
+      // chrome-agent-platform-m0uen: the observer used to fire on the overlay's OWN
+      // chrome writes — setPageInteractionCursor rewrites the cursor <style>'s
+      // textContent on every insert-mode mousemove, and showHighlight/showInsertLine
+      // write inside the UI root — so the cache measuring the HOST page was emptied
+      // by our own churn between moves and never amortised (reviewer measured
+      // [5,5,5,5] rect reads per element across 5 insert-mode moves instead of
+      // [1,1,1,1]). Own-chrome mutations cannot change host layout (the cursor
+      // style is style-only; the chrome is overlay UI), so records whose targets
+      // are all inside [id^=prefix] are ignored; ANY host-page record still
+      // invalidates, exactly as before, and anything not provably own-chrome
+      // (including a malformed record list) fails safe toward invalidation.
+      const isOwnChromeTarget = (node) => {
+        if (!node) return false;
+        const el = node.nodeType === 1 ? node : node.parentElement;
+        return !!own(el);
+      };
+      new MutationObserver((records) => {
+        if (!Array.isArray(records) || records.some((r) => !isOwnChromeTarget(r && r.target))) {
+          invalidateElementRects();
+        }
+      }).observe(doc, { childList: true, subtree: true, attributes: true });
     }
 
     function pickable(el) {

@@ -87,16 +87,37 @@ type DomEnv = {
   scrollListeners: Array<() => void>;
 };
 
-function buildHelpers(fakeWindow: { addEventListener: (t: string, fn: () => void) => void }) {
+function buildHelpers(fakeWindow: { addEventListener: (t: string, fn: () => void) => void }, source: string = DOM_SOURCE) {
   const loadDom = new Function(
     "window",
-    `${DOM_SOURCE}\nreturn window.__IMPECCABLE_LIVE_DOM__;`,
+    `${source}\nreturn window.__IMPECCABLE_LIVE_DOM__;`,
   ) as (w: unknown) => { version: number; createLiveBrowserDomHelpers: (opts: Record<string, unknown>) => Record<string, (...a: unknown[]) => unknown> };
   const mod = loadDom(fakeWindow);
   assertEquals(typeof mod?.createLiveBrowserDomHelpers, "function", "live-browser-dom.js must expose the factory");
-  // MutationObserver is intentionally absent (plain Deno runtime): the module
+  // MutationObserver is absent by default (plain Deno runtime): the module
   // guards on typeof and skips the observer, exactly like a browser-less host.
+  // buildHelpersWithObserver below injects a shim to pin the observer itself.
   return mod.createLiveBrowserDomHelpers({ prefix: "imp-", document: { body: {} } });
+}
+
+// m0uen: a MutationObserver shim that captures the module's callback so tests
+// can fire synthetic records at it — the browser-less way to model "a mutation
+// happened between moves".
+function buildHelpersWithObserver(source: string = DOM_SOURCE) {
+  const observers: Array<{ cb: (records: unknown[]) => void; target: unknown; opts: unknown }> = [];
+  class MutationObserverShim {
+    cb: (records: unknown[]) => void;
+    constructor(cb: (records: unknown[]) => void) { this.cb = cb; }
+    observe(target: unknown, opts: unknown) { observers.push({ cb: this.cb, target, opts }); }
+    disconnect() {}
+  }
+  (globalThis as Record<string, unknown>).MutationObserver = MutationObserverShim;
+  try {
+    const helpers = buildHelpers({ addEventListener() {} }, source);
+    return { helpers, observers };
+  } finally {
+    delete (globalThis as Record<string, unknown>).MutationObserver;
+  }
 }
 
 function loadDomEnv(): DomEnv {
@@ -247,4 +268,99 @@ Deno.test("ffp7s: live-browser.js consumes cachedRect from the shared helper —
     /return \{\s*own,\s*pickable,\s*cachedRect,\s*invalidateElementRects,/.test(DOM_SOURCE),
     "live-browser-dom.js must export cachedRect from createLiveBrowserDomHelpers",
   );
+});
+
+// --- m0uen: the cache must survive the overlay's OWN chrome churn -------------
+//
+// The reviewer's measured defect: insert mode ALWAYS mutates between moves —
+// handleMouseMove's insert branch ends in syncPageInteractionCursor(), which
+// rewrote the cursor <style>'s textContent unconditionally; the module's own
+// MutationObserver saw that host-document mutation and emptied the cache
+// before the next move ([5,5,5,5] reads per element instead of [1,1,1,1]).
+// The static-DOM drives above could never see this (no MutationObserver in a
+// browser-less host). These pins model the mutation explicitly.
+
+function cursorStyleRecord() {
+  // Exactly what a textContent rewrite produces: a childList record targeting
+  // the <style id="imp-pick-cursor"> element, plus records targeting its text
+  // node (parentElement chain, nodeType 3).
+  const style = { nodeType: 1, id: "imp-pick-cursor", closest: () => null };
+  const text = { nodeType: 3, parentElement: style };
+  return [{ target: style }, { target: text }];
+}
+
+Deno.test("m0uen: own-chrome mutations between moves do NOT empty the shared cache; a host-page mutation DOES", () => {
+  const { helpers, observers } = buildHelpersWithObserver();
+  assertEquals(observers.length, 1, "the module installs exactly one MutationObserver when the host provides one");
+  const fire = (records: unknown[]) => observers[0].cb(records);
+
+  const els = [0, 1, 2, 3].map((i) => makeEl({ x: i * 100, y: 0, width: 80, height: 80 }));
+
+  // Five "moves" in the reviewer's repro order: reads first, then the
+  // production churn — the cursor style's textContent rewritten after every
+  // move, firing real observer records before the next move reads.
+  for (let m = 0; m < 5; m++) {
+    for (const el of els) helpers.cachedRect(el);
+    fire(cursorStyleRecord());
+  }
+  for (const [i, el] of els.entries()) {
+    assertEquals(el.rectReads, 1, `element ${i}: own-chrome churn must not cost a single extra layout read (m0uen)`);
+  }
+
+  // FALSIFIER inside the same pin: a host-page record still invalidates.
+  fire([{ target: els[0] }]);
+  helpers.cachedRect(els[0]);
+  assertEquals(els[0].rectReads, 2, "a host-page mutation must still empty the cache");
+});
+
+Deno.test("m0uen FALSIFICATION: without the own-chrome filter the same sequence empties the cache every move", () => {
+  // The pre-fix observer invalidated on EVERY record. Restore exactly that and
+  // the pin above must invert — proving the assertions discriminate the filter
+  // and would have failed the original ffp7s delta.
+  const regressed = DOM_SOURCE.replace("!isOwnChromeTarget(r && r.target)", "true");
+  assert(regressed !== DOM_SOURCE, "the falsifier must find the own-chrome filter expression");
+  const { helpers, observers } = buildHelpersWithObserver(regressed);
+  assertEquals(observers.length, 1);
+  const fire = (records: unknown[]) => observers[0].cb(records);
+
+  const els = [0, 1, 2, 3].map((i) => makeEl({ x: i * 100, y: 0, width: 80, height: 80 }));
+  for (let m = 0; m < 5; m++) {
+    for (const el of els) helpers.cachedRect(el);
+    fire(cursorStyleRecord());
+  }
+  for (const [i, el] of els.entries()) {
+    // Reviewer's measured production shape: one read per element per move.
+    assertEquals(el.rectReads, 5, `element ${i}: unfiltered own-chrome records must reproduce the per-move re-read`);
+  }
+});
+
+Deno.test("m0uen: setPageInteractionCursor writes only when the cursor value actually changes", () => {
+  const src = extractFunction(BROWSER_SOURCE, "setPageInteractionCursor");
+  let writes = 0;
+  let content = "";
+  const style = {
+    id: "",
+    get textContent() { return content; },
+    set textContent(v: string) { writes++; content = v; },
+  };
+  const fakeDocument = {
+    getElementById: (id: string) => (id === "imp-pick-cursor" ? style : null),
+    createElement: () => style,
+    head: { appendChild: () => {} },
+  };
+  const setPageInteractionCursor = new Function(
+    "document", "PICK_CURSOR_STYLE_ID", "PREFIX",
+    `${src}\nreturn setPageInteractionCursor;`,
+  )(fakeDocument, "imp-pick-cursor", "imp-") as (cursor: string) => void;
+
+  setPageInteractionCursor("crosshair");
+  assertEquals(writes, 1, "the first write establishes the value");
+  for (let i = 0; i < 5; i++) setPageInteractionCursor("crosshair");
+  assertEquals(writes, 1, "identical rewrites per mousemove must be skipped (m0uen churn source)");
+  setPageInteractionCursor("col-resize");
+  assertEquals(writes, 2, "a changed cursor value must write");
+  setPageInteractionCursor("");
+  assertEquals(writes, 3, "clearing an active cursor writes once");
+  setPageInteractionCursor("");
+  assertEquals(writes, 3, "clearing an already-empty cursor must not write");
 });

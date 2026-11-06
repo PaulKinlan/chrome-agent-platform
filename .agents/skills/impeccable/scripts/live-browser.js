@@ -2031,7 +2031,10 @@
   function setPageInteractionCursor(cursor) {
     let style = document.getElementById(PICK_CURSOR_STYLE_ID);
     if (!cursor) {
-      if (style) style.textContent = '';
+      // chrome-agent-platform-m0uen: skip no-op writes. An identical textContent
+      // rewrite per mousemove churned a global style recalc and fed our own
+      // MutationObserver, emptying the shared rect cache between moves.
+      if (style && style.textContent !== '') style.textContent = '';
       return;
     }
     if (!style) {
@@ -2041,10 +2044,13 @@
       // root (uiAppendStyle's target) these selectors would match nothing.
       (document.head || document.documentElement).appendChild(style);
     }
-    style.textContent =
+    const next =
       '* { cursor: ' + cursor + ' !important; }\n'
       + '[id^="' + PREFIX + '"],\n'
       + '[id^="' + PREFIX + '"] * { cursor: revert !important; }';
+    // m0uen: unchanged value, unchanged DOM — no write, no mutation record.
+    if (style.textContent === next) return;
+    style.textContent = next;
   }
 
   /** Page-level cursor while pick or insert mode is targeting page elements. */
