@@ -1054,9 +1054,13 @@ export function isExactOptionsSender(sender, extensionId, exactOptionsUrl) {
  * Everything else — foreign pages via externally_connectable, other
  * extensions, crafted senders with no id (which the classifier alone would
  * mislabel kind:"extension" when tab and url are absent) — is refused BY THE
- * CALLER uniformly: return false, no reply, before route resolution. The
- * uniform-refusal contract is what keeps a hostile sender from enumerating
- * routes through differentiated replies (the r2 review's finding 1). This is
+ * CALLER uniformly: the dispatcher's single deny() reply, ONE generic literal
+ * ({ ok: false, error: "unknown message" }), emitted before route resolution.
+ * The refusal is a REPLY, not silence, because the shipped integration
+ * contracts pin a refusal response from untrusted senders; the IDENTICAL
+ * literal on every rejection path is what keeps a hostile sender from
+ * enumerating routes through differentiated replies (the r2 review's finding
+ * 1). This is
  * a predicate that yields the rejection at the call site — a real
  * enforcement point, unlike authorizeToolReport below, which CLASSIFIES
  * already-admitted senders and is deliberately NOT credited as an authoriser
