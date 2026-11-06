@@ -773,23 +773,99 @@ export const MAX_REGEX_LINE_CHARS = 8192;
  * scan with truncated=true and regexBounds.scanBudgetHit=true. */
 export const MAX_REGEX_SCAN_CHARS = 4_000_000;
 
+/** Wall-clock bound for one grep_files regex call (coz19 round 2, coord: "cap
+ * total match work"). Checked BETWEEN lines - a single re.test() is
+ * uninterruptible, so admission (regexComplexityViolation) bounds one call and
+ * this bounds their accumulation. Hitting it is honest, never silent:
+ * truncated=true and regexBounds.deadlineHit=true. */
+export const REGEX_MATCH_DEADLINE_MS = 4_000;
+
+/** Refusal reasons — model-actionable by design (the model reads `detail`). */
+const ADJACENT_UNBOUNDED_REASON = "two unbounded quantifiers in direct concatenation (a+a+, (a+)(a+), .*\\d+, .+a*) are not admitted in grep regex mode — overlapping repetitions backtrack superlinearly inside ONE uninterruptible match, and the per-line content cap does not contain them (a+a+a+a+a+b froze the real V8 matcher past a 5s timeout on a single 8192-char line); put a mandatory literal between the repetitions, bound one with {m,n}, or use literal search";
+const UNIVERSAL_UNBOUNDED_REASON = "more than one unbounded quantifier over a universal class ('.', '[^...]', '\\D', '\\W', '\\S') is not admitted in grep regex mode — two overlapping universal repetitions are O(line²) split points per start position inside ONE uninterruptible match; anchor the pattern, replace one repetition with a restricted class (\\d, \\w, [a-z]) or a literal, or split into multiple greps";
+const TOTAL_UNBOUNDED_REASON = "more than two unbounded repetitions (*, +, {n,}) in one alternation branch are not admitted in grep regex mode — each additional repetition multiplies the worst-case backtracking of ONE uninterruptible match by the line length (\\d+:\\d+:\\d+ over a colon-dense 8 KiB line is cubic); merge repetitions into one, bound one with {m,n}, or split into multiple greps";
+
 /**
  * Conservative syntactic complexity bound for model-supplied grep patterns.
  * Returns null when the pattern is admitted, or a human/model-actionable
  * reason string when refused. Pure and synchronous — testable without a grant.
+ *
+ * coz19 ROUND 2 (review falsification: 'a+a+a+a+a+b' over one 8192-char line
+ * was ADMITTED by round 1 and froze the real V8 matcher past a 5s timeout —
+ * the per-line cap bounds the SUBJECT, not the backtracking). The admitted
+ * language is now provably tame for a single uninterruptible re.test():
+ *   1. quantified groups whose body contains a quantifier or alternation
+ *      (exponential class) — refused  [round 1];
+ *   2. backreferences — refused  [round 1];
+ *   3. two unbounded quantifiers in DIRECT concatenation (nothing mandatory
+ *      between them, group boundaries transparent) — refused  [round 2];
+ *   4. more than ONE unbounded quantifier over a universal class ('.',
+ *      negated classes, \D \W \S — per alternation branch) — refused  [round 2];
+ *   5. more than TWO unbounded repetitions in total per alternation branch —
+ *      refused  [round 2: k unbounded quantifiers give O(line^k) split
+ *      combinations even with disjoint mandatory separators].
+ * What survives has at most two unbounded repetitions, at most one of them
+ * universal, none adjacent — which keeps a single match O(line²) worst case
+ * (~67M char steps at the 8192-char cap, well under a second); the cumulative
+ * per-call budget and the wall-clock deadline in grepFsGrant bound the rest,
+ * and every bound is honestly reported. Structural invalidity stays RegExp's
+ * domain (fs_grep_invalid_regex). The managed ReDoS-safe engine is tmdm.
  * @param {string} src the raw pattern source (without flags)
  * @returns {string | null}
  */
 export function regexComplexityViolation(src) {
   const s = String(src ?? "");
+  const newFrame = () => ({
+    risky: false,            // round-1 nested rule: a quantifier or alternation in this body
+    bodyUniversal: false,    // this body contains a universal-class atom (for group quantifiers)
+    univBranch: 0,           // unbounded universal quantifiers on the current alternation branch
+    univMax: 0,              // max across completed branches
+    unbBranch: 0,            // ALL unbounded quantifiers on the current alternation branch
+    unbMax: 0,               // max across completed branches
+    atomPending: null,       // the atom awaiting a possible quantifier {universal, endedUnbounded?}
+    prevUnbounded: false,    // the last completed entity was unbounded-quantified (adjacency state)
+  });
   // One frame per open group; the root frame never closes and is never refused.
-  const stack = [{ risky: false }];
+  const stack = [newFrame()];
   let inClass = false;
+  let classNegated = false;
+  let justQuantified = false; // the previous token was a quantifier: a '?' now is the lazy modifier
+
+  // An atom just finished (literal, escape, class, or a closed group). The
+  // entity before it completes as bounded — unless it was a group whose body
+  // ENDED unbounded ('(a+)' behaves like 'a+' for adjacency across the
+  // boundary), in which case the adjacency state survives.
+  const atomArrives = (frame, universal) => {
+    if (frame.atomPending) {
+      frame.prevUnbounded = frame.atomPending.endedUnbounded === true;
+    }
+    frame.atomPending = { universal };
+    if (universal) frame.bodyUniversal = true;
+    justQuantified = false;
+  };
+
+  const applyQuantifier = (frame, unbounded) => {
+    if (unbounded && frame.prevUnbounded) return ADJACENT_UNBOUNDED_REASON;
+    if (unbounded) {
+      frame.unbBranch += 1;
+      if (frame.atomPending?.universal) frame.univBranch += 1;
+    }
+    frame.prevUnbounded = unbounded;
+    frame.atomPending = null;
+    frame.risky = true; // any quantifier marks the body risky (round-1 nested rule)
+    justQuantified = true;
+    return null;
+  };
+
   for (let i = 0; i < s.length; i++) {
     const c = s[i];
+    const top = stack[stack.length - 1];
     if (inClass) {
       if (c === "\\") { i++; continue; }
-      if (c === "]") inClass = false;
+      if (c === "]") {
+        inClass = false;
+        atomArrives(top, classNegated); // a negated class is universal-ish: it matches almost anything
+      }
       continue;
     }
     if (c === "\\") {
@@ -798,9 +874,25 @@ export function regexComplexityViolation(src) {
       if ((n >= "1" && n <= "9") || n === "k") {
         return `backreference \\${n} is not admitted in grep regex mode — backreferences are NP-hard alongside quantifiers and unsupported by the ReDoS-safe engine (tmdm); restructure the pattern or use literal search`;
       }
+      if (n === "b" || n === "B") { justQuantified = false; continue; } // zero-width: neutral, not an atom
+      if (n === "p" || n === "P") { // \p{...} / \P{...}: consume the brace block; \P is universal-ish
+        const end = s.indexOf("}", i);
+        if (end !== -1) i = end;
+        atomArrives(top, n === "P");
+        continue;
+      }
+      atomArrives(top, n === "D" || n === "W" || n === "S");
       continue;
     }
-    if (c === "[") { inClass = true; continue; }
+    if (c === "[") {
+      // Consume the class; a leading '^' makes it universal-ish. A ']' right
+      // after '[' or '[^' is a literal per JS class parsing — the scan below
+      // handles it because classNegated/first-position ']' ends the class the
+      // same way RegExp would reject or accept it structurally (not our call).
+      classNegated = s[i + 1] === "^";
+      inClass = true;
+      continue;
+    }
     if (c === "(") {
       // Consume the group prefix so its '?' never reads as a quantifier.
       if (s[i + 1] === "?") {
@@ -816,36 +908,78 @@ export function regexComplexityViolation(src) {
           i += 1; // unknown (?... construct: skip the '?' only, stay conservative
         }
       }
-      stack.push({ risky: false });
+      // The group is the parent's next atom; the child inherits the parent's
+      // adjacency state so '(a+)(a+)' is caught across the boundary. The
+      // pending atom (if any) COMPLETES at the group open, so the inherited
+      // state must be read from it first — a closed group that ENDED unbounded
+      // ('(a+)') behaves like an unbounded entity for the next atom.
+      const inheritedUnbounded = top.atomPending
+        ? top.atomPending.endedUnbounded === true
+        : top.prevUnbounded;
+      top.atomPending = null;
+      const child = newFrame();
+      child.prevUnbounded = inheritedUnbounded;
+      stack.push(child);
+      justQuantified = false;
       continue;
     }
     if (c === ")") {
       // Structural invalidity is RegExp's own verdict (fs_grep_invalid_regex),
       // never the bound's — stop scanning and admit; compilation refuses it.
       if (stack.length === 1) return null;
-      const top = stack.pop();
+      const closed = stack.pop();
+      if (closed.atomPending) closed.prevUnbounded = false; // body's last atom never got a quantifier
+      const parent = stack[stack.length - 1];
+      parent.univBranch += Math.max(closed.univMax, closed.univBranch);
+      parent.unbBranch += Math.max(closed.unbMax, closed.unbBranch);
       const next = s[i + 1];
       const quantified = next === "*" || next === "+" || next === "?" || next === "{";
-      if (quantified && top.risky) {
+      if (quantified && closed.risky) {
         return "a quantified group whose body contains a quantifier or an alternation is not admitted in grep regex mode — that shape backtracks exponentially in V8 and one catastrophic match freezes the whole service worker; simplify the group (quantifier-free bodies like (ab)+ are fine), use literal search, or wait for the ReDoS-safe engine (tmdm)";
       }
-      const parent = stack[stack.length - 1];
-      // The closed group's risky contents — and the group quantifier itself —
-      // are now part of the parent body's risk.
-      if (parent && (quantified || top.risky)) parent.risky = true;
+      // The closed group becomes the parent's pending atom; its adjacency
+      // tail (did the body END unbounded?) travels with it.
+      if (parent.atomPending) parent.prevUnbounded = parent.atomPending.endedUnbounded === true;
+      parent.atomPending = { universal: closed.bodyUniversal, endedUnbounded: closed.prevUnbounded };
+      if (parent && (quantified || closed.risky)) parent.risky = true;
+      justQuantified = false;
       continue;
     }
     if (c === "|") {
-      const top = stack[stack.length - 1];
-      if (top) top.risky = true;
+      top.risky = true;
+      top.univMax = Math.max(top.univMax, top.univBranch);
+      top.univBranch = 0;
+      top.unbMax = Math.max(top.unbMax, top.unbBranch);
+      top.unbBranch = 0;
+      if (top.atomPending) top.prevUnbounded = top.atomPending.endedUnbounded === true;
+      top.atomPending = null;
+      justQuantified = false;
       continue;
     }
-    if (c === "*" || c === "+" || c === "?" || c === "{") {
-      const top = stack[stack.length - 1];
-      if (top) top.risky = true;
+    if (c === "^" || c === "$") { justQuantified = false; continue; } // zero-width anchors: neutral
+    if (c === "*" || c === "+" || c === "?") {
+      if (justQuantified && c === "?") continue; // lazy modifier on the previous quantifier (a+?, .*?)
+      const violation = applyQuantifier(top, c !== "?");
+      if (violation) return violation;
       continue;
     }
+    if (c === "{") {
+      const m = /^\{(\d+)(,(\d*))?\}/.exec(s.slice(i));
+      if (!m) { atomArrives(top, false); continue; } // a literal '{' (Annex B), not a quantifier
+      const unbounded = m[2] !== undefined && m[3] === ""; // {n,} repeats without an upper bound
+      const violation = applyQuantifier(top, unbounded);
+      if (violation) return violation;
+      i += m[0].length - 1;
+      continue;
+    }
+    if (c === ".") { atomArrives(top, true); continue; }
+    atomArrives(top, false); // any other literal character
   }
+  const root = stack[0];
+  const universals = Math.max(root.univMax, root.univBranch);
+  if (universals > 1) return UNIVERSAL_UNBOUNDED_REASON;
+  const unbounds = Math.max(root.unbMax, root.unbBranch);
+  if (unbounds > 2) return TOTAL_UNBOUNDED_REASON;
   // Unclosed groups/classes and dangling escapes are structural problems:
   // admitted here so new RegExp produces the genuine fs_grep_invalid_regex.
   return null;
@@ -858,20 +992,22 @@ export function regexComplexityViolation(src) {
  * into RegExp matching (allowed under MV3 CSP — RegExp is not eval/new
  * Function); chrome-agent-platform-coz19: a model-supplied pattern is
  * COMPLEXITY-BOUNDED before compilation (regexComplexityViolation refuses the
- * nested-quantifier and backreference classes whose single catastrophic
- * re.test() is uninterruptible and would freeze the whole privileged service
- * worker) and CONTENT-BOUNDED during the scan (per-line cap + cumulative
- * budget, both honestly reported via regexBounds and the truncated flag). The
+ * nested-quantifier, backreference, adjacent-unbounded-quantifier and
+ * multiple-universal-repetition classes whose single catastrophic re.test() is
+ * uninterruptible and would freeze the whole privileged service
+ * worker) and CONTENT/WORK-BOUNDED during the scan (per-line cap + cumulative
+ * budget + wall-clock deadline, all honestly reported via regexBounds and the
+ * truncated flag - every partial-result path sets it). The
  * default remains a literal substring match, which cannot ReDoS. The managed
  * ReDoS-safe engine (guaranteed linear time) is tmdm.
  * @param {string} grantId
- * @param {{ query?: string, relativePath?: string, regex?: boolean, ignoreCase?: boolean, maxMatches?: number | null, maxDepth?: number | null }} [options]
- * @param {{ customIdb?: any }} [dbOptions]
+ * @param {{ query?: string, relativePath?: string, regex?: boolean, ignoreCase?: boolean, maxMatches?: number | null, maxDepth?: number | null, regexDeadlineMs?: number }} [options]
+ * @param {{ customIdb?: any, _now?: () => number }} [dbOptions]
  */
 export async function grepFsGrant(
   grantId,
-  { query = "", relativePath = "", regex = false, ignoreCase = false, maxMatches = null, maxDepth = null, includeIgnored = false } = {},
-  { customIdb = null } = {},
+  { query = "", relativePath = "", regex = false, ignoreCase = false, maxMatches = null, maxDepth = null, includeIgnored = false, regexDeadlineMs = REGEX_MATCH_DEADLINE_MS } = {},
+  { customIdb = null, _now = Date.now } = {},
 ) {
   const grant = await getFsGrant(grantId, { customIdb });
   if (!grant) return { ok: false, error: "grant_not_found" };
@@ -892,6 +1028,7 @@ export async function grepFsGrant(
   // blast radius is the entire service worker.
   let matcher;
   let regexBounds = null;
+  let regexStartedAt = 0;
   if (regex) {
     const violation = regexComplexityViolation(q);
     if (violation) {
@@ -904,7 +1041,8 @@ export async function grepFsGrant(
       return { ok: false, error: "fs_grep_invalid_regex", detail: String(err?.message || err) };
     }
     matcher = (line) => re.test(line);
-    regexBounds = { skippedLongLines: 0, scanBudgetHit: false, charsTested: 0 };
+    regexBounds = { skippedLongLines: 0, scanBudgetHit: false, deadlineHit: false, charsTested: 0 };
+    regexStartedAt = _now();
   } else {
     const needle = ignoreCase ? q.toLowerCase() : q;
     matcher = (line) => (ignoreCase ? line.toLowerCase() : line).includes(needle);
@@ -959,13 +1097,21 @@ export async function grepFsGrant(
       }
       let line = lines[i];
       if (regexBounds) {
-        // coz19 content bounds (defense in depth for the polynomial classes a
-        // static bound cannot exclude, e.g. a+a+): cap what one re.test() can
-        // be asked to swallow, and cap the cumulative regex work per call.
-        // Both are honest: skips and the budget hit are counted and reported,
-        // and the budget sets the existing truncated flag — never a silent drop.
+        // coz19 content bounds (defense in depth for the polynomial residue a
+        // static bound cannot exclude): cap what one re.test() can be asked to
+        // swallow, cap the cumulative regex work per call, and cap the
+        // wall-clock spent matching. All three are honest: skips count, and
+        // EVERY partial-result path sets the truncated flag the model reads
+        // (round-2 fix per review: a skipped long line is a partial result and
+        // used to leave truncated:false).
+        if (_now() - regexStartedAt > regexDeadlineMs) {
+          regexBounds.deadlineHit = true;
+          truncated = true;
+          return;
+        }
         if (line.length > MAX_REGEX_LINE_CHARS) {
           regexBounds.skippedLongLines += 1;
+          truncated = true;
           continue;
         }
         if (regexBounds.charsTested + line.length > MAX_REGEX_SCAN_CHARS) {

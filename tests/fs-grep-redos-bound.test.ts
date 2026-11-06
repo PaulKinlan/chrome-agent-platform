@@ -8,8 +8,14 @@
 //      exponential classes and backreferences BEFORE compilation, and admits
 //      the ordinary patterns grep actually needs;
 //   2. grepFsGrant returns the actionable fs_grep_regex_too_complex refusal;
-//   3. the content bounds (per-line cap, cumulative scan budget) contain the
-//      polynomial residue and are HONESTLY reported via regexBounds + truncated;
+//   3. the content bounds (per-line cap, cumulative scan budget, wall-clock
+//      deadline) contain the residue and are HONESTLY reported via regexBounds
+//      + truncated — round 2: EVERY partial-result path sets truncated, and
+//      the bound refuses adjacent unbounded quantifiers (a+a+), multiple
+//      universal repetitions (.*a.*b) and >2 unbounded repetitions per branch
+//      (\d+:\d+:\d+), after the review falsified round 1's claim that the
+//      content bounds contain adjacent-quantifier polynomials: a+a+a+a+a+b
+//      over one 8192-char line froze the real V8 matcher past a 5s timeout;
 //   4. literal mode and admitted regex semantics are unchanged.
 // The managed ReDoS-safe engine is tmdm (rregex); this is the interim.
 // @ts-nocheck
@@ -21,6 +27,7 @@ import {
   regexComplexityViolation,
   MAX_REGEX_LINE_CHARS,
   MAX_REGEX_SCAN_CHARS,
+  REGEX_MATCH_DEADLINE_MS,
 } from "../extension/lib/fs-grants.js";
 
 // --- self-contained in-memory handles (same shape as fs-tools.test.ts) --------
@@ -87,7 +94,11 @@ Deno.test("coz19: the complexity bound admits the patterns grep actually needs",
     "(ab)+",                  // quantified group with a quantifier-free body
     "foo(bar)?",              // optional quantifier-free group
     "^\\s*TODO(\\(|:)",       // anchors, classes, quantifier-free groups
-    "a+b+",                   // adjacent quantifiers: polynomial, contained by the CONTENT bounds
+    // round 2: "a+b+" moved to the REFUSED list — round 1 admitted adjacent
+    // quantifiers as "polynomial, contained by the CONTENT bounds" and the
+    // review falsified exactly that (a+a+a+a+a+b froze real V8 past a 5s
+    // timeout on one 8192-char line: the line cap bounds the SUBJECT, not the
+    // backtracking).
     "a|b|c",                  // top-level alternation (linear)
     "(?<=\\s)x",              // lookbehind with a quantifier-free body
     "\\(\\)",                 // escaped metacharacters
@@ -95,6 +106,18 @@ Deno.test("coz19: the complexity bound admits the patterns grep actually needs",
     "(?:ab)+",                // non-capturing, quantifier-free body
     "(?<name>ab)+",           // named group, quantifier-free body
     "err(or)?s{0,2}",
+    // round-2 admissions: the shapes the strengthened bound must NOT break
+    "a+b",                    // one unbounded repetition + a mandatory literal
+    "foo.*bar",               // a single universal repetition between literals
+    ".*",                     // a lone wildcard
+    "[^}]+x",                 // one negated-class repetition (universal-ish) alone
+    "\\d+:\\d+",              // two restricted repetitions, disjoint mandatory separator
+    ".*x\\d+",                // universal + restricted separated by a literal (O(line²) worst case)
+    "a+?b",                   // lazy modifier on a single repetition
+    ".*?foo",                 // lazy single universal
+    "\\d{1,3}\\d{2,4}x",      // BOUNDED adjacent repetitions are finite work
+    "x{2,}",                  // one {n,} repetition
+    "^(.*)$",                 // anchors around one universal repetition
   ];
   for (const pattern of admitted) {
     assertEquals(regexComplexityViolation(pattern), null, `must admit: ${pattern}`);
@@ -167,7 +190,7 @@ Deno.test("coz19: lines longer than MAX_REGEX_LINE_CHARS are SKIPPED and counted
     assertEquals(res.ok, true);
     assertEquals(res.matches.length, 1, "the short line still matches");
     assertEquals(res.regexBounds.skippedLongLines, 2, "both long lines are counted");
-    assertEquals(res.truncated, false, "skipping a too-long line is a bound, not a truncation");
+    assertEquals(res.truncated, true, "round 2 (review): a skipped long line IS a partial result — the field the model reads must say so");
   });
 });
 
@@ -182,5 +205,67 @@ Deno.test("coz19: the cumulative scan budget stops the walk with truncated + sca
     assertEquals(res.truncated, true, "the budget hit sets the EXISTING truncated flag");
     assertEquals(res.regexBounds.scanBudgetHit, true, "and names itself in regexBounds");
     assert(res.regexBounds.charsTested <= MAX_REGEX_SCAN_CHARS, "the matcher never saw more than the budget");
+  });
+});
+
+// --- round 2: the review falsification and the strengthened admission ----------
+
+Deno.test("coz19 r2: the reviewer's repro — adjacent unbounded quantifiers are REFUSED, and the refusal reaches the model as fs_grep_regex_too_complex", async () => {
+  // a+a+a+a+a+b over 8192 'a' chars was ADMITTED by round 1 and never returned
+  // (real V8 matcher, 5s timeout, REPRO_EXIT=124). Adjacent unbounded
+  // quantifiers are now refused before compilation.
+  const violation = regexComplexityViolation("a+a+a+a+a+b");
+  assert(violation !== null, "the coord repro must be refused");
+  assertStringIncludes(violation!, "direct concatenation");
+  for (const pattern of ["a+a+", ".*.*", "(a+)(a+)", "\\w+\\d+x", ".+a*", "a+?b+?", "(a+)c+", "x{2,}y{3,}"]) {
+    const v = regexComplexityViolation(pattern);
+    assert(v !== null && v.includes("direct concatenation"), `adjacent unbounded must be refused: ${pattern}`);
+  }
+  // and through the real entry point, before any scan
+  await withTree({ "a.txt": fileHandle("a.txt", "a".repeat(50)) }, async (grantId) => {
+    const res: any = await grepFsGrant(grantId, { query: "a+a+a+a+a+b", regex: true });
+    assertEquals(res.ok, false);
+    assertEquals(res.error, "fs_grep_regex_too_complex");
+    assertStringIncludes(String(res.detail), "direct concatenation");
+  });
+});
+
+Deno.test("coz19 r2: multiple universal repetitions are refused; >2 unbounded repetitions per branch are refused", () => {
+  for (const pattern of [".*a.*b", ".+a.+b.+", "a.*b.*c", "(?=.*)x.*y"]) {
+    const v = regexComplexityViolation(pattern);
+    assert(v !== null && v.includes("universal"), `universal>1 must be refused: ${pattern} (got ${v})`);
+  }
+  for (const pattern of ["\\d+:\\d+:\\d+", "import\\s+\\{[^}]+\\}\\s+from", "\\d+x\\d+y\\d+"]) {
+    const v = regexComplexityViolation(pattern);
+    assert(v !== null && (v.includes("two unbounded repetitions") || v.includes("more than two")), `U>2 must be refused: ${pattern} (got ${v})`);
+  }
+  // per-BRANCH accounting: one universal in EACH alternation branch is fine
+  assertEquals(regexComplexityViolation("a.*b|c.*d"), null, "alternation branches are accounted separately");
+});
+
+Deno.test("coz19 r2: the wall-clock deadline stops the walk with deadlineHit + truncated, honestly", async () => {
+  assert(REGEX_MATCH_DEADLINE_MS > 0, "the default deadline is a positive wall-clock bound");
+  const content = Array.from({ length: 20 }, (_, i) => `line ${i} match`).join("\n");
+  await withTree({ "d.txt": fileHandle("d.txt", content) }, async (grantId) => {
+    let calls = 0;
+    const res: any = await grepFsGrant(
+      grantId,
+      { query: "match", regex: true, regexDeadlineMs: 1 },
+      { _now: () => (calls++) * 1000 }, // the first call stamps the start; every later check is way over
+    );
+    assertEquals(res.ok, true, "a deadline hit is a PARTIAL result, never an error");
+    assertEquals(res.regexBounds.deadlineHit, true, "and names itself in regexBounds");
+    assertEquals(res.truncated, true, "and sets the field the model reads");
+    assert(res.matches.length < 20, "the walk actually stopped early");
+  });
+});
+
+Deno.test("coz19 r2: an admitted regex under the default deadline reports deadlineHit:false and full results", async () => {
+  await withTree({ "ok.txt": fileHandle("ok.txt", "alpha\nbeta\ngamma") }, async (grantId) => {
+    const res: any = await grepFsGrant(grantId, { query: "[a-z]+", regex: true });
+    assertEquals(res.ok, true);
+    assertEquals(res.matches.length, 3);
+    assertEquals(res.regexBounds.deadlineHit, false);
+    assertEquals(res.truncated, false);
   });
 });
