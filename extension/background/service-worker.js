@@ -7912,11 +7912,13 @@ const handlers = mergeRouteMaps(
 
         const isApproved = boundOrigins.has(verdict.origin);
         if (!isApproved) {
-          // Round 6: fixed code + the keyId (a [A-Z][A-Z0-9_]* token by
-          // construction of VAULT_PATTERN) + the already-sanitised origin —
-          // structured fields, no interpolated sentence.
-          record({ ok: false, origin: verdict.origin, refused: true, errorCode: "vault_origin_not_approved", vaultKeyId: keyId });
-          return { ok: false, refused: true, error: "vault_origin_not_approved", vaultKeyId: keyId, hint: PYTHON_FETCH_ERROR_HINTS.vault_origin_not_approved };
+          // Round 6: fixed code + the already-sanitised origin. Round 7: the
+          // keyId echo is GONE - the caller controls that text ($VAULT{...} in
+          // a granted URL's query is enough to smuggle a secret-shaped token
+          // through the echo), so the record and return carry only the
+          // boolean fact that a key was presented.
+          record({ ok: false, origin: verdict.origin, refused: true, errorCode: "vault_origin_not_approved", vaultKeyPresented: true });
+          return { ok: false, refused: true, error: "vault_origin_not_approved", vaultKeyPresented: true, hint: PYTHON_FETCH_ERROR_HINTS.vault_origin_not_approved };
         }
 
         let secretVal;
@@ -7926,12 +7928,12 @@ const handlers = mergeRouteMaps(
           );
           secretVal = secretObj?.value;
         } catch {
-          record({ ok: false, origin: verdict.origin, refused: true, errorCode: "vault_key_missing", vaultKeyId: keyId });
-          return { ok: false, refused: true, error: "vault_key_missing", vaultKeyId: keyId, hint: PYTHON_FETCH_ERROR_HINTS.vault_key_missing };
+          record({ ok: false, origin: verdict.origin, refused: true, errorCode: "vault_key_missing", vaultKeyPresented: true });
+          return { ok: false, refused: true, error: "vault_key_missing", vaultKeyPresented: true, hint: PYTHON_FETCH_ERROR_HINTS.vault_key_missing };
         }
         if (!secretVal) {
-          record({ ok: false, origin: verdict.origin, refused: true, errorCode: "vault_key_missing", vaultKeyId: keyId });
-          return { ok: false, refused: true, error: "vault_key_missing", vaultKeyId: keyId, hint: PYTHON_FETCH_ERROR_HINTS.vault_key_missing };
+          record({ ok: false, origin: verdict.origin, refused: true, errorCode: "vault_key_missing", vaultKeyPresented: true });
+          return { ok: false, refused: true, error: "vault_key_missing", vaultKeyPresented: true, hint: PYTHON_FETCH_ERROR_HINTS.vault_key_missing };
         }
 
         urlToFetch = urlToFetch.split(`$VAULT{${keyId}}`).join(secretVal);
@@ -8006,7 +8008,7 @@ const handlers = mergeRouteMaps(
         origin: verdict.origin,
         status: res.status,
         bytes,
-        ...(refusedHeaders.length ? { refusedHeaders } : {}),
+        ...(refusedHeaders.length ? { refusedHeaderCount: refusedHeaders.length } : {}),
       };
       if (inflight) {
         inflight.complete(okEntry);
@@ -8028,7 +8030,9 @@ const handlers = mergeRouteMaps(
         headers: responseHeaders,
         text,
         bytes,
-        refusedHeaders,
+        // Round 7: the COUNT, never the caller's header names - a 128-char
+        // token charset still lets a secret-shaped name ride through.
+        refusedHeaderCount: refusedHeaders.length,
       });
     } catch (e) {
       const wasAborted = controller.signal.aborted;

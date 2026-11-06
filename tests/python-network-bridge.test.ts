@@ -511,6 +511,8 @@ Deno.test("lrhyl r6: EVERY string field is value-bounded - the schemeless creden
     status: `200 ${SECRET_PLACEHOLDER}`,
     ms: 1,
     refusedHeaders: [evil, "Cookie"],
+    refusedHeaderCount: `3 ${SECRET_PLACEHOLDER}`,
+    vaultKeyId: "TOKEN_SECRET_FROM_CALLER",
     outcome: `aborted ${SECRET_PLACEHOLDER}`,
     errorCode: `not_granted ${SECRET_PLACEHOLDER}`,
   });
@@ -520,14 +522,16 @@ Deno.test("lrhyl r6: EVERY string field is value-bounded - the schemeless creden
   assertEquals((rec as any).origin, undefined, "an unparseable origin is dropped");
   assertEquals((rec as any).ok, undefined, "a non-boolean ok is dropped");
   assertEquals((rec as any).status, undefined, "a non-numeric status is dropped");
-  assertEquals(rec.refusedHeaders, ["<invalid-name>", "Cookie"], "the hostile name is refused under the fixed marker; a token-valid name survives");
+  assertEquals((rec as any).refusedHeaders, undefined, "round 7: the caller's header NAMES are not a record field at all");
+  assertEquals((rec as any).refusedHeaderCount, undefined, "a non-numeric count is dropped");
+  assertEquals((rec as any).vaultKeyId, undefined, "round 7: the caller-controlled keyId echo is not a record field");
   assertEquals((rec as any).outcome, undefined, "an outcome outside the enum is dropped");
   assertEquals(rec.errorCode, "fetch_failed", "an errorCode outside the vocabulary collapses to fetch_failed");
   const serialized = JSON.stringify(rec);
   assert(!serialized.includes("LRHYL_SECRET_9317") && !serialized.includes(SECRET_PLACEHOLDER), "no field carried the credential");
 });
 
-Deno.test("lrhyl r6: refused header NAMES from the sanitizer are token-bounded before they can reach a record", () => {
+Deno.test("lrhyl r6: refused header NAMES are token-bounded inside the sanitizer - and since round 7 records carry only the COUNT", () => {
   const { refused, headers } = sanitizeRequestHeaders({
     [`X-Bad https://h/p?token=LRHYL_SECRET_9317`]: "1",
     Cookie: "session=x",
@@ -658,4 +662,100 @@ Deno.test("lrhyl SW source pin: the python.fetch echo strips, the failure return
   );
   assert(lib.includes("row.records.map((r) => Object.freeze(marshalModelReadable(r)))"), "take() re-marshals at the observation boundary (a fifth writer cannot bypass it)");
   assert(lib.includes("errorCode: \"aborted\""), "the abort writer's record is the fixed code");
+  // round 7: the two caller-controlled TEXT fields are gone from every surface
+  assert(!sw.includes("vaultKeyId"), "the caller-controlled $VAULT keyId echo is gone from the SW");
+  assertEquals(sw.split("vaultKeyPresented: true").length - 1, 6, "the three vault refusals record AND return the boolean fact only");
+  assert(sw.includes("refusedHeaderCount: refusedHeaders.length"), "the success echo carries the COUNT of refused headers, never the names");
+  assert(sw.includes("...(refusedHeaders.length ? { refusedHeaderCount: refusedHeaders.length } : {})"), "the ledger entry carries the count too");
+});
+
+// --- lrhyl round 7: the two caller-controlled TEXT fields, removed -----------
+//
+// Review FAIL of round 6.1, two probes, one mistake: fields that carry
+// CALLER-CONTROLLED TEXT survived the narrowing. (1) vaultKeyId echoed the
+// caller's $VAULT{...} capture - a secret-shaped token placed in a granted
+// URL's query or an Authorization placeholder came back through take() and
+// the Python-facing return. (2) refusedHeaders permitted arbitrary 128-char
+// token strings. A code-like string carrying arbitrary data is free text with
+// extra steps. The fix keeps the shape closed: vaultKeyPresented (boolean)
+// and refusedHeaderCount (number) replace them - the model needs to know a
+// key was presented and how many headers were refused, never the texts.
+
+import { PYTHON_FETCH_ERROR_CODES } from "../extension/lib/python-network.js";
+
+/** The round-7 contract scan: EVERY string in a record (including inside
+ * arrays) is either a fixed enum member or a validated http(s) origin /
+ * origin+path in normal form - so the NEXT field someone adds cannot be
+ * arbitrary text by accident. */
+function assertRecordStringsBounded(rec: Record<string, any>, where: string) {
+  const enums = new Set<string>(["GET", "HEAD", "POST", "INVALID", "aborted", ...PYTHON_FETCH_ERROR_CODES]);
+  const check = (v: string, path: string) => {
+    if (enums.has(v)) return;
+    let u: URL;
+    try {
+      u = new URL(v);
+    } catch {
+      throw new Error(`${where}${path}: string is neither a fixed enum member nor a parseable URL: ${JSON.stringify(v)}`);
+    }
+    if (u.protocol !== "http:" && u.protocol !== "https:") {
+      throw new Error(`${where}${path}: non-http(s) scheme in a record string: ${JSON.stringify(v)}`);
+    }
+    if (u.search || u.hash || u.username || u.password) {
+      throw new Error(`${where}${path}: credential location survived in a record string: ${JSON.stringify(v)}`);
+    }
+    const isOriginField = path === ".origin";
+    const normal = isOriginField ? u.origin : `${u.origin}${u.pathname}`;
+    if (v !== normal) {
+      throw new Error(`${where}${path}: string is not in normal ${isOriginField ? "origin" : "origin+path"} form: ${JSON.stringify(v)}`);
+    }
+  };
+  for (const [k, v] of Object.entries(rec)) {
+    if (typeof v === "string") check(v, `.${k}`);
+    else if (Array.isArray(v)) v.forEach((item, i) => { if (typeof item === "string") check(item, `.${k}[${i}]`); });
+  }
+}
+
+Deno.test("lrhyl r7: a secret-shaped token in vaultKeyId or refusedHeaders survives NOTHING - not take(), not any model-facing surface", () => {
+  const ledger = createPythonNetworkLedger();
+  ledger.record("run-lrhyl-r7", {
+    method: "GET", url: "https://h/p", ok: false, refused: true,
+    errorCode: "vault_key_missing", vaultKeyPresented: true,
+    vaultKeyId: "TOKEN_SECRET_FROM_CALLER", // the reviewer's probe: dropped, not a contract field
+    ms: 1,
+  });
+  const inflight = ledger.begin("run-lrhyl-r7", { method: "GET", url: "https://h/q", origin: "https://h", startedAt: Date.now(), controller: null });
+  inflight.complete({ ok: true, status: 200, bytes: 5, refusedHeaders: ["X-TOKEN_SECRET_FROM_CALLER"], refusedHeaderCount: 1 });
+  const taken = ledger.take("run-lrhyl-r7");
+  const serialized = JSON.stringify(taken.records);
+  assert(!serialized.includes("TOKEN_SECRET_FROM_CALLER"), "neither field echoes caller-controlled text");
+  assertEquals((taken.records[0] as any).vaultKeyId, undefined, "vaultKeyId is not a record field any more");
+  assertEquals((taken.records[0] as any).vaultKeyPresented, true, "the boolean carries the only fact the model needs");
+  assertEquals((taken.records[1] as any).refusedHeaders, undefined, "refusedHeaders is not a record field any more");
+  assertEquals((taken.records[1] as any).refusedHeaderCount, 1, "the COUNT replaces the caller's header names");
+});
+
+Deno.test("lrhyl r7: EVERY string field of EVERY writer's record is a fixed enum member or a validated http(s) origin/origin+path", () => {
+  const ledger = createPythonNetworkLedger();
+  // adversarial inputs across all four writers
+  ledger.record("run-lrhyl-r7s", {
+    method: `TRACE ${SECRET_PLACEHOLDER}`, url: `https://h/p?token=${SECRET_PLACEHOLDER}`,
+    origin: `https://user:${SECRET_PLACEHOLDER}@h/x`, ok: false, refused: true,
+    errorCode: `free_${SECRET_PLACEHOLDER}`, vaultKeyId: "TOKEN_SECRET_FROM_CALLER",
+    refusedHeaders: [`X-TOKEN_SECRET_FROM_CALLER`], label: `see https://h/p?token=${SECRET_PLACEHOLDER}`,
+    ms: 1,
+  });
+  const i = ledger.begin("run-lrhyl-r7s", { method: "GET", url: "https://h/q#frag", origin: "https://h", startedAt: Date.now(), controller: { abort() {} } });
+  i.complete({ ok: true, status: 200, bytes: 1, refusedHeaderCount: 2 });
+  const taken = ledger.take("run-lrhyl-r7s"); // the third record is abort-written inside take()
+  assertEquals(taken.records.length, 2);
+  taken.records.forEach((rec, idx) => assertRecordStringsBounded(rec as Record<string, any>, `records[${idx}]`));
+  const serialized = JSON.stringify(taken.records);
+  assert(!serialized.includes(SECRET_PLACEHOLDER) && !serialized.includes("TOKEN_SECRET_FROM_CALLER"));
+  // the method collapsed to INVALID, the errorCode to fetch_failed, unknown fields are gone
+  assertEquals((taken.records[0] as any).method, "INVALID");
+  assertEquals((taken.records[0] as any).errorCode, "fetch_failed");
+  assertEquals((taken.records[0] as any).vaultKeyId, undefined);
+  assertEquals((taken.records[0] as any).refusedHeaders, undefined);
+  assertEquals((taken.records[0] as any).label, undefined);
+  assertEquals((taken.records[0] as any).origin, "https://h", "the userinfo-bearing origin is re-parsed to the BARE origin - the credential is gone, the honest origin survives (same policy as url -> origin+path)");
 });

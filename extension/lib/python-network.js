@@ -97,7 +97,10 @@ export function normalizeGrantOrigin(input) {
  * — must carry ORIGIN+PATH ONLY. A parse failure yields the empty string:
  * fail closed toward saying nothing rather than echoing a raw, possibly
  * secret-carrying string. The REQUEST still fetches the full URL — stripping
- * is for echoes, never for dispatch. */
+ * is for echoes, never for dispatch.
+ * CAVEAT (lrhyl r6.1 review): failing closed on opaque schemes is right for
+ * the NETWORK LEDGER, but do not reuse this helper where opaque schemes are
+ * legitimate (data:, blob:, chrome-extension: URLs) — it would blank them. */
 export function urlWithoutQuery(raw) {
   try {
     const u = new URL(String(raw ?? ""));
@@ -143,8 +146,8 @@ export const PYTHON_FETCH_ERROR_HINTS = Object.freeze({
   method_not_allowed: "cap.fetch does GET, HEAD, POST only.",
   forbidden_host: "The host is private or loopback. The Python sandbox reaches public origins only.",
   not_granted: "That origin is not in the owner's Python network grants; the request was refused and recorded. Nothing was sent. The owner can add the origin in Settings → Permissions → “Python network access”.",
-  vault_origin_not_approved: "The $VAULT secret referenced is not bound to this origin. Fetch the origin the secret was registered for (see vaultKeyId).",
-  vault_key_missing: "The $VAULT key referenced has no value in the vault (see vaultKeyId).",
+  vault_origin_not_approved: "The $VAULT secret referenced is not bound to this origin. Fetch the origin the secret was registered for.",
+  vault_key_missing: "The $VAULT key referenced has no value in the vault.",
   host_permission_missing: "Chrome host permission is missing — it is granted at install (<all_urls>). If Settings → Permissions shows it missing, reinstall the extension.",
   grant_revoked: "The origin's grant was revoked mid-run, so the fetch was refused; nothing more will be sent to it.",
   redirect_refused: "The response redirected elsewhere, so the fetch was refused. A granted origin is an origin, not a starting point — grant the destination if you meant to reach it.",
@@ -158,8 +161,8 @@ export const PYTHON_FETCH_ERROR_HINTS = Object.freeze({
  * added silently. */
 const RECORD_FIELDS = Object.freeze([
   "method", "url", "origin", "ok", "status", "bytes", "ms",
-  "refused", "aborted", "outcome", "inFlight", "errorCode", "vaultKeyId",
-  "refusedHeaders",
+  "refused", "aborted", "outcome", "inFlight", "errorCode", "vaultKeyPresented",
+  "refusedHeaderCount",
 ]);
 const RECORD_FIELD_SET = new Set(RECORD_FIELDS);
 /** A header name per RFC 9110 token rules, length-bounded. Anything else in a
@@ -196,7 +199,10 @@ function projectRecord(partial, where) {
   // Round 6, value bounds: EVERY string field of a record is now provably
   // bounded — method (token), errorCode (enum), outcome (enum), origin
   // (re-parsed to a bare origin or dropped), url (writers fail it closed to
-  // "" or origin+path), refusedHeaders (token charset or '<invalid-name>').
+  // "" or origin+path). Round 7 removed the last two caller-controlled TEXT
+  // fields: vaultKeyId became the boolean vaultKeyPresented and
+  // refusedHeaders became the number refusedHeaderCount — a code-like string
+  // carrying arbitrary data is free text with extra steps.
   // That is what makes the marshal's verbatim pass-through for unparseable
   // strings sound: no free text can occupy a contract field.
   if (out.outcome !== undefined && out.outcome !== "aborted") {
@@ -216,26 +222,16 @@ function projectRecord(partial, where) {
       delete out.origin;
     }
   }
-  for (const f of ["status", "bytes", "ms"]) {
+  for (const f of ["status", "bytes", "ms", "refusedHeaderCount"]) {
     if (out[f] === undefined) continue;
     const n = Number(out[f]);
     if (Number.isFinite(n)) out[f] = n;
     else { dropped.push(f); delete out[f]; }
   }
-  for (const f of ["ok", "refused", "aborted", "inFlight"]) {
+  for (const f of ["ok", "refused", "aborted", "inFlight", "vaultKeyPresented"]) {
     if (out[f] !== undefined && typeof out[f] !== "boolean") {
       dropped.push(f);
       delete out[f];
-    }
-  }
-  if (out.refusedHeaders !== undefined) {
-    if (!Array.isArray(out.refusedHeaders)) {
-      dropped.push("refusedHeaders");
-      delete out.refusedHeaders;
-    } else {
-      out.refusedHeaders = out.refusedHeaders.map((n) =>
-        typeof n === "string" && HEADER_NAME_TOKEN.test(n) ? n : "<invalid-name>"
-      );
     }
   }
   if (dropped.length > 0) {
@@ -630,10 +626,11 @@ export function createPythonNetworkLedger({ maxPerRun = MAX_RECORDS_PER_RUN, max
     },
 
     /** Record one attempt. The record shape is CLOSED (round 6): exactly
-     * { method, url, origin, ok, status?, bytes?, ms, errorCode?, vaultKeyId?,
-     * refused?, aborted?, outcome?, refusedHeaders? } — anything else, and any
-     * free-text `error`, is dropped by projectRecord. `url` is normalized to
-     * origin+path — these records are model-readable via the run envelope. */
+     * { method, url, origin, ok, status?, bytes?, ms, errorCode?,
+     * vaultKeyPresented?, refused?, aborted?, outcome?, refusedHeaderCount? }
+     * — anything else, and any free-text `error`, is dropped by projectRecord.
+     * `url` is normalized to origin+path — these records are model-readable
+     * via the run envelope. */
     record(runId, entry) {
       const id = String(runId ?? "");
       if (!id || takenIds.has(id) || runs.get(id)?.settled) return;

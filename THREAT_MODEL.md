@@ -135,10 +135,15 @@ inventory and the sender/inventory guard described in INV-15.
   `url` is normalized to origin+path or fails closed to "" — and a non-http(s) scheme
   fails closed too, because an opaque-scheme string parses with origin "null" while its
   path keeps the credential (`extension/lib/python-network.js#urlWithoutQuery`);
-  refused header names are token-charset or '<invalid-name>'; unknown fields — a caller's
-  `error` string included — are DROPPED, with field NAMES (never values) logged to a
-  debug-only console sink, and a per-writer shape test pins Object.keys() so a new field
-  cannot appear silently. Raw exception text goes only to the service-worker console,
+  refused header names never reach a record at all — records carry the COUNT
+  (refusedHeaderCount), and the caller-controlled $VAULT keyId echo is the boolean
+  vaultKeyPresented (round 7: a code-like string carrying arbitrary data is free text
+  with extra steps); unknown fields — a caller's
+  `error` string included — are DROPPED, with field NAMES (never values) logged to the
+  sanctioned debug logger (capLog), and a per-writer shape test pins Object.keys() plus a
+  string-field contract scan (every record string is a fixed enum member or a validated
+  http(s) origin/origin+path) so a new field cannot be arbitrary text by accident.
+  Raw exception text goes only to the sanctioned service-worker logger,
   which is debug-only and never model-visible. Under the closed shape, ONE marshal
   (rounds 4-5, kept) deep-walks plain objects and arrays — object KEYS exactly like
   values, '__proto__'-safe via defineProperty — normalizes parsing http(s) URL strings
