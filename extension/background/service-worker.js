@@ -8034,9 +8034,19 @@ const handlers = mergeRouteMaps(
         // chrome-agent-platform-lrhyl: origin+path only. This return value is
         // model-readable (INV-7 data), and the query string is where
         // credentials live (the '?key=' pattern) — echoing the full URL let a
-        // caller-supplied secret escape the enclave. The request itself still
-        // fetched the full URL above; only the echo is stripped.
-        url: urlWithoutQuery(res.url || u.href),
+        // caller-supplied secret escape the enclave.
+        // chrome-agent-platform-guh95: and the echo must not DEPEND on what
+        // substitution did to the fetched URL. $VAULT{KEY} substitution runs
+        // over the whole url string; today the URL parser percent-encodes
+        // braces in the PATH before substitution runs (so it fires only in
+        // the query, which the strip already removed), but res.url/u.href are
+        // the WRONG SOURCE regardless: any future substitution semantics
+        // (e.g. raw-template substitution with revalidation) would reopen the
+        // leak through them. The template echo — the url string the model
+        // itself wrote, which is also what the ledger's begin() records — is
+        // safe under every semantics. The request itself still fetched the
+        // substituted URL above.
+        url: urlWithoutQuery(String(url ?? "")),
         headers: responseHeaders,
         text,
         bytes,
