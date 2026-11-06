@@ -146,3 +146,135 @@ Deno.test("j7k25: a getter that MUTATES the input mid-walk is caught by the boun
   });
   expectSeedFail({ files: [row("scratch/proto.bin", proto)] }, "mid-walk prototype swap");
 });
+
+// --- b4pei round 2: the residuals the exported contract lists are EXECUTABLE bounds -------------
+//
+// The reviewer's FAILED verdict on round 1: the prose claimed "exactly three
+// bounded residuals" and "extra own symbols fail", but a getter could add a
+// SYMBOL after the pre-walk check (live repro: accepted, output pure). Round 2
+// closes that hole in code (a post-walk own-symbols re-check) and pins every
+// residual behaviourally, so code drift away from the documented bound reds
+// this suite instead of silently falsifying the contract text.
+
+Deno.test("b4pei r2: a getter that adds a PERSISTENT symbol mid-walk is refused by the post-walk symbol re-check", () => {
+  // The reviewer's repro: accepted on main at the round-1 tip, must now fail.
+  const arr = [1, 2, 3];
+  let ran = false;
+  Object.defineProperty(arr, 0, {
+    get() {
+      if (!ran) { ran = true; (arr as any)[Symbol("late")] = 9; }
+      return 1;
+    },
+    enumerable: true,
+    configurable: true,
+  });
+  expectSeedFail({ files: [row("scratch/late-symbol.bin", arr)] }, "getter-added persistent symbol");
+});
+
+Deno.test("b4pei r2 residual 4: a symbol added AND removed inside the walk is accepted and inert", () => {
+  const arr = [1, 2, 3];
+  const sym = Symbol("transient");
+  let added = false;
+  Object.defineProperty(arr, 0, {
+    get() {
+      if (!added) { added = true; (arr as any)[sym] = 9; }
+      return 1;
+    },
+    enumerable: true,
+    configurable: true,
+  });
+  Object.defineProperty(arr, 2, {
+    get() { delete (arr as any)[sym]; return 3; },
+    enumerable: true,
+    configurable: true,
+  });
+  const ok = validateWorkspaceSeed({ files: [row("scratch/transient-symbol.bin", arr)] });
+  assertEquals([...ok.files[0].bytes], [1, 2, 3], "the dense output is exactly the snapshot bytes");
+  assertEquals(Object.getOwnPropertySymbols(ok.files[0].bytes).length, 0, "the frozen output cannot carry the transient symbol");
+});
+
+Deno.test("b4pei r2 residual 3: an enumerable key added by a getter AFTER the key-set proof is accepted and inert", () => {
+  // The original b4pei CASE C repro, now an executable pin of the documented
+  // residual instead of a prose claim: the key proof is not re-run, and the
+  // smuggled key never reaches the frozen output.
+  const arr = [1, 2, 3];
+  let ran = false;
+  Object.defineProperty(arr, 0, {
+    get() {
+      if (!ran) {
+        ran = true;
+        Object.defineProperty(arr, "evil", { value: 7, enumerable: true, configurable: true });
+      }
+      return 1;
+    },
+    enumerable: true,
+    configurable: true,
+  });
+  const ok = validateWorkspaceSeed({ files: [row("scratch/late-key.bin", arr)] });
+  assertEquals([...ok.files[0].bytes], [1, 2, 3]);
+  assert(Object.prototype.hasOwnProperty.call(arr, "evil"), "the INPUT keeps the smuggled key (the documented accepted residual)");
+  assert(!("evil" in ok.files[0].bytes), "the frozen output cannot carry it");
+});
+
+Deno.test("b4pei r2 source pin: the post-walk re-check re-runs the symbol proof (the guarantee is code, not prose)", async () => {
+  const source = await Deno.readTextFile(new URL("../extension/lib/wasm-sync-workspace.js", import.meta.url));
+  const blockStart = source.indexOf("function exactDenseByteArray");
+  const blockEnd = source.indexOf("function classForPath", blockStart);
+  assert(blockStart >= 0 && blockEnd > blockStart, "the byte validator exists");
+  const block = source.slice(blockStart, blockEnd);
+  const postWalk = block.slice(block.indexOf("Bounded post-walk re-check"));
+  assert(postWalk.length > 0, "the post-walk re-check comment anchors the tail of the validator");
+  assert(
+    postWalk.includes("getOwnPropertySymbols"),
+    "the post-walk re-check must re-run the own-symbols proof (b4pei round 2): a getter-added symbol fails",
+  );
+  assertEquals(
+    (block.match(/Object\.getOwnPropertySymbols\(value\)\.length !== 0/g) || []).length,
+    2,
+    "the zero-symbol proof runs exactly twice: before the walk and after it",
+  );
+});
+
+// --- b4pei round 3: the PROXY CARVE-OUT is a documented, pinned contract boundary ----------------
+//
+// The round-2 verdict proved that on a Proxy-wrapped input the post-walk
+// symbol re-check is ITSELF an attacker-scheduled callback: an ownKeys trap
+// can snapshot the keys, fire an index getter that adds a symbol, and return
+// the stale snapshot - the final gOPS sees zero symbols while the input
+// carries one. No finite check sequence closes that (every reflective call on
+// a Proxy is a trap callback), and gOPS on a Proxy materialises the trap's
+// whole key list (reviewer measured 100001 ownKeys for a 100000-element
+// target), so the rejection guarantees and the O(symbol-count) cost claim are
+// ordinary-array scoped in the contract text. This pin asserts BOTH halves of
+// the honest boundary: the documented ACCEPTANCE (if a future shape starts
+// refusing this input the pin reds and the carve-out text must change with
+// it - drift reds in both directions) and the guarantee that holds for EVERY
+// input: OUTPUT PURITY.
+
+Deno.test("b4pei r3 PROXY CARVE-OUT: a trap window inside the FINAL symbol check smuggles a symbol past it - accepted, and the frozen output is still pure", () => {
+  const target = [1, 2, 3];
+  const sym = Symbol("trap-window");
+  let getterCalls = 0;
+  Object.defineProperty(target, 0, {
+    get() {
+      getterCalls++;
+      if (getterCalls === 2) (target as any)[sym] = 9; // fires inside the final gOPS's ownKeys trap
+      return 1; // the snapshot VALUE is stable - only the side effect varies
+    },
+    enumerable: true,
+    configurable: true,
+  });
+  const proxy = new Proxy(target, {
+    ownKeys(t) {
+      const keys = Reflect.ownKeys(t); // snapshot BEFORE any side effect
+      if (getterCalls >= 1) (t as any)[0]; // fire the getter only during the POST-walk symbol check
+      return keys; // stale: excludes the just-added symbol
+    },
+  });
+  const ok = validateWorkspaceSeed({ files: [row("scratch/proxy-window.bin", proxy)] });
+  assert(getterCalls >= 2, "the getter fired during the final symbol check's ownKeys trap (the window is real)");
+  assertEquals(Object.getOwnPropertySymbols(target).length, 1, "the INPUT carries the smuggled symbol");
+  assertEquals([...ok.files[0].bytes], [1, 2, 3], "the frozen output is exactly the snapshot bytes");
+  assertEquals(Object.getOwnPropertySymbols(ok.files[0].bytes).length, 0, "OUTPUT PURITY: no symbol rides into the clone");
+  assert(Object.isFrozen(ok.files[0].bytes), "the output is frozen");
+});
