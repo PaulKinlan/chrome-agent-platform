@@ -61,6 +61,13 @@ export const ALWAYS_ON_TREE_SKIPPING_GUARDS = Object.freeze(new Set([
   // chrome-agent-platform-zw8f0: pins the build-once capture expression in build.mjs via AST
   // analysis and operates on scratch fixtures; neither imports nor reads the built dist tree.
   "tests/build-once-capture.test.ts",
+  // chrome-agent-platform-cac6c: walks extension/ AST-censusing every runtime.onMessage listener
+  // and skips the generated dirs BY NAME while doing it; its only other dist mentions are inside
+  // backticked falsification fixtures (parsed as data, never read). It neither imports nor reads
+  // extension/dist, so the tightened check is the right classification — and it must be always-on
+  // (SOURCE_INSPECTING_GUARDS) because three consecutive service-worker.js deltas ran their gates
+  // without the one guard that polices that file, and a P1 reply-before-trust hole reached main.
+  "tests/onmessage-sender-guard.test.ts",
 ]));
 
 // Deliberately broad for unknown test files: `dist`, `dist-versions`, `dist.complete`, `extension/dist/...`.
@@ -68,8 +75,8 @@ export const ALWAYS_ON_TREE_SKIPPING_GUARDS = Object.freeze(new Set([
 // against a dist the gate cannot certify, which is the failure this module exists to prevent.
 const DIST_REFERENCE_RE = /\bdist(?:-versions)?\b|\bdist\.complete\b/;
 
-// Tightened check scoped to the 16 verified ALWAYS_ON tree-skipping guards (chrome-agent-platform-omsz9,
-// extended by chrome-agent-platform-uvo3).
+// Tightened check scoped to the verified ALWAYS_ON tree-skipping guards (chrome-agent-platform-omsz9,
+// extended by chrome-agent-platform-uvo3 and chrome-agent-platform-cac6c).
 // These guards walk source trees and filter out dist/ or cite dist in comments/AST rules.
 // They are ONLY treated as dist consumers if they actually load or read from the built extension/dist tree.
 const TIGHTENED_DIST_CONSUMER_RE =
@@ -88,7 +95,7 @@ const MODULE_DIST_IMPORT_RE =
 /**
  * True when a test file's source references the built dist tree.
  * For general files, uses the broad fail-closed DIST_REFERENCE_RE.
- * For the 16 verified ALWAYS_ON tree-skipping guards, strips backtick test fixtures and comments
+ * For the verified ALWAYS_ON tree-skipping guards, strips backtick test fixtures and comments
  * before evaluating with TIGHTENED_DIST_CONSUMER_RE to distinguish tree skipping from real loads.
  * @param {string} text
  * @param {string | null} [rel] repo-relative path of the test file
