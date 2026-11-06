@@ -942,6 +942,59 @@ function sampleText(el) {
   return text ? ` "${text.slice(0, 40)}"` : '';
 }
 
+// chrome-agent-platform-c3vpz: per-run memoisation for the static design-system
+// sweep. The nightly row named per-element computed-style reads and repeated
+// hasDirectText/sampleText work; the real shape was worse: the skip check
+// re-walked EVERY element's full ancestor chain calling getComputedStyle at
+// each step (O(n·depth) style reads per run), and sampleText — a full-subtree
+// textContent read plus whitespace collapse — reran for EVERY finding emitted.
+// All of it is pure reads over a static snapshot, so per-run caches preserve
+// behaviour exactly: one getComputedStyle per element shared between the skip
+// walk and the main loop, memoised chain-hidden verdicts that short-circuit on
+// the first cached ancestor, hasDirectText computed once per element, and a
+// LAZY sampleText (an element that emits no finding never reads its subtree
+// text at all).
+const BORDER_SIDES = ['Top', 'Right', 'Bottom', 'Left'];
+
+function makeStaticDesignRunCache(window) {
+  const styles = new Map();
+  const hiddenVerdicts = new Map();
+  return {
+    styleOf(el) {
+      let s = styles.get(el);
+      if (s === undefined) {
+        s = window.getComputedStyle(el);
+        styles.set(el, s);
+      }
+      return s;
+    },
+    hiddenVerdicts,
+  };
+}
+
+/** Memoised: `el` or any ancestor is hidden/collapsed/display:none. Each node's
+ * verdict is computed once per run, so the whole sweep pays O(n) style reads
+ * instead of O(n·depth). */
+function staticChainHidden(el, run) {
+  const cached = run.hiddenVerdicts.get(el);
+  if (cached !== undefined) return cached;
+  let verdict;
+  if (el.getAttribute?.('hidden') !== null || el.getAttribute?.('aria-hidden') === 'true') {
+    verdict = true;
+  } else {
+    const style = run.styleOf(el);
+    const display = String(style.display || '').toLowerCase();
+    const visibility = String(style.visibility || '').toLowerCase();
+    if (display === 'none' || visibility === 'hidden' || visibility === 'collapse') {
+      verdict = true;
+    } else {
+      verdict = el.parentElement ? staticChainHidden(el.parentElement, run) : false;
+    }
+  }
+  run.hiddenVerdicts.set(el, verdict);
+  return verdict;
+}
+
 // Font-size design-system checks are source-scan-only (see checkSourceDesignSystem).
 // Computed font-size cascades and clamp() ramps resolve to off-ramp px in the browser.
 function collectStaticDesignSystemFindings(document, window, filePath, designSystem) {
@@ -950,20 +1003,28 @@ function collectStaticDesignSystemFindings(document, window, filePath, designSys
   const seenFonts = new Set();
   const seenColors = new Set();
   const seenRadii = new Set();
+  const run = makeStaticDesignRunCache(window);
 
   for (const el of document.querySelectorAll('*')) {
-    if (shouldSkipStaticDesignElement(el, window)) continue;
+    if (shouldSkipStaticDesignElement(el, window, run)) continue;
     const tag = el.tagName?.toLowerCase?.() || 'unknown';
-    const style = window.getComputedStyle(el);
+    const style = run.styleOf(el);
+    // c3vpz: hasDirectText was evaluated once per branch (twice per element);
+    // sampleText reran its full-subtree textContent read per FINDING. One
+    // direct-text check per element now, and the sample is lazy + memoised:
+    // elements that emit nothing never read their subtree text at all.
+    const directText = hasDirectText(el);
+    let sampled = null;
+    const sample = () => (sampled === null ? (sampled = sampleText(el)) : sampled);
 
-    if (designSystem.hasFonts && hasDirectText(el)) {
+    if (designSystem.hasFonts && directText) {
       const font = primaryFont(style.fontFamily || '');
       if (font && !seenFonts.has(font) && !isAllowedFont(font, designSystem)) {
         seenFonts.add(font);
         findings.push(makeDesignFinding(
           'design-system-font',
           filePath,
-          `${tag}${sampleText(el)} uses ${font}; not declared in DESIGN.md typography`,
+          `${tag}${sample()} uses ${font}; not declared in DESIGN.md typography`,
           0,
           { ignoreValue: font },
         ));
@@ -972,9 +1033,9 @@ function collectStaticDesignSystemFindings(document, window, filePath, designSys
 
     if (designSystem.hasColors) {
       const colorChecks = [];
-      if (hasDirectText(el)) colorChecks.push(['text color', style.color]);
+      if (directText) colorChecks.push(['text color', style.color]);
       if (!isTransparentCss(style.backgroundColor)) colorChecks.push(['background', style.backgroundColor]);
-      for (const side of ['Top', 'Right', 'Bottom', 'Left']) {
+      for (const side of BORDER_SIDES) {
         if ((parseFloat(style[`border${side}Width`]) || 0) > 0) {
           colorChecks.push([`border-${side.toLowerCase()}`, style[`border${side}Color`]]);
         }
@@ -990,7 +1051,7 @@ function collectStaticDesignSystemFindings(document, window, filePath, designSys
         findings.push(makeDesignFinding(
           'design-system-color',
           filePath,
-          `${kind} ${label} on ${tag}${sampleText(el)} is outside DESIGN.md colors`,
+          `${kind} ${label} on ${tag}${sample()} is outside DESIGN.md colors`,
           0,
           { ignoreValue: label },
         ));
@@ -1007,7 +1068,7 @@ function collectStaticDesignSystemFindings(document, window, filePath, designSys
         findings.push(makeDesignFinding(
           'design-system-radius',
           filePath,
-          `border-radius ${token} on ${tag}${sampleText(el)} is outside the DESIGN.md rounded scale`,
+          `border-radius ${token} on ${tag}${sample()} is outside the DESIGN.md rounded scale`,
           0,
           { ignoreValue: token },
         ));
@@ -1018,20 +1079,13 @@ function collectStaticDesignSystemFindings(document, window, filePath, designSys
   return findings;
 }
 
-function shouldSkipStaticDesignElement(el, window) {
+function shouldSkipStaticDesignElement(el, window, run = makeStaticDesignRunCache(window)) {
   const tag = el.tagName?.toLowerCase?.() || '';
   if (STATIC_DESIGN_SKIP_TAGS.has(tag)) return true;
-
-  let current = el;
-  while (current) {
-    if (current.getAttribute?.('hidden') !== null || current.getAttribute?.('aria-hidden') === 'true') return true;
-    const style = window.getComputedStyle(current);
-    const display = String(style.display || '').toLowerCase();
-    const visibility = String(style.visibility || '').toLowerCase();
-    if (display === 'none' || visibility === 'hidden' || visibility === 'collapse') return true;
-    current = current.parentElement;
-  }
-  return false;
+  // c3vpz: memoised chain walk (see staticChainHidden) — the pre-fix shape
+  // re-walked to the root per element, re-reading computed styles at every
+  // step for every descendant.
+  return staticChainHidden(el, run);
 }
 
 function isTransparentCss(value) {
