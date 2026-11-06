@@ -20,7 +20,7 @@ import {
 import { testProvider } from "../../lib/provider-test.js";
 import { defaultModelFor } from "../../lib/model-catalog.js";
 import { effectiveBaseURL } from "../../lib/provider.js";
-import { safeProviderError } from "../../lib/pure.js";
+import { safeProviderError } from "../../lib/pure-redact.js";
 import { requireSettingsSender } from "./auth.js";
 
 export function createProviderRoutes({ invalidateAgent = () => {}, harnessConfig = null } = {}) {

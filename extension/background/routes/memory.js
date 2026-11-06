@@ -21,7 +21,7 @@ import {
   slugifyAgentId,
   listNamedAgents,
 } from "../../lib/named-agents.js";
-import { sleep } from "../../lib/pure.js";
+import { sleep } from "../../lib/pure-text.js";
 // chrome-agent-platform-atxc6 slice 3: the memory ADMIN routes
 // (purgeJournals/sweepOrphans/origins/overview/stores) were the other half of this domain, left inline in
 // three different maps in the worker. They belong beside memory.get/set/list/clear — same stores, same

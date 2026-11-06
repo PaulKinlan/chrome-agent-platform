@@ -17,7 +17,7 @@
 
 import { capLog } from "../../lib/cap-log.js";
 import { journalJson } from "../../shared/tool-tree.js";
-import { normalizeDurableLog, redactSecretText } from "../../lib/pure.js";
+import { normalizeDurableLog, redactSecretText } from "../../lib/pure-redact.js";
 import { RUN_BUDGET_BOUNDS, RUN_BUDGET_DEFAULTS } from "../../lib/run-budget.js";
 
 const ALIVE_KEY = "cap:agent-workers:alive";
