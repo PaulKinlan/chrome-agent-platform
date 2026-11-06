@@ -13,7 +13,8 @@
  * summary string. Pure — the SW uses it to tag the live tool-result event
  * with `ok`, so the UI can mark the card error instead of always success.
  */
-import { redactSecrets, redactSecretText, truncateUtf8, utf8ByteLength } from "./pure.js";
+import { redactSecrets, redactSecretText } from "./pure-redact.js";
+import { truncateUtf8, utf8ByteLength } from "./pure-text.js";
 import { safeJsonStringify } from "./tool-tree.js";
 
 export function isToolResultFailure(raw) {

@@ -118,7 +118,7 @@ export async function syncGallery({ check = false } = {}) {
     // deterministic transform in write and check modes so drift checks compare
     // against the generated artifact rather than the untransformed source.
     if (dst === "docs/tool-tree.js") {
-      expected = Buffer.from(expected.toString("utf8").replace('../lib/pure.js', './pure.js'));
+      expected = Buffer.from(expected.toString("utf8").replace(/\.\.\/lib\/(pure(?:-[\w-]+)?\.js)/g, './$1'));
     }
     if (dst === "docs/thread-view.js") {
       expected = Buffer.from(expected.toString("utf8").replace('../lib/permission-language.js', './permission-language.js'));
@@ -126,7 +126,7 @@ export async function syncGallery({ check = false } = {}) {
     if (dst.startsWith("docs/components-") || dst === "docs/components.js") {
       expected = Buffer.from(expected.toString("utf8").replace("../lib/tool-summary.js", "./tool-summary.js"));
       expected = Buffer.from(expected.toString("utf8").replace("../lib/attachments.js", "./attachments.js"));
-      expected = Buffer.from(expected.toString("utf8").replaceAll("../lib/pure.js", "./pure.js"));
+      expected = Buffer.from(expected.toString("utf8").replace(/\.\.\/lib\/(pure(?:-[\w-]+)?\.js)/g, "./$1"));
       expected = Buffer.from(expected.toString("utf8").replace("../lib/activity-kinds.js", "./activity-kinds.js"));
       expected = Buffer.from(expected.toString("utf8").replace("../lib/board-view-model.js", "./board-view-model.js"));
       expected = Buffer.from(expected.toString("utf8").replace("../lib/next-run-label.js", "./next-run-label.js"));
@@ -142,7 +142,7 @@ export async function syncGallery({ check = false } = {}) {
       expected = Buffer.from(expected.toString("utf8").replace(/\n\/\/# sourceMappingURL=\S+\n?$/, "\n"));
     }
     if (dst === "docs/tool-summary.js") {
-      expected = Buffer.from(expected.toString("utf8").replace('../lib/pure.js', './pure.js'));
+      expected = Buffer.from(expected.toString("utf8").replace(/\.\.\/lib\/(pure(?:-[\w-]+)?\.js)/g, './$1'));
       // The bounded serializer sits in shared/; the gallery copy is beside tool-summary.js.
       expected = Buffer.from(expected.toString("utf8").replace('../shared/tool-tree.js', './tool-tree.js'));
     }

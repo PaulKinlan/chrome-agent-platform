@@ -16,6 +16,8 @@ export const PAGE_ALLOWED_ROUTES = new Set([
 ]);
 
 // ── WebMCP status bounding + discovery-snapshot ordering (pure, testable) ──
+// KEEP IN SYNC: content/main-world.js redactBridgeText is a faithful port of
+// WebMCP error bounding and redaction logic — changes here must land there too.
 // The SW-attested lifecycle (script registration/injection) is kept STRICTLY
 // separate from page-reported tool data: a page can report tools, but it can
 // never write the attested lifecycle fields — page reports land in a labeled
