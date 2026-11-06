@@ -467,11 +467,15 @@ export function schemaValidationWork(schema, budget = SCHEMA_BOUNDS.maxValidatio
       if (isNode(node.properties)) {
         for (const child of Object.values(node.properties)) total = add(total, walk(child, depth + 1));
       }
-      // `additionalProperties`/`patternProperties` are NOT enforced by this
-      // converter today (they are dropped with a record), so these two are
-      // insurance rather than a live path: a schema-valued one is counted, so
-      // the day either keyword is supported the budget already covers it. A
-      // boolean `additionalProperties` costs nothing and adds nothing.
+      // chrome-agent-platform-yn8en (comment truth): these two keywords DIFFER.
+      // `additionalProperties` IS enforced — a schema-valued one compiles to a zod
+      // catchall (buildFromClean), so every extra payload key is validated against it
+      // live. Schema work is counted below, but the payload's KEY COUNT is unbounded
+      // by the schema, so work there stays ~linear in payload size (not a bomb, but a
+      // live validator path that must be reasoned about, not waved off as insurance).
+      // `patternProperties` IS dropped with a record: for that keyword alone the
+      // counting is insurance for the day it gains support. A boolean
+      // `additionalProperties` costs nothing and adds nothing.
       if (isNode(node.additionalProperties)) total = add(total, walk(node.additionalProperties, depth + 1));
       if (isNode(node.patternProperties)) {
         for (const child of Object.values(node.patternProperties)) total = add(total, walk(child, depth + 1));
