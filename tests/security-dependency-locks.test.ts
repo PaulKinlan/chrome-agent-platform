@@ -192,20 +192,39 @@ Deno.test("behrd: every advisory-patched dependency is patched in BOTH lockfiles
     { name: "body-parser", floor: "2.4.0", advisory: "GHSA-27r3-jxmh-p828", denoName: "body-parser" },
   ];
   for (const { name, floor, advisory, denoName } of patched) {
-    const npm = npmLock.packages[`node_modules/${name}`];
+    // chrome-agent-platform-sl42e: floor-check EVERY npm resolution, not just the hoisted
+    // top-level key — nested copies (node_modules/X/node_modules/${name}) are a real shape
+    // in THIS lockfile (body-parser nests content-type today) and were never inspected,
+    // so a vulnerable nested copy passed green while the hoisted one was fine. Mirrors the
+    // Deno side of this loop, which already enumerates every `${denoName}@` key. An
+    // advisory-pinned package must also resolve to exactly ONE copy: if a range split ever
+    // forces two, this gate forces the dedupe to be a deliberate decision, not drift.
+    const npmPaths = Object.keys(npmLock.packages)
+      .filter((key) => key === `node_modules/${name}` || key.endsWith(`/node_modules/${name}`));
+    assert(npmPaths.length >= 1, `npm must lock ${name} - the ${advisory} floor has nothing to check`);
+    assert(npmPaths.length === 1,
+      `npm resolves ${name} to ${npmPaths.length} copies (${npmPaths.join(", ")}) - advisory-pinned packages ` +
+        `must resolve once, hoisted; dedupe the versions deliberately, then update this gate`);
+    const npm = npmLock.packages[npmPaths[0]];
     assert(npm?.version && npm?.integrity, `npm must lock ${name} with an integrity hash`);
     assert(atLeast(npm.version, floor),
       `npm locks ${name} ${npm.version}, which is under the ${advisory} fix (need >= ${floor}) - ` +
         `bump it deliberately rather than accepting the advisory`);
 
-    const denoVersions = [...new Set(Object.keys(denoLock.npm)
-      .filter((entry) => entry.startsWith(`${denoName}@`))
-      .map((entry) => entry.slice(denoName!.length + 1).split("_")[0]))];
-    assert(denoVersions.length > 0, `deno.lock must pin ${denoName} - a missing entry means the Deno graph lost it`);
-    for (const version of denoVersions) {
+    const denoEntries = Object.entries(denoLock.npm).filter(([key]) => key.startsWith(`${denoName}@`));
+    assert(denoEntries.length > 0, `deno.lock must pin ${denoName} - a missing entry means the Deno graph lost it`);
+    for (const [key, entry] of denoEntries as Array<[string, { integrity?: string }]>) {
+      const version = key.slice(denoName!.length + 1).split("_")[0];
       assert(atLeast(version, floor),
         `deno.lock pins ${denoName} ${version}, under the ${advisory} fix (need >= ${floor}); the Deno store is ` +
           `what the bundled extension ships, so this is not a dev-only file`);
+      // chrome-agent-platform-sl42e (second gap in the same block): a version floor is the
+      // WEAKER half of the fast-uri precedent, which pins tarball IDENTITY across both locks
+      // — hold these rows to the same standard, so the two lockfiles cannot certify
+      // different artifacts for the same version.
+      assertEquals(entry.integrity, npm.integrity,
+        `deno.lock and package-lock.json disagree on the ${denoName}@${version} tarball ` +
+          `(${entry.integrity} vs ${npm.integrity}) - both locks must certify the same artifact`);
     }
   }
 });
