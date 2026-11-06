@@ -1203,13 +1203,20 @@ async function prepareBuild(decision, enabled) {
  * @param {number} rc the process exit code the run earned
  * @param {{ graph: "FULL" | "PARTIAL" | "INCOMPLETE", ran: number, changed?: number | null, failed?: number }} receipt
  */
-function exitGate(rc, { graph, ran, changed = null, failed = null }) {
+export function exitGate(rc, { graph, ran, changed = null, failed = null }, seams = {}) {
+  // Injectable sinks (j677e r3): this function's OUTPUT is the fleet contract, so the
+  // suite must be able to OBSERVE it — a source grep cannot see a suppressed emission
+  // (the no-emission mutant that survived round 2), and the real process.exit would
+  // kill the test process. The defaults preserve production behaviour exactly; the
+  // same seam pattern as planSelection above.
+  const log = seams.log ?? console.error;
   try {
-    console.error(fleetReceiptForExit(rc, { graph, ran, changed, failed }));
+    log(fleetReceiptForExit(rc, { graph, ran, changed, failed }));
   } catch (err) {
-    console.error(`select-tests: GATE-COVERAGE-MANIFEST receipt withheld (${err?.message ?? err}); the exit code below is the contract`);
+    log(`select-tests: GATE-COVERAGE-MANIFEST receipt withheld (${err?.message ?? err}); the exit code below is the contract`);
   }
-  process.exit(rc);
+  const exitNow = seams.exit ?? ((code) => process.exit(code));
+  exitNow(rc);
 }
 
 /**

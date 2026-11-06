@@ -6,7 +6,7 @@
 // ledger says `executed: N` while naming no suite, or whose ledger is absent entirely — the
 // "unreadable green" that made 146 cached PASS records undecidable and blocks the strict consumer
 // (coord, 2026-10-14: producer-first sequencing).
-import { assert, assertEquals, assertThrows } from "jsr:@std/assert@1";
+import { assert, assertEquals, assertStringIncludes, assertThrows } from "jsr:@std/assert@1";
 import {
   BUILD_GATE_DEFERRAL_SUFFIX,
   FLEET_MANIFEST_GRAPHS,
@@ -33,6 +33,7 @@ import {
   HEAVY_GATE_FILES,
   HEAVY_GATE_REASONS,
 } from "../scripts/test-partition.mjs";
+import { exitGate } from "../scripts/select-tests.mjs";
 
 // The extractor's own recognizer: `re.match(r"^fast-gate:\s*manifest:\s*(\{.*\})$", line)`.
 const EXTRACTOR_MANIFEST_RE = /^fast-gate:\s*manifest:\s*(\{.*\})$/;
@@ -621,8 +622,12 @@ Deno.test("j677e: select-tests.mjs has exactly one process.exit and it lives ins
   const code = src.split("\n").filter((l) => !l.trimStart().startsWith("*") && !l.trimStart().startsWith("//")).join("\n");
   const exits = code.match(/process\.exit\(/g) ?? [];
   assertEquals(exits.length, 1, "exactly one process.exit may remain in the runner (inside exitGate)");
-  const gate = code.match(/function exitGate\([\s\S]*?process\.exit\(rc\);\n\}/);
-  assert(gate, "the single process.exit must be the last statement of exitGate");
+  // r3: the exit is now routed through the injectable seam (`exitNow(rc)`), so the
+  // single textual process.exit lives in the default sink. The BEHAVIOURAL proof that
+  // the seam is what the terminals use is the captured-output test below; this regex
+  // only keeps the structural property (one exit point, inside exitGate, last statement).
+  const gate = code.match(/function exitGate\([\s\S]*?exitNow\(rc\);\n\}/);
+  assert(gate, "the single exit must be the last statement of exitGate");
   const calls = code.match(/exitGate\(/g) ?? [];
   assert(calls.length >= 7, `definition + all six gate terminals must call exitGate, found ${calls.length}`);
 });
@@ -664,11 +669,79 @@ Deno.test("j677e source pin: exitGate derives the receipt via fleetReceiptForExi
   assert(region.includes("fleetReceiptForExit(rc,"), "the receipt line comes from the shared conditional formatter");
   assert(!region.includes("failed ?? ("), "the outcome-encoding default is NOT re-inlined at the exit (single source)");
   assert(!region.includes("formatFleetCoverageManifest"), "exitGate no longer calls the bare formatter");
-  assert(region.includes("process.exit(rc)"), "the true exit code still lands even if formatting throws");
+  assert(region.includes("process.exit("), "the true exit code still lands even if formatting throws (default exit sink)");
   assert(region.includes("receipt withheld"), "a formatting failure is announced, never silent");
   const lib = await Deno.readTextFile(new URL("../scripts/lib/gate-manifest.mjs", import.meta.url));
   const fnStart = lib.indexOf("export function fleetReceiptForExit");
   assert(fnStart >= 0, "the shared formatter is exported from gate-manifest.mjs");
   const fn = lib.slice(fnStart, lib.indexOf("\n}", fnStart) + 2);
   assert(fn.includes("failed ?? (rc === 0 ? 0 : 1)"), "the outcome encoding is the formatter's default");
+});
+
+// j677e ROUND 3 — the EMISSION property, behavioural (coord, reviewing round 2:
+// "the suite now pins the ENCODING but still not the EMISSION ... nothing observes
+// that a receipt is written"). The round-2 no-emission mutant — replacing the
+// emission with `void fleetReceiptForExit(...)` — left the suite 24/0 because every
+// pin was either a direct formatter call or a source grep. These tests call the REAL
+// exitGate through its injected sinks and assert on the CAPTURED output, so
+// suppressing the emission reds the suite. The exact-line assertions reuse the
+// falsifier pair from the executed drill of 2026-11-06 verbatim.
+Deno.test("j677e r3: exitGate EMITS the receipt at its sink - captured line, red then green", () => {
+  const captured: string[] = [];
+  const exits: number[] = [];
+  const seams = {
+    log: (line: unknown) => captured.push(String(line)),
+    exit: (code: number) => exits.push(code),
+  };
+
+  exitGate(1, { graph: "FULL", ran: 807, changed: 4 }, seams);
+  assertEquals(captured.length, 1, "exactly one line is emitted on a red exit");
+  assertEquals(
+    captured[0],
+    "GATE-COVERAGE-MANIFEST graph=FULL failed=1 ran=807 rc=1 changed=4",
+    "a red rc can never emit a green-shaped receipt",
+  );
+  assertEquals(exits, [1], "the true rc reaches the exit sink");
+
+  captured.length = 0;
+  exits.length = 0;
+  exitGate(0, { graph: "FULL", ran: 807, changed: 4 }, seams);
+  assertEquals(captured.length, 1, "exactly one line is emitted on a green exit");
+  assertEquals(
+    captured[0],
+    "GATE-COVERAGE-MANIFEST graph=FULL failed=0 ran=807 rc=0 changed=4",
+    "and a green rc never inflates the failure count",
+  );
+  assertEquals(exits, [0]);
+});
+
+Deno.test("j677e r3: a bound-killed rc still emits failed=1 at the sink (124/137/143)", () => {
+  for (const rc of [124, 137, 143]) {
+    const captured: string[] = [];
+    exitGate(rc, { graph: "FULL", ran: 807, changed: 4 }, {
+      log: (line: unknown) => captured.push(String(line)),
+      exit: () => {},
+    });
+    assertEquals(captured.length, 1);
+    assertStringIncludes(captured[0], `failed=1 ran=807 rc=${rc}`, "a bound kill is an UNKNOWN, never green");
+  }
+});
+
+Deno.test("j677e r3: the withheld-receipt fallback is emitted at the sink too, and the exit still lands", () => {
+  const captured: string[] = [];
+  const exits: number[] = [];
+  const seams = {
+    log: (line: unknown) => {
+      const s = String(line);
+      // simulate the receipt formatter itself blowing up
+      if (s.startsWith("GATE-COVERAGE-MANIFEST ")) throw new Error("sink boom");
+      captured.push(s);
+    },
+    exit: (code: number) => exits.push(code),
+  };
+  exitGate(1, { graph: "FULL", ran: 807, changed: 4 }, seams);
+  assertEquals(captured.length, 1, "the withheld notice is the emitted line");
+  assertStringIncludes(captured[0], "receipt withheld");
+  assertStringIncludes(captured[0], "sink boom");
+  assertEquals(exits, [1], "the exit code is the contract even when the receipt dies");
 });
