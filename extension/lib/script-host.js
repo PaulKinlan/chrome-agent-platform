@@ -17,22 +17,30 @@ import {
 import { tagUntrusted } from "./untrusted-fence.js";
 import { isTrustedServiceWorkerSender } from "./pure.js";
 import { readResponseTextBounded } from "./fetch-body-bound.js";
+import { urlWithoutQuery } from "./url-echo.js";
 
 
-/** Validate a fetch URL: http/https only, no credentials. */
+/** Validate a fetch URL: http/https only, no credentials. 7t2zv: refusals
+ * are the fixed code `invalid_url` plus a STATIC hint — the old shape
+ * interpolated the parser-derived protocol, and the r6 lesson (five rounds,
+ * five leak shapes) is that interpolated text in model-readable returns is
+ * the leak class, whatever its charset. */
 function validateUrl(url) {
   let u;
   try {
     u = new URL(String(url ?? ""));
   } catch {
-    return { ok: false, error: "invalid URL" };
+    return { ok: false, error: "invalid_url", hint: "the URL did not parse" };
   }
   if (u.protocol !== "http:" && u.protocol !== "https:") {
-    return { ok: false, error: `protocol ${u.protocol} is not allowed (http/https only)` };
+    return { ok: false, error: "invalid_url", hint: "protocol not allowed (http/https only)" };
   }
   if (u.username || u.password) {
-    return { ok: false, error: "URLs with credentials are not allowed" };
+    return { ok: false, error: "invalid_url", hint: "URLs with credentials are not allowed" };
   }
+  // The verdict url is DISPATCH-only (runFetch sends it to the broker and
+  // fetches it); it never reaches a model-readable return — the echoes are
+  // stripped separately below.
   return { ok: true, url: u.href };
 }
 
@@ -46,10 +54,10 @@ function validateUrl(url) {
  * is CORS-blocked for a cross-origin page with no Access-Control-Allow-Origin. */
 export async function runFetch(payload, runId = null) {
   const v = validateUrl(payload?.url);
-  if (!v.ok) return { ok: false, error: v.error };
+  if (!v.ok) return { ok: false, error: v.error, hint: v.hint };
   const method = payload?.opts?.method ? String(payload.opts.method).toUpperCase() : "GET";
   if (method !== "GET" && method !== "HEAD") {
-    return { ok: false, error: `method ${method} is not allowed (GET/HEAD only)` };
+    return { ok: false, error: "method_not_allowed", hint: "cap.fetch allows GET and HEAD only" };
   }
   // Prefer the SW route (host permission → no CORS wall). Fall back to a direct
   // fetch only for unscoped calls (runId == null, e.g. a unit test / non-extension host),
@@ -62,9 +70,11 @@ export async function runFetch(payload, runId = null) {
       // registered run is refused there.
       const res = await chrome.runtime.sendMessage({ type: "cap:fetch", url: v.url, method, runId });
       if (res?.ok) return tagUntrusted(res);
-      return { ok: false, error: res?.error ?? "fetch failed" };
+      return { ok: false, error: res?.error ?? "fetch_failed", ...(res?.hint ? { hint: res.hint } : {}) };
     } catch (e) {
-      return { ok: false, error: `fetch failed: ${e?.message ?? e}` };
+      // 7t2zv: a code, not the exception text — sendMessage rejections can
+      // carry SW-side detail; the model-readable return stays a fixed shape.
+      return { ok: false, error: "fetch_failed", hint: "the broker call threw" };
     }
   }
   // nv5lt: chrome.runtime PRESENT without a usable sendMessage route means the
@@ -85,14 +95,18 @@ export async function runFetch(payload, runId = null) {
   try {
     res = await fetch(v.url, { method, headers: payload?.opts?.headers && typeof payload.opts.headers === "object" ? payload.opts.headers : undefined });
   } catch (e) {
-    return { ok: false, error: `fetch failed: ${e?.message ?? e}` };
+    // 7t2zv: same code contract on the fallback route.
+    return { ok: false, error: "fetch_failed", hint: "the direct fetch threw" };
   }
   // chrome-agent-platform-hvd4s: bound the READ itself. Pre-fix this fallback
   // buffered the whole body — and, unlike the SW broker, returned it with NO
   // slice at all. The helper streams with the 1 MB ceiling; a mid-stream
   // failure degrades to empty text, exactly as the old text() catch did.
   const bounded = await readResponseTextBounded(res).catch(() => ({ text: "" }));
-  return tagUntrusted({ ok: true, status: res.status, url: res.url, text: bounded.text });
+  // 7t2zv: origin+path only on the echo — even this unscoped, non-extension
+  // fallback shares the one normaliser with the brokers, so no route grows a
+  // full-URL echo back.
+  return tagUntrusted({ ok: true, status: res.status, url: urlWithoutQuery(res.url), text: bounded.text });
 }
 
 /**

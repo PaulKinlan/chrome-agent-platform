@@ -138,12 +138,15 @@ export function checkFetchPolicy(url, policy) {
   if (!target.ok) return target;
   const u = target.url;
   if (!policy || typeof policy !== "object" || !Array.isArray(policy.hosts)) {
-    return { ok: false, error: "fetch refused: no approved script run is active" };
+    return { ok: false, error: "fetch refused: no approved script run is active", errorCode: "no_active_run" };
   }
   const key = hostKey(u).toLowerCase();
   const allowed = policy.hosts.some((h) => String(h).toLowerCase() === key);
   if (!allowed) {
-    return { ok: false, error: `fetch to ${key} refused: not on this run's approved host list` };
+    // 7t2zv: errorCode is ADDITIVE - the brokered cap:fetch return now sends
+    // the code (never this interpolated text) to the model; the text stays
+    // for debug-side and script-side callers that log the refusal.
+    return { ok: false, error: `fetch to ${key} refused: not on this run's approved host list`, errorCode: "host_not_approved" };
   }
   return { ok: true, url: u.href };
 }
