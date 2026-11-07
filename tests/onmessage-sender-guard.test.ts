@@ -4,7 +4,8 @@
 // Invariants guarded:
 //   1. Every `chrome.runtime.onMessage.addListener` call in extension/ must accept a `sender` parameter
 //      and validate it by CALLING a vetted production predicate (isTrustedServiceWorkerSender, or —
-//      cac6c — the central dispatcher's sender classifier authorizeToolReport, both lib/pure.js)
+//      cac6c r3/1fn9j — the central dispatcher's ENFORCEMENT predicate isOwnExtensionSender, both
+//      lib/pure.js; the r2 credit of the classifier authorizeToolReport is superseded)
 //      DIRECTLY: the exact imported identifier, unshadowed, not renamed (`as`), not aliased,
 //      not re-exported — or be listed in ALLOWLISTED_SITES with a one-line justification naming
 //      what checks the sender instead. Inline sender checks, however correct, never count
@@ -29,7 +30,12 @@ import * as path from "node:path";
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import * as acorn from "npm:acorn";
 
-import { isTrustedServiceWorkerSender, SERVICE_WORKER_BUNDLE_PATH } from "../extension/lib/pure.js";
+import {
+  isTrustedServiceWorkerSender,
+  isOwnExtensionSender,
+  authorizeToolReport,
+  SERVICE_WORKER_BUNDLE_PATH,
+} from "../extension/lib/pure.js";
 import { registerPythonHost } from "../extension/lib/python-host.js";
 import { registerWasmJobHost, WASI_JOB_RUN_TYPE } from "../extension/lib/wasm-job-host.js";
 import { registerAgentWorkerHost } from "../extension/lib/agent-worker-host.js";
@@ -88,16 +94,20 @@ interface ListenerSite {
 // ACCEPTED RESIDUAL (deliberate, reviewer-acknowledged in round 4): credit is
 // binding-level, not execution-path - an imported vetted call inside an
 // uncalled nested function still counts. Do not re-litigate; pinned by probe18.
-// cac6c adds exactly one vetted predicate: authorizeToolReport (pure.js) — the
-// production sender CLASSIFIER for the central dispatcher, which accepts page
-// senders by design and therefore can never call isTrustedServiceWorkerSender.
-// It derives identity from the browser-attested sender (never the message
-// body) and validates the origin itself. Credit is binding-level like every
-// other vetted call, so the ORDERING (classify before any reply) is pinned
-// separately by the cac6c regression test below — the two together are what
-// the old line-coupled allowlist entry claimed but never enforced.
+// cac6c r3 (1fn9j) adds exactly one vetted predicate: isOwnExtensionSender
+// (pure.js) — the central dispatcher's ENFORCEMENT point, which yields the
+// uniform rejection (the identical generic reply, ahead of route resolution) AT ITS CALL SITE for
+// anything that is not this extension. The r2 credit of authorizeToolReport is
+// SUPERSEDED: it is a CLASSIFIER of already-admitted senders — absent-tab and
+// non-extension senders could reach kind "extension", and kind "unmatched" was
+// refused only downstream — so crediting it was, in the reviewer's words, an
+// allowlist in a new coat. Credit is binding-level like every other vetted
+// call, so the ORDERING (sender decision and classification before any reply)
+// plus the uniform-refusal contract and the guarded origin dereference are
+// pinned separately by the cac6c regression test below — the two together are
+// what the old line-coupled allowlist entry claimed but never enforced.
 const VETTED_PREDICATE_SOURCES: Record<string, Set<string>> = {
-  "extension/lib/pure.js": new Set(["isTrustedServiceWorkerSender", "authorizeToolReport"]),
+  "extension/lib/pure.js": new Set(["isTrustedServiceWorkerSender", "isOwnExtensionSender"]),
 };
 
 // True iff a binding pattern (const/let/var id, param, catch param,
@@ -411,10 +421,13 @@ const ALLOWLISTED_SITES = new Map<string, string>([
   // lrhyl missed the renumber and the exposed site failed, correctly: the
   // entry had been masking a real reply-before-trust ordering bug). The
   // dispatcher is now credited the honest way — a direct call to the vetted
-  // classifier authorizeToolReport(sender, ...) in the listener body — and the
-  // ordering the old justification merely ASSERTED is ENFORCED by the cac6c
-  // regression test below. Nothing in this map keys to service-worker.js any
-  // more, so no line shift there can rot it.
+  // ENFORCEMENT predicate isOwnExtensionSender(sender, chrome.runtime.id) in
+  // the listener body (r3/1fn9j); the classifier authorizeToolReport runs
+  // there too but is deliberately NOT credited (1fn9j finding 3: crediting a
+  // classifier was an allowlist in a new coat). The ordering the old
+  // justification merely ASSERTED is ENFORCED by the cac6c regression tests
+  // below (source-order pin + runtime first-reply pin). Nothing in this map
+  // keys to service-worker.js any more, so no line shift there can rot it.
   [
     "extension/content/content-script.js:399",
     "content script receiving SW pushes: isTrustedServiceWorkerSenderPort — faithful port of pure.js isTrustedServiceWorkerSender (KEEP IN SYNC), id + tab/documentId absence + url pins the compiled SW bundle; pinned by the behavioral content-script test below",
@@ -1258,13 +1271,20 @@ Deno.test("census: docs/SW-DISPATCH-AUTHORITY-CENSUS.md documents non-dispatcher
 // The line-coupled allowlist entry that used to cover this site had masked the
 // ordering since hvd4s; lrhyl's +63 lines moved the site off its key and the
 // guard exposed it. The entry is now GONE (the dispatcher is credited via the
-// vetted authorizeToolReport call itself), but credit is binding-level and
-// cannot see ORDER — so this probe pins what the allowlist only asserted: NO
-// reply may be emitted before the classification call, the unknown-message
-// reply must not echo the caller's type, and an unauthorized page sender must
-// get SILENCE — not a differentiated error that confirms the channel exists
-// (coord's requirement). Marker-based on the listener's identity, NEVER on a
-// line number (5q524's lesson; khwi9 moved this file 14 lines in one merge).
+// vetted ENFORCEMENT predicate isOwnExtensionSender), but credit is binding-
+// level and cannot see ORDER — so this probe pins what credit cannot: the
+// sender decision precedes the classifier, the unknown-message reply does not
+// echo the caller's type, and EVERY rejection takes one path — a single deny
+// helper emitting the IDENTICAL generic refusal reply. The refusal is a REPLY,
+// not silence: the shipped integration contracts pin a refusal response from
+// untrusted senders, and the identical literal on every path is what kills
+// the route-enumeration oracle. Marker-based on the listener's identity, NEVER
+// on a line number (5q524's lesson; khwi9 moved this file 14 lines in one
+// merge). This SOURCE pin is paired with the RUNTIME emission pin below (r4):
+// a source-shape pin standing in for an observed emission is the j677e defect
+// class — the runtime test dispatches a real unauthorised message through the
+// extracted listener body and asserts the FIRST recorded reply is the deny
+// literal, so a pre-auth sendResponse insertion REDs it.
 Deno.test("cac6c regression: the central dispatcher classifies the sender before ANY reply", async () => {
   const src = await Deno.readTextFile(new URL("../extension/background/service-worker.js", import.meta.url));
   // Marker-based, never line-based: the routeLog 'route' debug call appears
@@ -1281,12 +1301,111 @@ Deno.test("cac6c regression: the central dispatcher classifies the sender before
   }
   assert(bodyEnd > bodyStart, "the dispatcher listener body must close");
   const body = src.slice(bodyStart, bodyEnd);
+  // cac6c r3 (1fn9j): the SENDER DECISION is the enforcement point and it
+  // runs FIRST — the foreign refusal precedes the classifier, which
+  // precedes any route knowledge. Every rejection takes THE IDENTICAL PATH:
+  // one deny helper, one generic literal, defined once.
+  const ownIdx = body.indexOf("isOwnExtensionSender(sender, chrome.runtime.id)");
+  const denyIdx = body.indexOf('const deny = () => sendResponse({ ok: false, error: "unknown message" });');
   const authIdx = body.indexOf("authorizeToolReport(");
-  const replyIdx = body.indexOf("sendResponse(");
-  assert(authIdx > 0, "the dispatcher must classify via authorizeToolReport");
-  assert(replyIdx > 0, "the dispatcher must have a reply path");
-  assert(authIdx < replyIdx, "NO reply may be emitted before the sender classification runs (cac6c: the unknown-message reply preceded authorizeToolReport)");
-  assert(!body.includes("unknown message: ${"), "the unknown-message reply must not echo the caller-controlled type");
-  assert(body.includes('error: "unknown message"'), "the unknown-message reply is the generic shape");
-  assert(body.includes("if (auth.kind === \"content-script\" && auth.error) return false;"), "an unauthorized page sender gets silence: the channel closes with no reply (never a differentiated error confirming the channel exists)");
+  assert(ownIdx > 0, "the dispatcher must enforce via the credited isOwnExtensionSender");
+  assert(denyIdx > 0, "every rejection must go through the single deny helper");
+  assert(denyIdx < ownIdx && ownIdx < authIdx, "the refusal shape is defined first, the sender decision precedes the classifier");
+  assert(authIdx > 0, "the dispatcher must classify content-script senders via authorizeToolReport (classifier, NOT credited as authoriser)");
+  assert(!body.includes("unknown message: ${"), "the rejection reply must not echo the caller-controlled type");
+  // ONE reply literal for EVERY rejection — foreign, unknown route, failed
+  // attestation, unmatched surface, forbidden page route. The uniformity
+  // that kills the route-enumeration oracle is the identical shape (the
+  // shipped integration contracts pin a refusal RESPONSE, not silence).
+  const genericReplies = body.match(/sendResponse\(\{ ok: false, error: "unknown message" \}\)/g) ?? [];
+  assert(genericReplies.length === 1, "exactly ONE rejection reply shape may exist (every denial goes through deny())");
+  const denyCallCount = (body.match(/\bdeny\(\);/g) ?? []).length;
+  assert(denyCallCount >= 4, "foreign, unknown-route/attestation/unmatched, and forbidden-page paths all deny through the one helper");
+  assert(!body.includes("error: auth.error"), "no reply may echo classifier error detail (route oracle, r2 finding)");
+  assert(!body.includes('"not authorized from a page"'), "the page-forbidden reply must be the generic shape, not a policy name");
+  assert(!body.includes('if (auth.kind === "content-script" && auth.error) return false;'), "the r2 silence branch is gone — attestation failures take the same generic reply");
+  // MUTATION FALSIFIER for the credit (coord's bar): deleting the real
+  // enforcement reds this guard twice — ownIdx asserts the call exists AND
+  // the site loses its vetted-predicate credit in the census sweep.
+  // r3 finding 2 — the classifier must never see a raw dereference: a
+  // null-origin (or null) message used to throw synchronously in this
+  // privileged listener before any refusal. The guarded form is the ONLY
+  // access to message.origin before classification.
+  const guardedOrigin = body.indexOf('typeof message?.origin === "string"');
+  assert(guardedOrigin > 0 && Math.abs(guardedOrigin - authIdx) < 200, "message.origin is dereferenced only through the guarded form at the classifier call");
+  const preAuth = body.slice(0, guardedOrigin);
+  assert(!preAuth.includes("message.origin"), "message.origin must not be dereferenced anywhere before the guarded classifier call");
+});
+
+// cac6c r4 — RUNTIME emission pin, the j677e lesson applied to this guard: the
+// source-order probe above compares POSITIONS of the deny definition, the
+// sender call and the classifier, and never observes an actual emission — the
+// reviewer inserted sendResponse({ok:false,error:'pre-auth'}) immediately
+// before the sender gate and the source pin stayed 15/15 GREEN while the
+// dispatcher now emitted a pre-auth reply to every unauthorised sender. This
+// test dispatches a REAL unauthorised message through the extracted listener
+// body with a recording sendResponse stub and asserts the FIRST (and only)
+// reply is the deny() literal. The exact mutation above must RED here: the
+// pre-auth reply is recorded first, so the first-reply assertion fails.
+Deno.test("cac6c r4: the FIRST reply the dispatcher emits to an unauthorised sender is the deny() literal (runtime emission, not source shape)", async () => {
+  const src = await Deno.readTextFile(new URL("../extension/background/service-worker.js", import.meta.url));
+  // Same marker-based extraction as the source probe: the routeLog 'route'
+  // debug call appears exactly once and opens the central dispatcher body.
+  const anchor = src.indexOf('routeLog.debug("route"');
+  assert(anchor > 0, "the central dispatcher's routeLog anchor must exist");
+  const bodyStart = src.indexOf("{", src.lastIndexOf("addListener(", anchor));
+  assert(bodyStart > 0, "the dispatcher listener body must open before the routeLog anchor");
+  let depth = 0;
+  let bodyEnd = -1;
+  for (let i = bodyStart; i < src.length; i++) {
+    if (src[i] === "{") depth++;
+    else if (src[i] === "}") { depth--; if (depth === 0) { bodyEnd = i; break; } }
+  }
+  assert(bodyEnd > bodyStart, "the dispatcher listener body must close");
+  // Slice INSIDE the braces (bodyStart is the opening '{' itself): the source
+  // probe only scans substrings so the unbalanced brace is harmless there, but
+  // this test COMPILES the body, so it must be balanced.
+  const body = src.slice(bodyStart + 1, bodyEnd);
+  // Compile the extracted body into a callable whose ONLY environment is what
+  // the pre-authorisation region may touch. The predicates are the REAL
+  // production imports (the credited enforcement predicate and the classifier);
+  // everything else is a stub. If a future edit makes the pre-auth region
+  // touch anything else, this test fails loudly rather than silently passing.
+  // NOTE: the wrapper is built by CONCATENATION, never a template literal —
+  // the dispatcher body itself contains backticks and ${...} (e.g. the
+  // securityEvent page-route message), which would terminate a template
+  // literal early (the 544139866/KAT lesson, hit again here in r4).
+  const factory = new Function(
+    "routeLog",
+    "chrome",
+    "isOwnExtensionSender",
+    "authorizeToolReport",
+    "canonicalOrigin",
+    "handlers",
+    "return function cac6cDispatchProbe(message, sender, sendResponse) {\n" + body + "\n};",
+  );
+  const dispatch = factory(
+    { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} },
+    { runtime: { id: "cac6c-runtime-probe" } },
+    isOwnExtensionSender,
+    authorizeToolReport,
+    "chrome-extension://cac6c-runtime-probe/options/options.html",
+    {}, // no handlers: even an own-sender unknown route must take deny()
+  );
+  // A crafted foreign sender with NO id — the shape the classifier alone
+  // would mislabel (1fn9j finding 3) — and a null-origin message, which must
+  // be refused, never thrown (r3 finding 2), at runtime and not just on source.
+  const replies: unknown[] = [];
+  const ret = dispatch(
+    { type: "memory/export", origin: null },
+    { url: "https://hostile.example/page.html" },
+    (reply: unknown) => replies.push(reply),
+  );
+  assertEquals(ret, true, "the listener must keep the channel open (return true) while refusing");
+  assertEquals(replies.length, 1, `exactly ONE reply may be emitted to an unauthorised sender, got ${JSON.stringify(replies)}`);
+  assertEquals(
+    replies[0],
+    { ok: false, error: "unknown message" },
+    "the FIRST emitted reply must be the deny() literal — a reply emitted BEFORE the sender decision (j677e class: a source pin standing in for an observed emission) REDS this assertion",
+  );
 });

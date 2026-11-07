@@ -279,7 +279,10 @@ consequences are carried by the matching register entry where one exists.
 ### T2. Sender-origin spoofing by a content script
 
 - **Boundary:** TB2. **Evidence:** `authorizeToolReport` at
-  `extension/lib/pure.js#authorizeToolReport` (the classifier), `PAGE_ALLOWED_ROUTES` at
+  `extension/lib/pure.js#authorizeToolReport` (the classifier), the dispatcher's admission gate
+  `extension/lib/pure.js#isOwnExtensionSender` (cac6c r3/1fn9j: sender.id must equal the runtime
+  id, refused with the identical generic reply ahead of route resolution — census-clean per
+  `docs/INTERNAL-SENDER-CONTRACT-AUDIT.md` §4), `PAGE_ALLOWED_ROUTES` at
   `extension/lib/pure.js#PAGE_ALLOWED_ROUTES`, and the central listener at
   `extension/background/service-worker.js#chrome.runtime.onMessage.addListener`
   (page-route check: `extension/background/service-worker.js#PAGE_ALLOWED_ROUTES.has`;
@@ -523,9 +526,14 @@ consequences are carried by the matching register entry where one exists.
   `chrome.runtime` / its `onMessage` event object and fails closed on any
   reference it cannot enumerate (`chrome-agent-platform-2i86h`), and it credits
   a listener's sender check ONLY when it calls a vetted production predicate
-  (`isTrustedServiceWorkerSender`, or — since `chrome-agent-platform-cac6c` —
-  the central dispatcher's sender classifier `authorizeToolReport`, both from
-  `lib/pure.js`, resolved through the
+  (`isTrustedServiceWorkerSender`, or — since `chrome-agent-platform-cac6c`
+  r3/1fn9j, superseding the r2 credit of the classifier — the central
+  dispatcher's ENFORCEMENT predicate `isOwnExtensionSender` from `lib/pure.js`,
+  which yields the uniform rejection (the identical generic reply, ahead of route resolution) at
+  its call site; `authorizeToolReport` classifies already-admitted senders and
+  is deliberately NOT credited — absent-tab/non-extension senders could reach
+  kind `"extension"` and kind `"unmatched"` was refused only downstream, so
+  crediting it was an allowlist in a new coat), resolved through the
   file's import bindings) or carries an explicit allowlist entry with a
   justification — inline sender checks, including ID-only comparisons, never
   count per INV-15 (`chrome-agent-platform-69bvp`). Credit is binding-level
@@ -597,6 +605,10 @@ and each names the executable check that would catch a regression.
   `authorizeToolReport` at `extension/lib/pure.js#authorizeToolReport` and the central listener at
   `extension/background/service-worker.js#chrome.runtime.onMessage.addListener`
   (browser sender classification and derived-origin overwrite inside that listener);
+  since cac6c r3 the listener first enforces `extension/lib/pure.js#isOwnExtensionSender`
+  (sender.id === runtime id, the identical generic refusal for non-own senders) and dereferences
+  `message.origin` only through a guarded string form, so a null-origin message is refused,
+  never thrown;
   `scripts/security-suite.ts:307-308`. A new route that reads an origin, tab id or
   document id out of the message body breaks this.
 - **Evidence pin: `origin/main@28c7189d` for INV-1/2.** The sender/allowlist symbols were re-read at this tree; other invariant citations retain their own historical context.
