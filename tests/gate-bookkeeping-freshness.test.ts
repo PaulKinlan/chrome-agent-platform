@@ -8,37 +8,29 @@
 // that endurance into five weighted sibling files (finua). Both numbers were not
 // WRONG when written — they went stale, and nothing failed when they did.
 //
-// WHAT THIS DRIVES. The refreshed generation (2026-11-08, tree 5f7e345d, the
-// quietest COMPLETE post-split log available — impl-a lane fast gate for
-// 451a50399, PASS, 772 measured suites, steal mostly 0.8–9.2%): the weights
-// table covers every eligible >=3s file its derivation log measured, names the
-// log, and records the log's steal (the jw8a6 caveat made steal-free provenance
-// a defect); the heavy reason describes the POST-split file and names why the
-// placement is kept. These pins are the falsifier: revert the table to the old
-// generation or restore the pre-split citation and they go RED.
+// WHAT THIS DRIVES. The refreshed generation (2026-11-08, derived from tree
+// 5f7e345d's FULL-suite parallel phase: 772 measured suites, tier:full,
+// executed:789, steal mostly 0.8–9.2% with 20% spikes — the quietest complete
+// post-split log available). The weights check is a DERIVATION/COVERAGE
+// comparison, not a spot list: the guard re-derives the table from the COMMITTED
+// source digest (scripts/lib/test-weights.source.json, the log's manifest
+// suite_durations) through the same weightsDocument() the tool uses, and
+// requires exact equality with the committed weights. Any single-value
+// staleness reds regardless of which entry drifts — the reviewer's surviving
+// mutant (the heaviest entry zeroed) passed a spot list of ten names and must
+// never pass again. The heavy-reason check pins the post-split declaration.
 
-import { assert } from "jsr:@std/assert@1";
+import { assert, assertEquals } from "jsr:@std/assert@1";
+import { weightsDocument, eligibleParallelFiles } from "../scripts/update-test-weights.mjs";
 
 const SPLIT_DATE = "2026-10-24"; // ifu81 moved the wasm-sync endurance into sibling files (32b72e03f)
 
-// Files whose absence from the weights table was the recorded defect (jw8a6's
-// weekly-review offenders) plus the five post-split siblings (ifu81's split).
-const MUST_BE_WEIGHTED = [
-  "tests/callexport-admission.test.ts",
-  "tests/select-tests.test.ts",
-  "tests/durable-root.test.ts",
-  "tests/kat-embedded-settings-canary.test.ts",
-  "tests/build-tier-inputs.test.ts",
-  "tests/wasm-sync-workspace-seed-file-limit.test.ts",
-  "tests/wasm-sync-workspace-seed-maxima.test.ts",
-  "tests/wasm-sync-workspace-seed-total-limit.test.ts",
-  "tests/wasm-sync-workspace-transaction-growth.test.ts",
-  "tests/wasm-sync-workspace-validator-walk.test.ts",
-];
-
-Deno.test("weights bookkeeping (jw8a6): the table is a post-split re-derivation that names its log and covers the files whose absence was the defect", async () => {
+Deno.test("weights bookkeeping (jw8a6): the committed table equals a fresh derivation from the committed source digest — any drifted entry reds", async () => {
   const table = JSON.parse(
     await Deno.readTextFile(new URL("../scripts/lib/test-weights.json", import.meta.url)),
+  );
+  const source = JSON.parse(
+    await Deno.readTextFile(new URL("../scripts/lib/test-weights.source.json", import.meta.url)),
   );
   const prov = table._provenance ?? {};
 
@@ -50,7 +42,8 @@ Deno.test("weights bookkeeping (jw8a6): the table is a post-split re-derivation 
   );
 
   // The jw8a6 caveat: a re-derivation that does not name its source log and its
-  // steal bakes inflation in invisibly (737385e9 measured under ~71% avg steal).
+  // steal bakes inflation in invisibly (the weekly review's 737385e9 ran under
+  // ~71% avg steal and read as "callexport-admission 391s").
   assert(
     typeof prov.measured_log === "string" && prov.measured_log.length > 8,
     "_provenance.measured_log must name the derivation log — an unnamed source cannot be re-checked",
@@ -59,17 +52,33 @@ Deno.test("weights bookkeeping (jw8a6): the table is a post-split re-derivation 
     typeof prov.measured_steal === "string" && /steal/i.test(prov.measured_steal),
     "_provenance.measured_steal must record the log's steal; ordering from an unrecorded-steal log is how the inflated 391s callexport figure would return",
   );
+  // And the source digest must agree with the provenance about WHAT was measured
+  // (a mislabeled phase is the cadence-counter class of defect: the label is the
+  // decision input). The digest records both identities of the run: the git sha
+  // the gate ran (measured_tree) and the log's tree hash (source_log_tree), which
+  // is what the table's provenance names.
+  assertEquals(
+    prov.measured_tree,
+    source.source_log_tree,
+    "_provenance.measured_tree must match the committed source digest's logged tree",
+  );
 
-  // The defect itself: eligible >=3s files with NO weight start late as "light".
-  // Each named file must carry a measured weight of at least the 3s threshold —
-  // reverting to the 80-entry table (or losing the re-derivation) reds here.
-  const weights = table.weights ?? {};
-  for (const file of MUST_BE_WEIGHTED) {
-    assert(
-      typeof weights[file] === "number" && weights[file] >= 3,
-      `${file} must carry a weight >= 3; got ${JSON.stringify(weights[file])} — an eligible file without a weight starts late as "light" (the jw8a6 defect)`,
-    );
-  }
+  // THE DERIVATION COMPARISON. Same function the tool uses, same eligible set,
+  // same threshold — fed from the COMMITTED source digest, so the check is
+  // portable and total: one drifted value, one missing entry, or one extra
+  // entry anywhere reds, not just the ten names this guard's first draft knew.
+  const derived = weightsDocument({
+    durations: new Map(Object.entries(source.suite_durations)),
+    eligible: eligibleParallelFiles(),
+    minSecs: 3,
+    tree: String(prov.measured_tree ?? ""),
+    date: String(prov.measured_at ?? ""),
+  });
+  assertEquals(
+    table.weights,
+    derived.weights,
+    "the committed weights are not the derivation of the committed source digest — the table has gone stale (or the digest and table were updated separately): re-run scripts/update-test-weights.mjs against the recorded log and re-commit both",
+  );
 });
 
 Deno.test("heavy bookkeeping (finua): the wasm-sync-workspace heavy reason describes the POST-split file, never the pre-split citation", async () => {
