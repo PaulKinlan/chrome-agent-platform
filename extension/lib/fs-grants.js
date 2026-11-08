@@ -20,7 +20,7 @@
 //     "granted" | "prompt" | "denied". Fails closed before every read/write/list when status != "granted".
 //   - Revocation: deleting the record is the revocation authority and terminates active watchers.
 
-import { newId } from "./pure.js";
+import { newId } from "./pure-text.js";
 
 // dptw (2026-09-03): no size/count ceilings on granted-folder operations —
 // reads, writes, listings, searches and grep all carry complete data at any

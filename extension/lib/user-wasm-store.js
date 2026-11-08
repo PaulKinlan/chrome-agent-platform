@@ -1,7 +1,7 @@
 // Owner-uploaded bytes (Wasm modules, Python wheels, …) — not a tool registry
 // or an execution/admission boundary. No size/count/import/memory/parse gates.
 // Uploading never compiles or runs anything.
-import { createSha256 } from "./pure.js";
+import { createSha256 } from "./pure-hash.js";
 
 export const OWNER_BLOBS_ROOT = "cap-owner-blobs-v1";
 // Pre-v2 root ("cap-user-wasm-v1") still on disk for real owner data; migrated

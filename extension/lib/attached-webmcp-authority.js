@@ -4,7 +4,7 @@
 // executor; this module never grants authority from payload origin/name alone.
 import { z } from "zod";
 import { canonicalOrigin } from "./memory.js";
-import { compileSchemaToZod } from "./pure.js";
+import { compileSchemaToZod } from "./pure-schema.js";
 import { digestSiteToolArguments } from "./site-tool-audit.js";
 
 const fail = (error) => Object.freeze({ ok: false, error });

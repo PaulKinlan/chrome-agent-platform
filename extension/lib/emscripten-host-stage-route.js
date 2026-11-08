@@ -2,7 +2,7 @@
 // Keep this tiny: the 258 KB offscreen bundle limit must not eagerly include
 // the native runner, SHA-256/OPFS writer and binary custody helpers.
 import { EMSCRIPTEN_HOST_STAGE_TYPE } from "./emscripten-stage-protocol.js";
-import { isTrustedServiceWorkerSender } from "./pure.js";
+import { isTrustedServiceWorkerSender } from "./pure-trust.js";
 
 export function registerEmscriptenBinaryStagingHost(runtime = globalThis.chrome?.runtime, load) {
   if (!runtime?.onMessage) return;

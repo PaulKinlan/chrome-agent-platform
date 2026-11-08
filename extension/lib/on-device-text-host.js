@@ -2,7 +2,7 @@
 // Bead: chrome-agent-platform-3p3e.5
 // Runs in the offscreen document DOM context with ZERO dependencies on ai/zod.
 
-import { isTrustedServiceWorkerSender } from "./pure.js";
+import { isTrustedServiceWorkerSender } from "./pure-trust.js";
 
 export const ON_DEVICE_UNAVAILABLE_FALLBACK = Object.freeze({
   ok: false,

@@ -41,7 +41,7 @@ import {
   tokenizeJson,
   PRETTY_JSON_TOKENISE_MAX_CHARS,
 } from "./tool-tree.js";
-import { redactSecrets, redactToolArgs } from "../lib/pure.js";
+import { redactSecrets, redactToolArgs } from "../lib/pure-redact.js";
 import { describeToolCall, redactToolResult, toolResultErrorText } from "../lib/tool-summary.js";
 import { SITE_AGENT_COPY, siteOfferHost, siteOfferLabel, siteUsingLabel } from "./site-agent-copy.js";
 import { permissionUserLanguage, siteLabel, humanToolLabel } from "../lib/permission-language.js";

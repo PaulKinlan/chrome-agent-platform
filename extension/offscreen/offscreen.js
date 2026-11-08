@@ -18,7 +18,7 @@ import { registerAgentWorkerHost } from "../lib/agent-worker-host.js";
 import { registerPythonHost } from "../lib/python-host.js";
 import { registerTableWorkerHost } from "../lib/table-worker-host.js";
 import { registerAcpModelHost } from "../lib/acp-model-host.js";
-import { isTrustedServiceWorkerSender } from "../lib/pure.js";
+import { isTrustedServiceWorkerSender } from "../lib/pure-trust.js";
 registerAcpModelHost();
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) =>

@@ -12,7 +12,7 @@ import { wrapLanguageModel } from "ai";
 import { normaliseModelId } from "./model-name.js";
 import { thoughtSignatureMiddleware } from "./thought-signature-middleware.js";
 import { toolCallFinishMiddleware } from "./tool-call-finish-middleware.js";
-import { safeProviderError } from "../pure.js";
+import { safeProviderError } from "../pure-redact.js";
 
 const providerHttpLog = capLog("provider:http");
 

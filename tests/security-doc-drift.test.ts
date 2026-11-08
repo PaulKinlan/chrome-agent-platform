@@ -197,6 +197,9 @@ function assertLiveRouteCitations(model: string, pure: string, worker: string,
   // cited declaration that disappears from a landing merge fails the gate (surface presence).
   const sources = new Map<string, string>([
     ["extension/lib/pure.js", pure],
+    ["extension/lib/pure-webmcp.js", read("extension/lib/pure-webmcp.js")],
+    ["extension/lib/pure-trust.js", read("extension/lib/pure-trust.js")],
+    ["extension/lib/pure-redact.js", read("extension/lib/pure-redact.js")],
     ["extension/background/service-worker.js", worker],
     ["extension/background/routes/hooks.js", hooks],
     ["extension/lib/fetch-policy.js", read("extension/lib/fetch-policy.js")],
@@ -239,10 +242,10 @@ function assertLiveRouteCitations(model: string, pure: string, worker: string,
     assert(lines.length === 1, `${lines.length ? "ambiguous" : "missing"} security anchor ${anchor}; ` +
       `candidates: ${lines.map((line) => `${path}:${line}`).join(", ") || "none"}`);
   };
-  const pureRoute = ["extension/lib/pure.js", "PAGE_ALLOWED_ROUTES"];
+  const pureRoute = ["extension/lib/pure-webmcp.js", "PAGE_ALLOWED_ROUTES"];
   const listener = ["extension/background/service-worker.js", "chrome.runtime.onMessage.addListener"];
   const allowlist = ["extension/background/service-worker.js", "PAGE_ALLOWED_ROUTES.has"];
-  const classifier = ["extension/lib/pure.js", "authorizeToolReport"];
+  const classifier = ["extension/lib/pure-trust.js", "authorizeToolReport"];
   const swRoute = (name: string) => ["extension/background/service-worker.js", name];
   const fetchRoute = swRoute("cap:fetch");
   const pythonFetch = swRoute("python.fetch");
@@ -276,8 +279,8 @@ function assertLiveRouteCitations(model: string, pure: string, worker: string,
   const authSession = ["extension/background/routes/auth.js", "requireSettingsSession"];
   const authSurface = ["extension/background/routes/auth.js", "requireSettingsSurface"];
   const destructiveActions = ["extension/lib/owner-approval.js", "DESTRUCTIVE_ACTIONS"];
-  const secretKeyRe = ["extension/lib/pure.js", "SECRET_KEY_RE"];
-  const redactSecrets = ["extension/lib/pure.js", "redactSecrets"];
+  const secretKeyRe = ["extension/lib/pure-redact.js", "SECRET_KEY_RE"];
+  const redactSecrets = ["extension/lib/pure-redact.js", "redactSecrets"];
   const mintToken = ["extension/lib/untrusted-fence.js", "mintUntrustedToken"];
   const wrapUntrusted = ["extension/lib/untrusted-fence.js", "wrapUntrustedContent"];
   const tagUntrusted = ["extension/lib/untrusted-fence.js", "tagUntrusted"];
@@ -288,7 +291,7 @@ function assertLiveRouteCitations(model: string, pure: string, worker: string,
   const reservedWrite = ["extension/lib/memory.js", "isReservedWriteKey"];
   const credentialKeys = ["extension/lib/archive-target-registry.js", "CREDENTIAL_KEYS"];
   const webDestination = ["extension/lib/browser-tools.js", "webDestination"];
-  const trustedSwSender = ["extension/lib/pure.js", "isTrustedServiceWorkerSender"];
+  const trustedSwSender = ["extension/lib/pure-trust.js", "isTrustedServiceWorkerSender"];
   const acpModelHost = ["extension/lib/acp-model-host.js", "registerAcpModelHost"];
   const emscriptenHost = ["extension/lib/emscripten-host.js", "registerEmscriptenHost"];
   const sections: Array<[string, string[][]]> = [
@@ -531,10 +534,12 @@ Deno.test("5x4iw: page route and dispatcher citations resolve at current source 
   const pure = read("extension/lib/pure.js");
   const worker = read("extension/background/service-worker.js");
   assertLiveRouteCitations(model, pure, worker);
-  assertThrows(() => assertLiveRouteCitations(model.replaceAll("extension/lib/pure.js#PAGE_ALLOWED_ROUTES", "extension/lib/pure.js#ABSENT_ROUTE_SET"),
+  assertThrows(() => assertLiveRouteCitations(model.replaceAll("extension/lib/pure-webmcp.js#PAGE_ALLOWED_ROUTES", "extension/lib/pure-webmcp.js#ABSENT_ROUTE_SET"),
     pure, worker), Error, "missing security anchor", "a citation to a missing symbol must fail");
-  assertThrows(() => assertLiveRouteCitations(model, pure.replace("export const PAGE_ALLOWED_ROUTES =", "export const REMOVED_ROUTES ="), worker),
-    Error, "missing security anchor extension/lib/pure.js#PAGE_ALLOWED_ROUTES", "removing a cited declaration must fail");
+  assertThrows(() => assertLiveRouteCitations(model, pure, worker, undefined, new Map([
+    ["extension/lib/pure-webmcp.js", read("extension/lib/pure-webmcp.js").replace("export const PAGE_ALLOWED_ROUTES =", "export const REMOVED_ROUTES =")],
+  ])),
+    Error, "missing security anchor extension/lib/pure-webmcp.js#PAGE_ALLOWED_ROUTES", "removing a cited declaration must fail");
   assertThrows(() => assertLiveRouteCitations(model, pure, worker.replace("!PAGE_ALLOWED_ROUTES.has(message.type)", "true")),
     Error, "missing security anchor extension/background/service-worker.js#PAGE_ALLOWED_ROUTES.has", "removing the live allowlist check must fail");
   assertThrows(() => assertLiveRouteCitations(model, pure,

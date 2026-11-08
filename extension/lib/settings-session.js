@@ -14,7 +14,7 @@
 // is. That is why `SETTINGS_SESSION_ROUTES` starts empty and why credential
 // routes stay out by default.
 
-import { authorizeToolReport } from "./pure.js";
+import { authorizeToolReport } from "./pure-trust.js";
 
 /**
  * Static allowlist mapping an admitted SW route name to the Settings panel

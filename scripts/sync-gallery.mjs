@@ -42,6 +42,16 @@ const FILES = [
   ["extension/shared/tool-tree.js", "docs/tool-tree.js"],
   // The canonical secret matcher (tool-tree.js imports it — the gallery must resolve it).
   ["extension/lib/pure.js", "docs/pure.js"],
+  // chrome-agent-platform-ux4ud: docs/pure.js is a BARREL, so every seam it
+  // re-exports must be synced beside it or the gallery's module graph cannot resolve
+  // (tests/gallery-imports.test.ts walks exactly that graph).
+  ["extension/lib/pure-schema.js", "docs/pure-schema.js"],
+  ["extension/lib/pure-hash.js", "docs/pure-hash.js"],
+  ["extension/lib/pure-text.js", "docs/pure-text.js"],
+  ["extension/lib/pure-redact.js", "docs/pure-redact.js"],
+  ["extension/lib/pure-trust.js", "docs/pure-trust.js"],
+  ["extension/lib/pure-webmcp.js", "docs/pure-webmcp.js"],
+  ["extension/lib/pure-tabs.js", "docs/pure-tabs.js"],
   // The human tool-summary renderer (components.js imports it).
   ["extension/lib/tool-summary.js", "docs/tool-summary.js"],
   // Attachment classification/encoding used by the composer's /files flow.
@@ -108,7 +118,7 @@ export async function syncGallery({ check = false } = {}) {
     // deterministic transform in write and check modes so drift checks compare
     // against the generated artifact rather than the untransformed source.
     if (dst === "docs/tool-tree.js") {
-      expected = Buffer.from(expected.toString("utf8").replace('../lib/pure.js', './pure.js'));
+      expected = Buffer.from(expected.toString("utf8").replace(/\.\.\/lib\/(pure(?:-[\w-]+)?\.js)/g, './$1'));
     }
     if (dst === "docs/thread-view.js") {
       expected = Buffer.from(expected.toString("utf8").replace('../lib/permission-language.js', './permission-language.js'));
@@ -116,7 +126,7 @@ export async function syncGallery({ check = false } = {}) {
     if (dst.startsWith("docs/components-") || dst === "docs/components.js") {
       expected = Buffer.from(expected.toString("utf8").replace("../lib/tool-summary.js", "./tool-summary.js"));
       expected = Buffer.from(expected.toString("utf8").replace("../lib/attachments.js", "./attachments.js"));
-      expected = Buffer.from(expected.toString("utf8").replaceAll("../lib/pure.js", "./pure.js"));
+      expected = Buffer.from(expected.toString("utf8").replace(/\.\.\/lib\/(pure(?:-[\w-]+)?\.js)/g, "./$1"));
       expected = Buffer.from(expected.toString("utf8").replace("../lib/activity-kinds.js", "./activity-kinds.js"));
       expected = Buffer.from(expected.toString("utf8").replace("../lib/board-view-model.js", "./board-view-model.js"));
       expected = Buffer.from(expected.toString("utf8").replace("../lib/next-run-label.js", "./next-run-label.js"));
@@ -132,7 +142,7 @@ export async function syncGallery({ check = false } = {}) {
       expected = Buffer.from(expected.toString("utf8").replace(/\n\/\/# sourceMappingURL=\S+\n?$/, "\n"));
     }
     if (dst === "docs/tool-summary.js") {
-      expected = Buffer.from(expected.toString("utf8").replace('../lib/pure.js', './pure.js'));
+      expected = Buffer.from(expected.toString("utf8").replace(/\.\.\/lib\/(pure(?:-[\w-]+)?\.js)/g, './$1'));
       // The bounded serializer sits in shared/; the gallery copy is beside tool-summary.js.
       expected = Buffer.from(expected.toString("utf8").replace('../shared/tool-tree.js', './tool-tree.js'));
     }

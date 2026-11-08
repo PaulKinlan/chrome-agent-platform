@@ -28,7 +28,7 @@
 // Records are additionally bound to their key id via AES-GCM additionalData, so
 // a record's {iv, ct} cannot be swapped into another id's slot.
 
-import { newId, sleep } from "./pure.js";
+import { newId, sleep } from "./pure-text.js";
 
 const VAULT_PREFIX = "cap:vault:secret:";
 const SALT_KEY = "cap:vault:install-salt";

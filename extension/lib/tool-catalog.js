@@ -10,13 +10,9 @@ import {
   schemaWithArgumentContract,
   toolOutputSchema,
 } from "./tool-argument-contract.js";
-import {
-  hasLoneSurrogates,
-  redactSecretText,
-  sha256Hex,
-  truncateUtf8,
-  utf8ByteLength,
-} from "./pure.js";
+import { sha256Hex } from "./pure-hash.js";
+import { redactSecretText } from "./pure-redact.js";
+import { hasLoneSurrogates, truncateUtf8, utf8ByteLength } from "./pure-text.js";
 import { REPLAY_UNKNOWN, replaySafetyForTool } from "./tool-replay-safety.js";
 import { isStreamBackedBundledTool } from "./tool-exec-preview.js";
 

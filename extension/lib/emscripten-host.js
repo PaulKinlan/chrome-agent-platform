@@ -18,7 +18,8 @@
 //   - Settlement is exactly-once; the worker is terminated on every path.
 
 import { validateAuthorityRecord } from "./wasm-executor.js";
-import { isTrustedServiceWorkerSender, sha256HexBytes } from "./pure.js";
+import { sha256HexBytes } from "./pure-hash.js";
+import { isTrustedServiceWorkerSender } from "./pure-trust.js";
 
 export const EMSCRIPTEN_RUN_TYPE = "cap:emscripten-run";
 export const EMSCRIPTEN_RESULT_TYPE = "cap:emscripten-run-result";

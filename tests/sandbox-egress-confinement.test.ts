@@ -248,7 +248,16 @@ Deno.test({
       assertEquals(calls[0].url, base + "/bridge-check", "Bridged call must target the requested URL");
       assertEquals(
         probeResults.bridgedFetch,
-        "fetch to 127.0.0.1 refused: private or loopback address",
+        "forbidden_host",
+        // 7t2zv (r6 contract): the brokered refusal arrives as the FIXED CODE
+        // (the prose moved into a static hint), so the sandbox surfaces
+        // "forbidden_host" where it used to surface fetch-policy prose. The
+        // assertion's intent is unchanged: this string can only come from the
+        // host bridge's policy round-trip — a native CSP failure would read
+        // "Failed to fetch", which is exactly the mutant this kills.
+        // Repairs the main-side residue where 7t2zv changed the payload shape
+        // without updating this suite (chrome-agent-platform-ux4ud carries it;
+        // filed for coord).
         "Must receive the service worker fetch-policy refusal, proving execution reached the host bridge rather than native CSP failure",
       );
 

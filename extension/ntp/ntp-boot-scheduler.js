@@ -3,7 +3,7 @@
 // the browser between batches, eliminating the input-blocking 50+ ms long task
 // (CONSTITUTION §4).
 
-import { sleep } from "../lib/pure.js";
+import { sleep } from "../lib/pure-text.js";
 
 export async function defaultYield() {
   if (typeof window !== "undefined" && window.scheduler && typeof window.scheduler.yield === "function") {

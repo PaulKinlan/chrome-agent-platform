@@ -48,14 +48,9 @@ import {
   previewSpecFor,
   validatePreviewInput,
 } from "./tool-exec-preview.js";
-import {
-  hasLoneSurrogates,
-  redactSecretText,
-  safeProviderError,
-  compileSchemaToZod,
-  schemaToZod,
-  SECRET_KEY_RE,
-} from "./pure.js";
+import { redactSecretText, safeProviderError, SECRET_KEY_RE } from "./pure-redact.js";
+import { compileSchemaToZod, schemaToZod } from "./pure-schema.js";
+import { hasLoneSurrogates } from "./pure-text.js";
 
 // dptw (2026-09-03): no size limits on arguments, results, or source counts.
 // Sanitization keeps its SHAPE checks (plain JSON data: finite numbers, no

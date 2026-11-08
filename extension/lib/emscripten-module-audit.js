@@ -1,7 +1,7 @@
 // Typed, validate-only inspection for the closed Emscripten admission profile.
 // No instance, import implementation, constructor or package JavaScript is run.
 import { WasmPackageAuthorityError, canonicalJson, exactKeys, assertRelativePath } from "./wasm-package-authority.js";
-import { sha256HexBytes } from "./pure.js";
+import { sha256HexBytes } from "./pure-hash.js";
 import { auditEmscriptenJsCapabilities, isJsCapabilityAssetRole } from "./emscripten-js-capability-audit.js";
 
 const fail = (code, detail = null) => { throw new WasmPackageAuthorityError(code, "wasm", detail); };

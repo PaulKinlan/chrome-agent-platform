@@ -3,7 +3,7 @@
 // validation, persistence, and alarm creation stay in a single place.
 
 import { capLog } from "./cap-log.js";
-import { newId } from "./pure.js";
+import { newId } from "./pure-text.js";
 import { kvGet, kvSet } from "./kv.js";
 import { assertRunAlive, assertRunOwned } from "./run-fence.js";
 import { migrateSkillIdentities } from "./skill-identity-migration.js";

@@ -35,7 +35,7 @@
 // the trace dump (`observability.dumpTrace`); bounded with an honest dropped
 // counter. MV3-CSP-safe: no eval, no new Function.
 
-import { SECRET_KEY_RE } from "./pure.js";
+import { SECRET_KEY_RE } from "./pure-redact.js";
 
 const LEVELS = Object.freeze({ off: 0, normal: 1, verbose: 2 });
 const STORAGE_KEY = "cap:logVerbosity";

@@ -1307,41 +1307,13 @@ import {
   urlWithoutQuery,
   PYTHON_FETCH_ERROR_HINTS,
 } from "../lib/python-network.js";
-import {
-  acceptToolSnapshot,
-  applyWebmcpLifecycle,
-  applyWebmcpPageReport,
-  authorizeToolReport,
-  isOwnExtensionSender,
-  boundWebmcpError,
-  buildWebmcpPageReport,
-  hmacSha256Hex,
-  sha256Hex,
-  PAGE_ALLOWED_ROUTES,
-  parseOmniboxContent,
-  redactSecrets,
-  redactDeep,
-  safeProviderError,
-  sanitizeToolName as safeToolName,
-  seedSnapshotGate,
-  rebindSnapshotGate,
-  planWebmcpInvocationTab,
-  syncSnapshotDocument,
-  schemaToZod as buildSchema,
-  summarizeInjection,
-  isExactOptionsSender,
-  KEYBOARD_COMMANDS,
-  hubUrlForCommand,
-  newId,
-  sleep,
-  redactSecretText,
-  boundedAndRedacted,
-  normalizeDurableToolCall,
-  normalizeDurableToolResult,
-  normalizeDurableLog,
-  redactToolArgs,
-  createTabChangeNotifier
-} from "../lib/pure.js";
+import { hmacSha256Hex, sha256Hex, sanitizeToolName as safeToolName } from "../lib/pure-hash.js";
+import { redactSecrets, redactDeep, safeProviderError, redactSecretText, boundedAndRedacted, normalizeDurableToolCall, normalizeDurableToolResult, normalizeDurableLog, redactToolArgs } from "../lib/pure-redact.js";
+import { schemaToZod as buildSchema } from "../lib/pure-schema.js";
+import { KEYBOARD_COMMANDS, hubUrlForCommand, createTabChangeNotifier } from "../lib/pure-tabs.js";
+import { newId, sleep } from "../lib/pure-text.js";
+import { authorizeToolReport, isExactOptionsSender, isOwnExtensionSender } from "../lib/pure-trust.js";
+import { acceptToolSnapshot, applyWebmcpLifecycle, applyWebmcpPageReport, boundWebmcpError, buildWebmcpPageReport, PAGE_ALLOWED_ROUTES, parseOmniboxContent, seedSnapshotGate, rebindSnapshotGate, planWebmcpInvocationTab, syncSnapshotDocument, summarizeInjection } from "../lib/pure-webmcp.js";
 import { redactToolResult, toolResultFullJson } from "../lib/tool-summary.js";
 import {
   canonicalArray,

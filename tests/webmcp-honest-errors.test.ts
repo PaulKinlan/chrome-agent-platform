@@ -77,7 +77,12 @@ Deno.test("honest errors: the failure-mode fixture declares all nine tools", () 
   assert(FIXTURE.includes("user:hunter2@example.com/x?y=1#frag"), "the P1 userinfo fixture embeds the URL credential the redaction must catch");
 });
 
-Deno.test("honest errors: pure.js carries the reverse keep-in-sync pointer", async () => {
-  const PURE = await Deno.readTextFile(new URL("../extension/lib/pure.js", import.meta.url));
+Deno.test("honest errors: pure-redact.js carries the reverse keep-in-sync pointer", async () => {
+  // chrome-agent-platform-ux4ud (review finding nkg2n): the pointer belongs to
+  // redactSecretText, which lives in the redaction seam. Pinning it here — the module
+  // that DEFINES the function — means deleting the real pointer reds; an earlier
+  // version of this split pointed at pure-webmcp.js, where a comment mentioning
+  // redactBridgeText happened to exist, so the guard no longer proved the pointer.
+  const PURE = await Deno.readTextFile(new URL("../extension/lib/pure-redact.js", import.meta.url));
   assert(PURE.includes("redactBridgeText"), "redactSecretText names its content-script port so the two stay in sync");
 });

@@ -317,7 +317,8 @@ export function buildTree(value, opts = {}) {
 // The CANONICAL secret-key matcher (shared with lib/pure.js — one semantic,
 // never a divergent anchored copy): any key matching it is redacted before it
 // reaches the UI/serializer or a truncation preview.
-import { SECRET_KEY_RE, redactSecretText, truncateUtf8, utf8ByteLength } from "./pure.js";
+import { SECRET_KEY_RE, redactSecretText } from "./pure-redact.js";
+import { truncateUtf8, utf8ByteLength } from "./pure-text.js";
 const SECRET_KEY = SECRET_KEY_RE;
 
 /** The smallest maxBytes the serializer can honor (the fixed envelope + a

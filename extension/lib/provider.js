@@ -27,7 +27,7 @@ import { createDemoModel } from "./models/demo-model.js";
 import { createLocalAssistant, LOCAL_ASSISTANT_MODEL_ID } from "./models/local-assistant.js";
 import { defaultModelFor } from "./model-catalog.js";
 import { kvGet, kvSet } from "./kv.js";
-import { DEVELOPER_FEATURES_KEY } from "./pure.js";
+import { DEVELOPER_FEATURES_KEY } from "./pure-trust.js";
 import {
   isRemovedProviderId,
   migrateLegacyProviderConfig,

@@ -12,7 +12,7 @@ export { formatCadenceMinutes };
 const USER_VISIBLE_KINDS = new Set(USER_VISIBLE_KINDS_ARR);
 
 import { filterTimeline, timelineMatchesFilter, groupTimelineByTopic } from "./hub-timeline.js";
-import { redactSecrets } from "./pure.js";
+import { redactSecrets } from "./pure-redact.js";
 import { SITE_AGENT_COPY, siteOfferHost, siteOfferLabel, siteUsingLabel } from "./site-agent-copy.js";
 import { safeParseOnce, buildTree } from "./tool-tree.js";
 

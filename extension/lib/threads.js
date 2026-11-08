@@ -118,7 +118,8 @@ function previewOf(text) {
 // 300 chars for ERROR text, which is wrong for message content
 // (CAP-FB-20260831-TASK-VIEW-FULL-RESPONSE-01: a response was cut to 300 chars
 // at commit). The message-content cap is applied HERE, not inside the redactor.
-import { newId, redactSecretText } from "./pure.js";
+import { redactSecretText } from "./pure-redact.js";
+import { newId } from "./pure-text.js";
 // kmpq redesign: a thread row may keep a bounded digest + retainedPayloadRef
 // for a large durable response; the complete text hydrates from the run log.
 const MAX_ROW_DIGEST_BYTES = 16 * 1024;

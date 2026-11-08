@@ -8,7 +8,7 @@
 // which makes reset/disable an ABA-safe in-flight revocation token.
 
 import { canonicalOrigin, siteMemory } from "./memory.js";
-import { sha256Hex } from "./pure.js";
+import { sha256Hex } from "./pure-hash.js";
 
 export const SITE_TOOL_CONSENT_KEY = "profile:webmcp-tool-consent-v1";
 export const SITE_TOOL_CONSENT_VERSION = 1;

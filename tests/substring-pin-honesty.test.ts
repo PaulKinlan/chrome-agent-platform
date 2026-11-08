@@ -1507,7 +1507,7 @@ const ALLOWED = new Map<string, string>([
   //     regression these detect, so a comment-only occurrence is correct.
   [tp("webmcp-honest-errors.test.ts::extension/content/main-world.js::redactSecretText"),
     'message says "the port declares its source of truth (keep-in-sync pointer)": the pin guards the provenance comment. The redaction itself is pinned by the sibling assert(MAIN.includes("function redactBridgeText("), "the redaction choke point exists"), which is live code.'],
-  [tp("webmcp-honest-errors.test.ts::extension/lib/pure.js::redactBridgeText"),
+  [tp("webmcp-honest-errors.test.ts::extension/lib/pure-redact.js::redactBridgeText"),
     'message says "redactSecretText names its content-script port so the two stay in sync": the mirror keep-in-sync pointer.'],
   [tp("wasm-host-gate2.test.ts::scripts/scan-shipped.mjs::requires a separately reviewed static CAS route"),
     'message says "the scan keeps the honest future-host wording": the pin guards documentation wording, not behaviour.'],

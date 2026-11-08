@@ -40,7 +40,7 @@ function now() {
   return Date.now();
 }
 
-import { safeProviderError } from "./pure.js";
+import { safeProviderError } from "./pure-redact.js";
 
 function scrubPrimitive(value) {
   if (value == null) return value === null ? "<null>" : "<undefined>";

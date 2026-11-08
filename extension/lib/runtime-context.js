@@ -23,7 +23,8 @@
 // truncation or encoding (the contract is credential-redaction, not
 // PII-exclusion).
 
-import { redactSecretText, truncateUtf8, utf8ByteLength } from "./pure.js";
+import { redactSecretText } from "./pure-redact.js";
+import { truncateUtf8, utf8ByteLength } from "./pure-text.js";
 import { mintUntrustedToken } from "./untrusted-fence.js";
 import { isReservedMasterKey } from "./memory.js";
 
