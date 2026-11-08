@@ -21,9 +21,17 @@
 // THE MUTANT THIS FILE IS CALIBRATED AGAINST: revert the guard to a pass-through
 // (`(url, init) => fetchImpl(url, init)`, i.e. the pre-fix SDK default) and every
 // refusal test goes RED — the recorder then shows the second request carrying
-// `authorization` to evil.example. The browser-shaped cases (q7ti9) add a second
-// mutant: refuse every opaque redirect instead of resolving it, and the
-// same-origin opaque test goes RED while the refusals stay green. Both verified.
+// `authorization` to evil.example. The browser shape adds a second mutant
+// (chrome-agent-platform-iaccg, superseding the q7ti9 probe): restore the old
+// header-free follow-probe for opaque redirects and the exactly-ONE-request
+// assertion goes RED — the guard issues a second fetch (the probe) before it
+// refuses. The q7ti9 design this replaces resolved an opaque redirect with a
+// redirect:"follow" GET and followed same-origin landings; that probe WAS an
+// unchecked follow (the browser walked the whole chain before the origin
+// check), so no opaque redirect is resolved or followed any more — same-origin
+// ones included, which is a deliberate capability narrowing for an impossible
+// validation (a service worker cannot read an opaqueredirect's Location, so a
+// hop cannot be checked before its request fires).
 
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import {

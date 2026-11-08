@@ -186,6 +186,11 @@ export function createGuardedMcpFetch({ origin, fetchImpl = globalThis.fetch, ma
         // an allowed-origin start could still fire requests at every
         // intermediate hop. There is nothing inspectable to re-validate per
         // hop (status 0, no Location), so the only safe move is to refuse.
+        // The refusal deliberately DISCLOSES that a redirect happened and
+        // names the REQUESTED url (the caller's own, never a destination —
+        // the destination is unknowable here): an operator must be able to
+        // see WHERE the guard stopped them. Do not "fix" this into silence —
+        // a silent swallow would make a misconfigured server look broken.
         throw refuse(
           `${current.href} answered an opaque redirect (this service worker cannot read its Location): ` +
             `point this MCP server's config at the final url — opaque redirects are never followed or probed`,
