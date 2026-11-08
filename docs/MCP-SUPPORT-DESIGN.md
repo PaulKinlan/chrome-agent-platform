@@ -207,12 +207,14 @@ not dead weight. MCP peer contexts bind different Zod majors and are not dedupli
   (chrome-agent-platform-fd586: an earlier version of this paragraph claimed the
   upgrade case was legitimate; it never was, the code always refused it and the
   comment was the defect). A browser service worker cannot read a redirect's
-  Location at all — it returns an opaque response with status 0 — so an opaque
-  redirect is resolved by a **credential-free probe** (header-free GET,
-  `redirect: "follow"`, `credentials: "omit"`): the guard reads the probe's final
-  url and re-issues the ORIGINAL request there only if that url is still the
-  configured origin, so a same-origin endpoint move keeps working while a
-  cross-origin hop learns nothing (chrome-agent-platform-q7ti9). Same reason as every other bridge in the repo: the
+  Location at all — it returns an opaque response with status 0 — so there is
+  nothing to validate BEFORE such a hop's request fires, and an opaque redirect
+  is **refused fail-closed** with the operator remedy in the refusal message
+  (chrome-agent-platform-iaccg, superseding the q7ti9 credential-free probe:
+  that probe fetched with `redirect: "follow"`, so the browser walked the whole
+  redirect chain — possibly through internal hops — before the guard checked
+  the landing origin; a guard that discovers the hop by firing it is not a
+  guard). Same reason as every other bridge in the repo: the
   owner granted an ORIGIN, not whatever that origin points at next
   (`lib/site-docs-fallback.js`, `lib/ask-agent-entry.js`, `lib/skill-import.js`,
   `lib/python-network.js`). The MCP client was the one fetch path that inherited

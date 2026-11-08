@@ -115,16 +115,22 @@ function headerValue(res, name) {
  *      `/mcp` → `/mcp/v2` endpoint move, a trailing-slash fix). Anything else,
  *      including a scheme upgrade or a subdomain move, is refused.
  *   3. An `opaqueredirect` (the BROWSER shape: status 0, no readable Location)
- *      is resolved WITHOUT credentials rather than guessed at
- *      (chrome-agent-platform-q7ti9): the guard issues a header-free, GET,
- *      `redirect: "follow"` probe of the same URL, reads the probe's final
- *      `url`, and re-issues the ORIGINAL request to that URL only if its origin
- *      is unchanged. The probe carries no Authorization header and no body, so a
- *      cross-origin hop learns nothing; if the probe lands off-origin, or cannot
- *      be resolved at all, the call is refused.
+ *      is REFUSED outright, with the operator remedy in the message
+ *      (chrome-agent-platform-iaccg, superseding the q7ti9 probe). The probe
+ *      was an unchecked follow: a header-free GET with `redirect: "follow"`
+ *      lets the browser walk the ENTIRE redirect chain before the guard sees
+ *      the final url, so a probe starting at the allowed origin could land on
+ *      (and fetch from) any intermediate destination — internal, link-local,
+ *      anything. Hop-by-hop re-validation cannot repair this shape: the
+ *      service worker cannot read the Location of an opaque redirect, so there
+ *      is nothing to validate before the request fires, and a guard that
+ *      discovers the hop by firing it is not a guard. Refusal is also what
+ *      every other egress surface already does with an opaque redirect
+ *      (`fetchWithSafeRedirects`, the site-docs fallback).
  *   4. A request whose URL is not the configured origin is refused before it is
  *      issued, so a server-supplied URL can never become the request target.
- *   5. Hops are bounded (MCP_EGRESS_MAX_REDIRECT_HOPS), probes included.
+ *   5. Inspectable hops are bounded (MCP_EGRESS_MAX_REDIRECT_HOPS); opaque
+ *      redirects are never followed or probed at all (iaccg).
  *
  * Refusals throw `McpEgressRefusedError`; the mount helper records them per
  * server like any other connection failure, so the other servers still mount.
@@ -156,35 +162,6 @@ export function createGuardedMcpFetch({ origin, fetchImpl = globalThis.fetch, ma
     return status >= 300 && status < 400;
   };
 
-  /**
-   * Resolve an OPAQUE redirect (a browser service worker gives status 0 and no
-   * Location) without spending a credential on it: a header-free GET that is
-   * allowed to follow, whose final `url` is the only thing we keep. Returns the
-   * resolved URL when it is still the configured origin, else null.
-   */
-  const resolveOpaqueRedirect = async (current) => {
-    let probe;
-    try {
-      probe = await fetchImpl(current.href, {
-        method: "GET",
-        credentials: "omit",
-        redirect: "follow",
-      });
-    } catch {
-      return null; // CORS/network refusal: nothing to learn, refuse the call.
-    }
-    const finalUrl = typeof probe?.url === "string" && probe.url ? probe.url : "";
-    if (!finalUrl) return null;
-    try {
-      const resolved = new URL(finalUrl);
-      if (resolved.origin !== base.origin) return null;
-      if (resolved.href === current.href) return null; // the probe did not move: no hop to take
-      return resolved;
-    } catch {
-      return null;
-    }
-  };
-
   return async function guardedMcpFetch(url, init) {
     let current;
     try {
@@ -203,18 +180,21 @@ export function createGuardedMcpFetch({ origin, fetchImpl = globalThis.fetch, ma
       // inline and the helper sat dead. Anything that is not a redirect is the answer.
       if (!isRedirectLike(res)) return res;
       if (res?.type === "opaqueredirect") {
-        const resolved = await resolveOpaqueRedirect(current);
-        if (!resolved) {
-          throw refuse(
-            `${current.href} answered an opaque redirect (this service worker cannot read its Location): ` +
-              `point this MCP server's config at the final url — only a hop inside ${base.origin} is followed`,
-          );
-        }
-        if (hop === maxHops) {
-          throw refuse(`more than ${maxHops} redirects from ${base.origin}`);
-        }
-        current = resolved;
-        continue;
+        // chrome-agent-platform-iaccg: refused FAIL-CLOSED, no probe. The old
+        // resolver fetched this url with redirect:"follow" and checked the
+        // landing origin only AFTER the whole chain had already been walked —
+        // an allowed-origin start could still fire requests at every
+        // intermediate hop. There is nothing inspectable to re-validate per
+        // hop (status 0, no Location), so the only safe move is to refuse.
+        // The refusal deliberately DISCLOSES that a redirect happened and
+        // names the REQUESTED url (the caller's own, never a destination —
+        // the destination is unknowable here): an operator must be able to
+        // see WHERE the guard stopped them. Do not "fix" this into silence —
+        // a silent swallow would make a misconfigured server look broken.
+        throw refuse(
+          `${current.href} answered an opaque redirect (this service worker cannot read its Location): ` +
+            `point this MCP server's config at the final url — opaque redirects are never followed or probed`,
+        );
       }
       const status = Number(res?.status ?? 0);
       const location = headerValue(res, "location");

@@ -21,9 +21,17 @@
 // THE MUTANT THIS FILE IS CALIBRATED AGAINST: revert the guard to a pass-through
 // (`(url, init) => fetchImpl(url, init)`, i.e. the pre-fix SDK default) and every
 // refusal test goes RED — the recorder then shows the second request carrying
-// `authorization` to evil.example. The browser-shaped cases (q7ti9) add a second
-// mutant: refuse every opaque redirect instead of resolving it, and the
-// same-origin opaque test goes RED while the refusals stay green. Both verified.
+// `authorization` to evil.example. The browser shape adds a second mutant
+// (chrome-agent-platform-iaccg, superseding the q7ti9 probe): restore the old
+// header-free follow-probe for opaque redirects and the exactly-ONE-request
+// assertion goes RED — the guard issues a second fetch (the probe) before it
+// refuses. The q7ti9 design this replaces resolved an opaque redirect with a
+// redirect:"follow" GET and followed same-origin landings; that probe WAS an
+// unchecked follow (the browser walked the whole chain before the origin
+// check), so no opaque redirect is resolved or followed any more — same-origin
+// ones included, which is a deliberate capability narrowing for an impossible
+// validation (a service worker cannot read an opaqueredirect's Location, so a
+// hop cannot be checked before its request fires).
 
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import {
@@ -89,44 +97,24 @@ Deno.test("mcp egress: a redirect to another origin is REFUSED and the token nev
   assertEquals(issued[0].init.redirect, "manual");
 });
 
-// ── the BROWSER shape (chrome-agent-platform-q7ti9) ────────────────────────
+// ── the BROWSER shape (q7ti9, superseded by iaccg) ────────────────────────
 // A real service worker answers `redirect: "manual"` with an opaque response:
-// status 0, no readable Location. The guard must still keep same-origin moves
-// working, WITHOUT spending a credential to find out where the hop goes — so it
-// probes header-free and re-checks the resolved origin.
-const probeLanding = (url: string): Response =>
-  ({ url, status: 200, type: "basic", headers: new Headers() }) as unknown as Response;
+// status 0, NO readable Location. iaccg: the guard must not probe it. The old
+// probe was a header-free GET with `redirect: "follow"` — the browser walked
+// the ENTIRE redirect chain before the guard checked the landing origin, so a
+// probe that started at the allowed origin could fetch from any intermediate
+// hop (internal, link-local, anything). There is nothing inspectable to
+// re-validate per hop, so an opaque redirect is refused outright.
 
-Deno.test("mcp egress (browser shape): an opaque redirect that resolves SAME-origin is followed WITHOUT a credential", async () => {
-  const { fetchImpl, issued } = recordingFetch([
-    () => opaque(),                                  // the real POST -> opaque
-    () => probeLanding(`${SERVER}/mcp/v2`),          // the header-free probe
-    () => ok(),                                      // the re-issued POST
-  ]);
-  const guarded = createGuardedMcpFetch({ origin: SERVER, fetchImpl });
-  const res = await guarded(`${SERVER}/mcp`, { method: "POST", headers: TOKEN_HEADERS, body: "{}" });
-
-  assertEquals(res.status, 200, "a same-origin move must not break because the Location was unreadable");
-  assertEquals(issued.length, 3, "opaque, probe, re-issued request");
-  // THE security assertion: the probe carries no Authorization header and no body,
-  // so a cross-origin hop learns nothing even though it is followed blindly.
-  const probe = issued[1];
-  assertEquals(probe.init.redirect, "follow");
-  assertEquals(probe.init.credentials, "omit");
-  assertEquals(probe.init.method, "GET");
-  assertEquals(probe.init.headers, undefined, "the probe must carry NO owner headers");
-  assertEquals(probe.init.body, undefined, "the probe must carry no body");
-  // The real request lands on the RESOLVED url, still with the owner's headers.
-  assertEquals(issued[2].url, `${SERVER}/mcp/v2`);
-  assertEquals(issued[2].init.headers.authorization, TOKEN_HEADERS.authorization);
-  assertEquals(issued[2].init.redirect, "manual", "the re-issued request is guarded too");
-});
-
-Deno.test("mcp egress (browser shape): an opaque redirect that resolves OFF-origin is refused", async () => {
-  const { fetchImpl, issued } = recordingFetch([
-    () => opaque(),
-    () => probeLanding("https://evil.example/collect"),
-  ]);
+Deno.test("mcp egress (browser shape): an opaque redirect to a second origin is REFUSED with exactly ONE request issued — no follow-probe (iaccg)", async () => {
+  // The fixture models a server whose guarded request is answered with a
+  // redirect toward a second origin; the opaque shape hides the destination by
+  // construction (that is the point). The script holds ONLY the guarded
+  // attempt: if the follow-probe is restored, the guard issues a SECOND fetch
+  // (the probe) — an unscripted request that recordingFetch throws on, or
+  // issued.length === 2 — and this test goes RED. The call-count assertion is
+  // the falsifier for iaccg on the real guard path.
+  const { fetchImpl, issued } = recordingFetch([() => opaque()]);
   const guarded = createGuardedMcpFetch({ origin: SERVER, fetchImpl });
   let refused = null;
   try {
@@ -134,37 +122,21 @@ Deno.test("mcp egress (browser shape): an opaque redirect that resolves OFF-orig
   } catch (e) {
     refused = e;
   }
-  assert(refused instanceof McpEgressRefusedError, `must refuse: ${refused}`);
-  assert(
-    !issued.some((r) => r.url.startsWith("https://evil.example") && r.init?.headers?.authorization),
-    "no token-bearing request may reach the foreign origin discovered by the probe",
+  assert(refused instanceof McpEgressRefusedError, `an opaque redirect must be refused: ${refused}`);
+  assertEquals(
+    issued.length,
+    1,
+    `the guarded attempt is the ONLY request; restoring the follow-probe issues a second one (iaccg falsifier): ${JSON.stringify(issued)}`,
   );
-  const tokenToEvil = issued.filter((r) => r.url.startsWith("https://evil.example") && r.init?.method !== "GET");
-  assertEquals(tokenToEvil.length, 0, "the resolved foreign url is never re-requested");
-});
-
-Deno.test("mcp egress (browser shape): an UNRESOLVABLE opaque redirect is refused with an actionable message", async () => {
-  // The probe is refused (CORS) or does not move: there is nothing to follow, and
-  // following blind would re-send the token. The message must tell an operator what
-  // to do, because their server may be perfectly healthy.
-  for (const probe of [
-    () => { throw new Error("CORS refused"); },
-    () => probeLanding(`${SERVER}/mcp`), // did not move
-  ]) {
-    const { fetchImpl } = recordingFetch([() => opaque(), probe]);
-    const guarded = createGuardedMcpFetch({ origin: SERVER, fetchImpl });
-    let refused = null;
-    try {
-      await guarded(`${SERVER}/mcp`, { headers: TOKEN_HEADERS });
-    } catch (e) {
-      refused = e;
-    }
-    assert(refused instanceof McpEgressRefusedError, `must refuse: ${refused}`);
-    assert(
-      /point this MCP server's config at the final url/.test(String(refused.message)),
-      `the refusal must be actionable for an operator: ${refused.message}`,
-    );
-  }
+  assertEquals(issued[0].init.redirect, "manual", "the one request is the guarded, manual attempt");
+  assert(
+    issued.every((r) => new URL(r.url).origin === SERVER),
+    "every issued request stays on the configured origin",
+  );
+  assert(
+    /point this MCP server's config at the final url/.test(String(refused.message)),
+    `the refusal must be actionable for an operator: ${refused.message}`,
+  );
 });
 
 Deno.test("mcp egress (fd586): a SCHEME upgrade is NOT same-origin and is refused", async () => {
