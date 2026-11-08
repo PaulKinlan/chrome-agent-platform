@@ -98,6 +98,38 @@ export function isExactOptionsSender(sender, extensionId, exactOptionsUrl) {
     typeof sender.documentId === "string" && sender.documentId.length > 0;
 }
 
+/** cac6c r3 (1fn9j): the central dispatcher's sender ENFORCEMENT point.
+ * True iff the message comes from THIS extension itself — every surface
+ * Chrome attests with sender.id === runtime.id (extension pages in tabs or
+ * not, iframes, offscreen, side panel, popup) including our content scripts,
+ * which the dispatcher then restricts to page-allowed routes downstream.
+ * Everything else — foreign pages via externally_connectable, other
+ * extensions, crafted senders with no id (which the classifier alone would
+ * mislabel kind:"extension" when tab and url are absent) — is refused BY THE
+ * CALLER uniformly: the dispatcher's single deny() reply, ONE generic literal
+ * ({ ok: false, error: "unknown message" }), emitted before route resolution.
+ * The refusal is a REPLY, not silence, because the shipped integration
+ * contracts pin a refusal response from untrusted senders; the IDENTICAL
+ * literal on every rejection path is what keeps a hostile sender from
+ * enumerating routes through differentiated replies (the r2 review's finding
+ * 1). This is
+ * a predicate that yields the rejection at the call site — a real
+ * enforcement point, unlike authorizeToolReport below, which CLASSIFIES
+ * already-admitted senders and is deliberately NOT credited as an authoriser
+ * (1fn9j finding 3: crediting a classifier was an allowlist in a new coat).
+ */
+export function isOwnExtensionSender(
+  sender,
+  runtimeId = globalThis.chrome?.runtime?.id,
+) {
+  return (
+    typeof runtimeId === "string" &&
+    runtimeId !== "" &&
+    typeof sender?.id === "string" &&
+    sender.id === runtimeId
+  );
+}
+
 export function authorizeToolReport(
   sender,
   messageOrigin,

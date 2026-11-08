@@ -613,7 +613,7 @@ and each names the executable check that would catch a regression.
   `authorizeToolReport` at `extension/lib/pure-trust.js#authorizeToolReport` and the central listener at
   `extension/background/service-worker.js#chrome.runtime.onMessage.addListener`
   (browser sender classification and derived-origin overwrite inside that listener);
-  since cac6c r3 the listener first enforces `extension/lib/pure.js#isOwnExtensionSender`
+  since cac6c r3 the listener first enforces `extension/lib/pure-trust.js#isOwnExtensionSender`
   (sender.id === runtime id, the identical generic refusal for non-own senders) and dereferences
   `message.origin` only through a guarded string form, so a null-origin message is refused,
   never thrown;
