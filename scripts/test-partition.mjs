@@ -209,8 +209,19 @@ export const HEAVY_GATE_REASONS = {
   // (lib/heavy-receipt.mjs, gated by scripts/gate-receipt.mjs once activated) keeps them certified.
   "tests/python-documents-bundle-3p3e11.test.ts":
     "mega-suite: builds and exercises the Python documents bundle end to end (measured 1416s alone, ~2/3 of the parallel bound with wasm-sync); endurance work that starved 350 sibling files of their wall on a quiet box",
+  // chrome-agent-platform-finua: the 894s endurance figure above belonged to the PRE-split tree
+  // a849a9b3e; ifu81's split (32b72e03f, landed 13h before the tier move and an ancestor of its
+  // tip) moved the four 10MiB endurance cases into the five -seed-*/-transaction-growth/-validator-walk
+  // siblings, which since jw8a6's 2026-11-08 re-derivation carry measured parallel weights (5/6/5/8/5s
+  // quiet-box). What remains here is the ~10s post-split shell (the parent file's own comment, measured
+  // 2026-10-24). The tier placement is KEPT deliberately, not by the 894s rationale: ~10s of heavy-slot
+  // time is cheap, the heavy receipt keeps covering the sync-workspace family head on every full gate
+  // (737385e9's receipt covers it, rc 0), and re-deciding placement would move the
+  // docs/CHROME-TEST-CONTRACT.md counts and the count pins for no measured benefit. The declaration now
+  // matches the file as it is; tests/gate-bookkeeping-freshness.test.ts fails if the pre-split citation
+  // returns.
   "tests/wasm-sync-workspace.test.ts":
-    "mega-suite: full WASM workspace sync over large fixture trees (measured 894s alone); endurance work that starved 350 sibling files of their wall on a quiet box",
+    "post-split shell (~10s measured 2026-10-24; the four 10MiB endurance cases moved into the five -seed-*/-transaction-growth/-validator-walk siblings, which carry measured parallel weights since the 2026-11-08 weights re-derivation): kept in the heavy tier so the sync-workspace family keeps a dedicated heavy receipt on every full gate, not for endurance - re-decide placement if the shell's cost grows",
 };
 /**
  * The heavy-tier suites that measure WALL-CLOCK budgets rather than just load the box
