@@ -70,7 +70,7 @@ Component map, with the file that owns each surface:
 | OOXML document readers (SW-side) | `extension/lib/python-documents-bundle.js#executeReadSpreadsheet`, `#executeReadDocument` (routes `document.read_spreadsheet`, `document.read_document`) | attacker-supplied Office bytes parsed by Pyodide wheels INSIDE the service worker — not inside `registerPythonHost` (S16) |
 | Tool-stream routes | `extension/background/routes/tool-stream.js` (`tool-stream.input.*`, `.run`, `.output.*`, `.stage-attachment`, `.stage-asset`, `.promote-output`, `.discard`, `.tabular-transform`) | attachment/asset bytes staged into the Wasm-stream OPFS root (S17) |
 | Attached WebMCP (unenrolled) | `extension/lib/attached-webmcp-declared.js#readDeclaredWebmcpFromPage`, `attached-webmcp-invocation.js#invokeAttachedDeclaredFromPage`, `attached-webmcp-attestation.js#attestCurrentAttachedWebmcpTab` (routes `agent.attached-webmcp-document`, `attached-webmcp.invoke`) | owner-attached tabs declare and run page tools WITHOUT origin enrolment (S18, T10) |
-| Ephemeral site-tool consent | `extension/lib/ephemeral-site-tool-consent.js#createEphemeralSiteToolConsentStore` | run-scoped in-process consent for unenrolled site tools; never persists (S18) |
+| Ephemeral site-tool consent | `extension/lib/ephemeral-site-tool-consent.js#createEphemeralSiteToolConsentStore`; promotion consumer `extension/background/service-worker.js` (`prepareEnrollmentPromotion`/`completeEnrollmentPromotion`) | run-scoped in-process consent for unenrolled site tools; the store is never durable on its own, but its decisions are promoted into the durable enrolled envelope by the owner-gesture enrolment route (S18) |
 | Settings session | `extension/lib/settings-session.js#SETTINGS_SESSION_ROUTES` (routes `settings.session.open`, `settings.session.close`) | in-hub session tokens narrow scope but share the hub document (T20) |
 | Page table extraction | `extension/lib/table-extractor.js#injectedTableExtractor` | parses attacker-authored `<table>`/`role="grid"` DOM into canonical JSON under `TABLE_EXTRACTOR_LIMITS` (S1) |
 | Emscripten custody/staging modules | `extension/lib/emscripten-custody.js`, `emscripten-stage-protocol.js`, `emscripten-sw-stage.js`, `emscripten-run-fence.js`, `emscripten-host-writer.js`, `emscripten-host-binary-runner.js`, `emscripten-host-evidence.js`, `emscripten-staging-authority.js` | the custody/intent/fence chain behind `registerEmscriptenBinaryStagingHost` (S6c/S6g, T18) |
@@ -399,9 +399,17 @@ consequences are carried by the matching register entry where one exists.
   (`extension/lib/attached-webmcp-disclosure.js#formatAttachedDeclaredContext`).
   Enrolment is therefore no longer the ONLY consent path (§7 item 4 amended).
   Residual: a hostile page in an attached tab still authors both the schema and the
-  result text — T9 fencing applies — and the ephemeral site-tool consent store
+  result text — T9 fencing applies. The ephemeral site-tool consent store
   (`extension/lib/ephemeral-site-tool-consent.js#createEphemeralSiteToolConsentStore`)
-  never persists beyond the run.
+  is in-process and never durable on its own. Its per-run Allow/Deny decisions ARE
+  written durably — but ONLY via the owner-gesture enrolment route: when the owner
+  enrols that origin (host permission required), `withPromotionForOrigin`
+  (`ephemeral-site-tool-consent.js:132`) hands the run records to
+  `prepareEnrollmentPromotion`/`completeEnrollmentPromotion`
+  (`extension/background/service-worker.js`), which persists the promotion-pending
+  envelope and flips the enrolled registry. A run-scoped Allow therefore becomes
+  enrolled policy without a per-tool re-ask, but only through that separate owner
+  gesture, and never across origins.
 
 ### T11. Broad host access and the universal extension fingerprint
 
@@ -708,8 +716,12 @@ decision and, where one exists, the trigger that would reopen it.
 4. **Enrolment is the consent for an origin's tools (T10).** Accepted for reading tools;
    the mutating-tool question stays open in register R9. Since the attached-WebMCP lane
    (S18), an owner-ATTACHED tab may also grant run-scoped, in-process consent to its OWN
-   declared tools without enrolment; that consent never reaches other origins and never
-   persists (`extension/lib/ephemeral-site-tool-consent.js#createEphemeralSiteToolConsentStore`).
+   declared tools without enrolment; that consent never reaches other origins. It stays
+   in-process unless the owner separately enrols that origin with host permission: the
+   enrolment route then promotes the run's Allow/Deny decisions into the durable enrolled
+   envelope (`withPromotionForOrigin` → `prepareEnrollmentPromotion`/`completeEnrollmentPromotion`,
+   `extension/background/service-worker.js`) — the single durable path, and never across
+   origins (`extension/lib/ephemeral-site-tool-consent.js#createEphemeralSiteToolConsentStore`).
 5. **No application-level byte ceiling (T16).** Chromium's native OPFS quota is the
    operative ceiling since directive `dptw`. Register R5.
 6. **The 60-second approval TTL (T17).** Accepted; the correct behaviour is an honest
