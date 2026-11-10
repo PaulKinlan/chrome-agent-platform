@@ -32,7 +32,10 @@
 //   - Denied capabilities are matched as finite AST shapes: member chains
 //     (receiver-qualified and optional-chaining included — comments between
 //     tokens do not exist in an AST, finding o0t1n), call/new callees, and
-//     identifier references. The only exemptions remain the four reviewed
+//     identifier references — plus their indirect-invocation spellings
+//     (zwhbv): <capability>.call/.apply/.bind aliases, sequence-expression
+//     callees, and first-argument invocation through f.call/f.apply/f.bind/
+//     Reflect.construct. The only exemptions remain the four reviewed
 //     Emscripten glue preamble digests for their dead fetch/XHR URL-loading
 //     paths; byte-exact and glue-only.
 //   - Node/edge budgets are REFUSALS (js_capability_limit), never a pass.
@@ -84,6 +87,16 @@ const REVIEWED_EMSCRIPTEN_GLUE_PREAMBLE = Object.freeze(new Set([
  *   splitting invisible in an AST (o0t1n).
  * kind "new": denied when a NewExpression callee's terminal name matches.
  * kind "call": denied when a CallExpression callee's terminal name matches.
+ *
+ * Indirect-invocation spellings are the SAME named shapes, not new entries
+ * (chrome-agent-platform-zwhbv): one static hop must not defeat a terminal
+ * match. Refused wherever they appear:
+ *   - `<capability>.call` / `.apply` / `.bind` — the method extracts an alias
+ *     of the capability, called or not;
+ *   - a SequenceExpression callee — `(0, self.fetch)(x)` invokes self.fetch;
+ *   - first-argument invocation through `f.call(...)` / `f.apply(...)` /
+ *     `f.bind(...)` / `Reflect.construct(...)` — `Reflect.construct(Worker, …)`
+ *     builds a Worker the scan never sees.
  */
 const method = (name) => Object.freeze({ name });
 export const EMSCRIPTEN_JS_CAPABILITY_DENY_LIST = Object.freeze([
@@ -113,7 +126,40 @@ const CACHES_METHODS = ["open", "match", "has", "delete", "keys"];
 // ES modules are valid UTF-8 by construction; anything else is a refusal.
 const decoder = new TextDecoder("utf-8", { fatal: true });
 
-const PARSER_POLICY = "cap-js-capability-admission-ast-v1";
+const PARSER_POLICY = "cap-js-capability-admission-ast-v2";
+
+// zwhbv shape families. `INDIRECT_METHOD_NAMES`: alias-extracting member
+// methods over a capability receiver (`self.fetch.call`, `Worker.bind`).
+// `FIRST_ARG_INVOKE_METHOD_NAMES`: helpers that invoke/construct their FIRST
+// argument (`f.call(<cap>, …)`, `Reflect.construct(<cap>, …)`) — any receiver,
+// because the deny-list is receiver-agnostic fail-closed (e840g).
+const INDIRECT_METHOD_NAMES = new Set(["call", "apply", "bind"]);
+const FIRST_ARG_INVOKE_METHOD_NAMES = new Set(["call", "apply", "bind", "construct"]);
+
+/** Strip SequenceExpression parens-spelling: the effective callee/argument is
+ * the last expression — `(0, self.fetch)(x)` invokes self.fetch. */
+function effectiveTarget(node) {
+  let cursor = node;
+  while (cursor?.type === "SequenceExpression" && Array.isArray(cursor.expressions) && cursor.expressions.length) {
+    cursor = cursor.expressions[cursor.expressions.length - 1];
+  }
+  return cursor;
+}
+
+/** The call/new deny entries whose capability names include `name`. */
+function callNewEntriesFor(name) {
+  const hits = [];
+  for (const listItem of EMSCRIPTEN_JS_CAPABILITY_DENY_LIST) {
+    if (listItem.kind !== "call" && listItem.kind !== "new") continue;
+    for (const m of listItem.names) {
+      if (m.name === name) {
+        hits.push(listItem);
+        break;
+      }
+    }
+  }
+  return hits;
+}
 const NODE_BUDGET = 100_000; // per asset; exceeded -> js_capability_limit
 const EDGE_BUDGET = 256; // per package; exceeded -> js_capability_limit
 
@@ -207,11 +253,20 @@ function judgeAst(ast) {
       // Property spellings of single-name capabilities (obj.fetch, self.XMLHttpRequest).
       const last = names[names.length - 1];
       if (last && DENY_SINGLE_NAMES.has(last)) deny(DENY_SINGLE_NAMES.get(last));
+      // Alias-extracting spellings of call/new capabilities (zwhbv):
+      // <capability>.call / .apply / .bind — denied where it appears, called
+      // or not, because the extracted method IS the capability alias.
+      if (names.length >= 2 && INDIRECT_METHOD_NAMES.has(last)) {
+        for (const listItem of callNewEntriesFor(names[names.length - 2])) deny(listItem);
+      }
     } else if (node.type === "Identifier") {
       const hit = DENY_SINGLE_NAMES.get(node.name);
       if (hit) deny(hit);
     } else if (node.type === "NewExpression" || node.type === "CallExpression") {
-      const name = calleeName(node.callee);
+      // Sequence-expression parens-spelling resolves to its last expression:
+      // (0, self.fetch)(x) is a fetch call (zwhbv).
+      const callee = effectiveTarget(node.callee);
+      const name = calleeName(callee);
       if (name) {
         for (const listItem of EMSCRIPTEN_JS_CAPABILITY_DENY_LIST) {
           if (listItem.kind !== "new" && listItem.kind !== "call") continue;
@@ -224,10 +279,20 @@ function judgeAst(ast) {
         // caches.<method>() via callee chain (the member walk above also
         // covers the bare chain; the callee check catches call-position
         // chains whose object side is opaque).
-        if (node.type === "CallExpression" && CACHES_METHODS.includes(name) && node.callee.type === "MemberExpression") {
-          const { names } = memberChain(node.callee);
+        if (node.type === "CallExpression" && CACHES_METHODS.includes(name) && callee.type === "MemberExpression") {
+          const { names } = memberChain(callee);
           if (containsConsecutive(names, "caches", CACHES_METHODS)) {
             deny(EMSCRIPTEN_JS_CAPABILITY_DENY_LIST.find((e) => e.id === "caches"));
+          }
+        }
+        // First-argument invocation of a capability through a helper
+        // (zwhbv): f.call(<cap>, …), f.apply(<cap>, …), f.bind(<cap>, …),
+        // Reflect.construct(<cap>, …). Any receiver, fail-closed; the
+        // argument is unwrapped through SequenceExpression spelling first.
+        if (node.type === "CallExpression" && FIRST_ARG_INVOKE_METHOD_NAMES.has(name)) {
+          const argName = calleeName(effectiveTarget(node.arguments?.[0]));
+          if (argName) {
+            for (const listItem of callNewEntriesFor(argName)) deny(listItem);
           }
         }
       }
@@ -399,7 +464,7 @@ export function auditEmscriptenJsCapabilities(rootAssets, allAssets, files) {
     scanned: Object.freeze(scanned),
     screened: Object.freeze(screened),
     unproven: Object.freeze(
-      "This verdict does NOT prove C2 / no-writers: capability acquisition via computed, aliased or global references, and any OPFS write the package may perform, remain unproven. It states only that the parsed module grammar has a complete closed import-edge set over the verified bytes and that the named static denied AST forms were not found.",
+      "This verdict does NOT prove C2 / no-writers: capability acquisition via computed, aliased or global references, and any OPFS write the package may perform, remain unproven. It states only that the parsed module grammar has a complete closed import-edge set over the verified bytes and that the named static denied AST forms were not found — including the indirect-invocation spellings: <capability>.call/.apply/.bind, sequence-expression callees, and first-argument invocation through f.call/f.apply/f.bind/Reflect.construct. Value-level aliasing (const f = self.fetch) and computed/string-built acquisition stay unproven.",
     ),
   });
 }
