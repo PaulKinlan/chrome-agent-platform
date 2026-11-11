@@ -979,11 +979,19 @@ export async function executeReadSpreadsheet({
   setDocumentStdin(runtime, stdinPayload);
 
   try {
-    // 01d0r: the same wall-clock fence python.execute runs under — the readers
-    // previously called runPythonAsync bare. It cannot preempt a synchronous
-    // CPU-bound parse (the size seams above bound the WORK; see R15 for the
-    // fuel-counter residual), but a hung or awaiting interpreter no longer
-    // wedges the route forever.
+    // 01d0r (honesty amended per chrome-agent-platform-zlqih): a module-level
+    // wall-clock fence with an honest 'document_timeout'-family refusal word.
+    // What this fence does NOT buy is liveness: through the production
+    // provider (createPythonRuntimeProvider) every runPythonAsync was ALREADY
+    // fenced at 30 s (PYTHON_EXEC_TIMEOUT_MS in python-runtime.js, which
+    // wraps doSend in withTimeout and throws python_run_timeout; the offscreen
+    // host bounds it too), so hung readers already failed — just with the
+    // less honest 'spreadsheet_parse_failed: python_run_timeout' wording.
+    // What it DOES buy: the honest refusal word, provider independence (test
+    // doubles, any future runtimeProvider), and defence-in-depth if the
+    // provider fence is ever removed. Like python.execute's fence it cannot
+    // preempt a synchronous CPU-bound parse — the size seams above bound the
+    // WORK (see R15 for the fuel-counter residual).
     await withTimeout(runtime.runPythonAsync(READ_SPREADSHEET_SCRIPT), timeoutMs);
   } catch (err) {
     const message = String(err?.message ?? err);
@@ -1175,7 +1183,9 @@ export async function executeReadDocument({
 
   try {
     // 01d0r: wall-clock fence parity with python.execute (see the
-    // executeReadSpreadsheet comment for the honest limit).
+    // executeReadSpreadsheet comment for the honest limit — the provider
+    // already fenced every run at 30 s; this buys the refusal word and
+    // provider independence, not liveness).
     await withTimeout(runtime.runPythonAsync(READ_DOCUMENT_SCRIPT), timeoutMs);
   } catch (err) {
     const message = String(err?.message ?? err);
