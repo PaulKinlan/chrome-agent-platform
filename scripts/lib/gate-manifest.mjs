@@ -313,12 +313,56 @@ export function parseGateBuild(raw) {
  */
 export const BUILD_GATE_DEFERRAL_SUFFIX =
   "also runs in this FULL command's npm run test:build stage";
+/**
+ * chrome-agent-platform-1lvay (d): the receipt must say WHICH TIERS RAN, and for a tier that did not
+ * run it must state the gap in words a reader cannot mistake for a scheduling note. coord's ruling:
+ * "not 'heavy: deferred' but 'heavy-mega: NOT RUN at this sha (last green <sha> <age>h)' - a receipt
+ * that says 'deferred' reads like a note and a receipt that says 'NOT RUN at this sha' reads like the
+ * gap it is."
+ *
+ * `megaRecord` is the durable record a scheduled sweep writes ({sha, result, at}); null means no sweep
+ * has ever reported. Pure, so the wording is pinned by test rather than by a live gate.
+ *
+ * @param {{ heavyParallelFiles?: string[], megaRecord?: {sha?: string, result?: string, at?: number|string}|null, sha?: string|null, now?: number }} args
+ * @returns {{ heavy_parallel: {ran: number, files: string[]}, heavy_mega: {ran: boolean, last_sha: string|null, last_result: string|null, age_h: number|null}, line: string, lines: string[] }}
+ */
+export function heavyTierStatus({ heavyParallelFiles = [], megaRecord = null, sha = null, now = Date.now() } = {}) {
+  const ran = normalizeSuiteList(heavyParallelFiles);
+  const at = megaRecord && Number.isFinite(Number(megaRecord.at)) ? Number(megaRecord.at) : null;
+  const ageH = at ? Math.max(0, Math.round(((now - at) / 3_600_000) * 10) / 10) : null;
+  const lastSha = megaRecord?.sha ? String(megaRecord.sha).slice(0, 9) : null;
+  const lastResult = megaRecord?.result ? String(megaRecord.result).toUpperCase() : null;
+  const sameTree = Boolean(sha && megaRecord?.sha && String(megaRecord.sha).startsWith(String(sha)));
+  const lines = [];
+  lines.push(ran.length
+    ? `heavy-parallel: ran ${ran.length} suite(s) at this tree`
+    : "heavy-parallel: NOT RUN at this sha (this is not the full landing gate)");
+  if (sameTree && lastResult === "PASS") {
+    lines.push(`heavy-mega: ran at this sha (PASS${ageH === null ? "" : `, ${ageH}h ago`})`);
+  } else if (!megaRecord) {
+    lines.push("heavy-mega: NOT RUN at this sha (never run — no scheduled sweep has reported)");
+  } else if (lastResult === "PASS") {
+    lines.push(`heavy-mega: NOT RUN at this sha (last green ${lastSha ?? "unknown"} ${ageH === null ? "at an unrecorded time" : `${ageH}h ago`})`);
+  } else {
+    lines.push(`heavy-mega: NOT RUN at this sha (last run ${lastSha ?? "unknown"} ${lastResult ?? "UNKNOWN"} ${ageH === null ? "at an unrecorded time" : `${ageH}h ago`})`);
+  }
+  return {
+    heavy_parallel: { ran: ran.length, files: ran },
+    heavy_mega: { ran: sameTree && lastResult === "PASS", last_sha: megaRecord?.sha ? String(megaRecord.sha) : null, last_result: lastResult, age_h: ageH },
+    line: lines.join(" | "),
+    lines,
+  };
+}
+
 export const HEAVY_GATE_DEFERRAL_SUFFIX =
   "NOT part of the FULL gate command; runs only under the separate npm run test:heavy tier";
 
 /**
  * `[{file, reason}]` for every suite deferred to another tier, built from that tier's own reason table
  * (scripts/test-partition.mjs) so the ledger never invents a cause.
+ */
+/**
+ * @param {{ buildGateFiles?: string[], buildGateReasons?: Record<string,string>, heavyGateFiles?: string[], heavyGateReasons?: Record<string,string> }} [tables]
  */
 export function deferredTierEntries({
   buildGateFiles = [],
@@ -353,7 +397,9 @@ export function deferredTierEntries({
  * statement about the heavy files.
  *
  * @param {{
- *   serialFiles?: string[], parallelFiles?: string[], skippedFiles?: string[], failingFiles?: string[],
+ *   serialFiles?: string[], parallelFiles?: string[],
+ *   heavyParallelFiles?: string[], tiers?: object | null,
+ *   skippedFiles?: string[], failingFiles?: string[],
  *   lostFiles?: Array<{ file: string, reason: string }>,
  *   deferred?: Array<{ file: string, reason: string }>, rc: number, cliFiles?: string[],
  *   build?: object | null, fileMappingContext?: object | null,
@@ -365,6 +411,11 @@ export function deferredTierEntries({
 export function fullTierManifestFields({
   serialFiles = [],
   parallelFiles = [],
+  // 1lvay: the per-landing heavy phase is part of THIS command now, so its files are executed
+  // suites — not deferred ones. Kept as a separate named input so the manifest can say which tier
+  // they came from instead of pretending they were ordinary parallel files.
+  heavyParallelFiles = [],
+  tiers = null,
   skippedFiles = [],
   failingFiles = [],
   lostFiles = [],
@@ -377,7 +428,7 @@ export function fullTierManifestFields({
   incomplete = null,
 } = {}) {
   if (cliFiles.length > 0) return null;
-  const executedSuites = [...serialFiles, ...parallelFiles];
+  const executedSuites = [...serialFiles, ...parallelFiles, ...heavyParallelFiles];
   const skippedReason = Array.isArray(failingFiles) && failingFiles.length > 0
     ? `skipped in this run: serial file(s) failed [${failingFiles.join(", ")}]`
     : "skipped in this run: the serial phase failed";
@@ -432,6 +483,10 @@ export function fullTierManifestFields({
     // are still the honest input for re-weighting, so they ride along
     // regardless of rc (unlike executed_suites, which rc gates).
     suiteDurations,
+    // 1lvay (d): which tiers this receipt covers, stated per tier. Additive field: the fleet reads
+    // named keys and ignores extras, and no consumer mistakes the omission of a tier for its absence.
+    ...(tiers ? { tiers } : {}),
+    ...(heavyParallelFiles.length ? { heavy_parallel_suites: normalizeSuiteList(heavyParallelFiles) } : {}),
     incomplete: incompleteReason || null,
     omitted,
     omittedTotal: omitted.length,

@@ -25,7 +25,7 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { constants as osConstants } from "node:os";
 import { resolve as resolvePath } from "node:path";
-import { BUILD_GATE, BUILD_GATE_FILES, BUILD_GATE_REASONS, HEAVY_GATE, HEAVY_GATE_FILES, HEAVY_GATE_REASONS, READ_ONLY_DIST, SERIAL, partition } from "./test-partition.mjs";
+import { BUILD_GATE, BUILD_GATE_FILES, BUILD_GATE_REASONS, DEFERRED_HEAVY_FILES, HEAVY_GATE, HEAVY_GATE_FILES, HEAVY_GATE_REASONS, PER_LANDING_HEAVY_FILES, READ_ONLY_DIST, SERIAL, partition } from "./test-partition.mjs";
 import { announce, runReadOnlyDistBatch, runSerialFiles, runSerialLanes } from "./lib/serial-phase.mjs";
 import { ALWAYS_ON } from "./select-tests.mjs";
 import {
@@ -35,7 +35,17 @@ import {
   parallelPlan,
 } from "./lib/parallel-plan.mjs";
 import { loadWeights, scheduleOrder } from "./lib/parallel-schedule.mjs";
-import { emitGateLedger, deferredTierEntries, fullTierManifestFields, parseGateBuild } from "./lib/gate-manifest.mjs";
+import { emitGateLedger, deferredTierEntries, fullTierManifestFields, heavyTierStatus, parseGateBuild } from "./lib/gate-manifest.mjs";
+import { currentCommitSha, readMegaRecord } from "./lib/heavy-receipt.mjs";
+
+/** Never let a missing/corrupt mega record break a landing gate: null IS the "never run" fact. */
+function readMegaRecordSafely() {
+  try {
+    return readMegaRecord();
+  } catch {
+    return null;
+  }
+}
 import { parseSuiteDurations, slowestSuites } from "./lib/parallel-durations.mjs";
 import { candidateBlockLines, incompleteNote, INCOMPLETE_EXIT, incompleteRunExit, killProgress, killProgressLine } from "./lib/phase-outcome.mjs";
 import { checkBrowserPrerequisite } from "./lib/browser-prerequisite.mjs";
@@ -341,7 +351,12 @@ export function defaultTestPlan(all = enumerateRunnerTests()) {
   const part = partition(all);
   const serialFiles = [...SERIAL].filter((f) => !BUILD_GATE.has(f));
   const parallel = part.parallel.filter((f) => !HEAVY_GATE.has(f));
-  return { serialFiles, parallel };
+  // chrome-agent-platform-1lvay (a): the CHEAP heavy suites run in every landing's gate, in their
+  // own phase after the general batch — never inside it, because the RAM/CPU reason the tier exists
+  // is about sharing a batch with 789 general suites, not about the 19s they cost on their own.
+  // The mega pair and the wall-clock suite stay deferred (2310s; needs a quiet window).
+  const heavyParallel = PER_LANDING_HEAVY_FILES.filter((f) => all.includes(f));
+  return { serialFiles, parallel, heavyParallel };
 }
 
 export async function main(args = process.argv.slice(2)) {
@@ -349,6 +364,7 @@ export async function main(args = process.argv.slice(2)) {
   let all;
   let serialFiles;
   let parallel;
+  let heavyParallel = [];
   if (cliFiles.length > 0) {
     all = cliFiles.sort();
     const part = partition(all);
@@ -371,6 +387,7 @@ export async function main(args = process.argv.slice(2)) {
     const plan = defaultTestPlan(all);
     serialFiles = plan.serialFiles;
     parallel = plan.parallel;
+    heavyParallel = plan.heavyParallel;
   }
 
   // Pre-flight prerequisite check (chrome-agent-platform-jy7aj):
@@ -471,11 +488,20 @@ export async function main(args = process.argv.slice(2)) {
   // Preserve kz27: a failed builder OR read-only guard must not hide the
   // independent parallel guards; both phases run and the first failure wins.
   const parallelRc = stopAfterSerial ? 0 : await runParallel(other, "parallel phase", suiteDurations, killedPhases, neverSpawnedFiles);
+  // chrome-agent-platform-1lvay (a): the per-landing HEAVY phase runs here — its own batch, after the
+  // general parallel phase, so the RAM/CPU reason the tier was created for still holds (these suites
+  // never share a batch with the ~789 general ones). Measured cost on this VM 2026-11-11: 19s / 240
+  // tests at load 3.7, i.e. +7% on a 260s full gate, which buys a staleness bound of ZERO landings for
+  // 18 of the 21 heavy files. The mega pair (2310s recorded) and the wall-clock suite stay deferred;
+  // their absence is stated in the receipt by heavyTierStatus(), never left silent.
+  const heavyRc = (stopAfterSerial || heavyParallel.length === 0)
+    ? 0
+    : await runParallel(heavyParallel, "per-landing heavy phase", suiteDurations, killedPhases, neverSpawnedFiles);
   if (neverSpawnedFiles.length > 0) {
     gaps.push(`parallel phase child never spawned (${neverSpawnedFiles.length} file(s) unrun)`);
   }
   const unrunCount = plannedUnrunCount + neverSpawnedFiles.length;
-  const rc = combinePhaseExitCodes(serialRc, readOnlyRc, parallelRc);
+  const rc = combinePhaseExitCodes(serialRc, readOnlyRc, parallelRc, heavyRc);
   // w6kc0: a skip is a certification gap regardless of the phase exit codes, so the outcome can never
   // be a plain rc. 5xg1w: and an incomplete run gets its OWN exit code (76), not the exit-1 shape of a
   // completed FAIL — a serial-phase abort that skipped 711 of 759 files used to be indistinguishable
@@ -485,18 +511,33 @@ export async function main(args = process.argv.slice(2)) {
   const effectiveRc = incompleteRunExit(rc, { gaps, killedPhases });
   const gapsNote = gaps.length ? ` — INCOMPLETE: ${gaps.join("; ")}` : "";
   const buildDeferredCount = cliFiles.length === 0 ? all.filter((f) => BUILD_GATE.has(f)).length : 0;
-  const heavyDeferredCount = cliFiles.length === 0 ? all.filter((f) => HEAVY_GATE.has(f)).length : 0;
+  const heavyDeferredCount = cliFiles.length === 0 ? all.filter((f) => DEFERRED_HEAVY_FILES.includes(f)).length : 0;
   const deferredParts = [];
   if (buildDeferredCount) deferredParts.push(`${buildDeferredCount} deferred to npm run test:build`);
+  // 1lvay: only the DEFERRED heavy files (mega + wall-clock) are still "deferred to test:heavy" — the
+  // per-landing ones now run in THIS command, so counting all 21 here would be the same class of lie
+  // (a receipt naming a gap that is not there) that this bead closes from the other direction.
   if (heavyDeferredCount) deferredParts.push(`${heavyDeferredCount} deferred to npm run test:heavy`);
   const deferredSummary = deferredParts.length ? `, ${deferredParts.join(", ")}` : "";
   console.log(
     `run-tests: ${serialFiles.length + parallel.length} files total, ${unrunCount} skipped` +
       ` (${serialFiles.length} serial, ${readOnly.length} post-build read-only, ${parallel.length - readOnly.length} other parallel` +
+      (heavyParallel.length && !stopAfterSerial ? `, ${heavyParallel.length} per-landing heavy` : "") +
       `${deferredSummary}), wall ${((Date.now() - t0) / 1000).toFixed(0)}s` +
       incompleteNote(killedPhases) +
       gapsNote,
   );
+  // 1lvay (d): say which tiers this run covered, beside the summary a human reads. The structured
+  // copy rides the manifest; this is the line that stops "FULL" being read as "everything ran".
+  if (cliFiles.length === 0) {
+    for (const line of heavyTierStatus({
+      heavyParallelFiles: stopAfterSerial ? [] : heavyParallel,
+      megaRecord: readMegaRecordSafely(),
+      sha: currentCommitSha(process.cwd()),
+    }).lines) {
+      console.log(`run-tests: ${line}`);
+    }
+  }
   if (gaps.length) {
     console.error(
       `run-tests: NOT CERTIFIABLE — ${gaps.join("; ")}. A green guard subset does not make ` +
@@ -542,8 +583,18 @@ export async function main(args = process.argv.slice(2)) {
       deferred: deferredTierEntries({
         buildGateFiles: BUILD_GATE_FILES,
         buildGateReasons: BUILD_GATE_REASONS,
-        heavyGateFiles: HEAVY_GATE_FILES,
+        // 1lvay: only the mega + wall-clock heavy files are still deferred out of this command.
+        heavyGateFiles: DEFERRED_HEAVY_FILES,
         heavyGateReasons: HEAVY_GATE_REASONS,
+      }),
+      // 1lvay (a)+(d): the heavy files this run actually executed, and the per-tier ledger that says
+      // which tiers this receipt covers — including the one it does not, in words that read like the
+      // gap rather than like a scheduling note.
+      heavyParallelFiles: stopAfterSerial ? [] : heavyParallel,
+      tiers: heavyTierStatus({
+        heavyParallelFiles: stopAfterSerial ? [] : heavyParallel,
+        megaRecord: readMegaRecordSafely(),
+        sha: currentCommitSha(process.cwd()),
       }),
       rc: effectiveRc,
       build: parseGateBuild(process.env.CAP_GATE_BUILD_JSON),

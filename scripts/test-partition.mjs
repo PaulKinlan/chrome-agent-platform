@@ -273,6 +273,39 @@ export const CERT_HEAVY_FILES = Object.freeze(
 );
 
 export const HEAVY_GATE_FILES = Object.freeze(Object.keys(HEAVY_GATE_REASONS));
+
+/**
+ * The heavy tier is THREE populations with a ~120x cost spread, measured 2026-11-11
+ * (chrome-agent-platform-1lvay), so one policy for "the heavy tier" is wrong in one direction or the
+ * other by construction:
+ *
+ *   per-landing (18 files)  — MEASURED 19s / 240 tests on this VM (fleet-gate heavy-parallel-baseline,
+ *                             load 3.7). Cheap enough to run in EVERY landing's gate, which is what
+ *                             makes a red in these files visible within 0 landings.
+ *   mega (2 files)          — RECORDED 1416s (python-documents-bundle) + 894s (wasm-sync-workspace) on
+ *                             tree a849a9b3e = 2310s, i.e. 6.4x the entire full gate. NOT per-landing:
+ *                             a nightly sweep that auto-files a P1 is the only honest home (see
+ *                             scripts/heavy-mega-sweep.ts).
+ *   wall-clock (1 file)     — needs its own quiet window and refuses environmentally (exit 75).
+ *
+ * MEGA_HEAVY_FILES is declared here rather than inferred from a comment in heavy-gate.ts so the
+ * deferral reason, the receipt and the sweep all read ONE list.
+ */
+export const MEGA_HEAVY_FILES = Object.freeze([
+  "tests/python-documents-bundle-3p3e11.test.ts",
+  "tests/wasm-sync-workspace.test.ts",
+]);
+
+/** Heavy suites cheap enough to run in the full gate's own serial phase (1lvay). */
+export const PER_LANDING_HEAVY_FILES = Object.freeze(
+  HEAVY_GATE_FILES.filter((f) => !MEGA_HEAVY_FILES.includes(f) && !WALL_CLOCK_HEAVY_FILES.includes(f)),
+);
+
+/** Heavy suites that stay OUT of a landing's gate, each for its own stated reason. */
+export const DEFERRED_HEAVY_FILES = Object.freeze([
+  ...MEGA_HEAVY_FILES,
+  ...WALL_CLOCK_HEAVY_FILES,
+]);
 export const HEAVY_GATE = new Set(HEAVY_GATE_FILES);
 
 /**

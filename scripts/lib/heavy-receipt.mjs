@@ -38,7 +38,7 @@
 // carry no receipt logic (a demand inside npm test would make every selector-machinery edit
 // escalate to a 40-minute tier gate — measured on 92157a0e5's first fast gate).
 
-import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeSync } from "node:fs";
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync, writeSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { durableDir } from "./durable-root.mjs";
@@ -99,6 +99,41 @@ export function currentTreeHash(cwd) {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"],
   }).trim();
+}
+
+/**
+ * The durable record of the last SCHEDULED mega sweep (chrome-agent-platform-1lvay (c)).
+ *
+ * Lives beside the per-tree heavy receipts because it is the same kind of fact — "a heavy tier ran,
+ * at this content, with this result" — and because the landing gate reads it to write the line that
+ * makes a stale mega verdict impossible to misread: "heavy-mega: NOT RUN at this sha (last green
+ * <sha> <age>h)". Absent file = no sweep has ever reported, which the line says in those words
+ * rather than assuming a green.
+ */
+export function megaRecordPath() {
+  return join(receiptDir(), "mega-last.json");
+}
+
+/** null when there is no record (never run), never a half-read object. */
+export function readMegaRecord() {
+  try {
+    const raw = JSON.parse(readFileSync(megaRecordPath(), "utf8"));
+    return raw && typeof raw === "object" ? raw : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * @param {{ sha: string, result: "pass"|"fail"|"environmental", at?: number, suites?: Array<{file: string, rc: number, secs: number}>, detail?: unknown }} rec
+ */
+export function writeMegaRecord({ sha, result, at = Date.now(), suites = [], detail = null }) {
+  if (!sha || !result) throw new Error("heavy mega record needs a sha and a result");
+  const file = megaRecordPath();
+  const tmp = `${file}.tmp-${process.pid}`;
+  writeFileSync(tmp, `${JSON.stringify({ sha, result, at, suites, detail }, null, 2)}\n`);
+  renameSync(tmp, file);
+  return file;
 }
 
 export function currentCommitSha(cwd) {
