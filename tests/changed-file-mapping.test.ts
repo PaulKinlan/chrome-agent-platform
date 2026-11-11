@@ -15,7 +15,9 @@ import { assert, assertEquals, assertThrows } from "jsr:@std/assert@1";
 import { fileURLToPath } from "node:url";
 import {
   BOOKKEEPING_FILES,
+  DEDICATED_FILE_GUARDS,
   classifyUncovered,
+  guardsForChangedFile,
   HARNESS_TREE_GUARDS,
   HTML_EXPORT_ENTRY_GUARDS,
   isGuardEnumeratedScript,
@@ -614,4 +616,49 @@ Deno.test("fhh50: unreferenced agent-skill tooling fails closed AND names the me
   assertEquals(result.unmappable.map((row: { file: string }) => row.file), [
     ".agents/skills/impeccable/scripts/detect-csp.mjs",
   ]);
+});
+
+// chrome-agent-platform-h346c: the registry that makes "a changed file that owns a guard must
+// carry that guard" enforceable. The dangerous direction here is an entry that is WRONG — a
+// guard that does not police the file, or a path the repo does not have — because both turn
+// into a permanent, invisible cost for every delta that touches the file.
+Deno.test("h346c: the dedicated-guard registry is path-keyed, ownership-based and resolvable", () => {
+  const entries = Object.entries(DEDICATED_FILE_GUARDS);
+  assert(entries.length > 0, "the registry is not empty");
+  for (const [file, guards] of entries) {
+    assert(declaredGuardExists(file), `${file} exists — a registry entry for a path the tree does not have could never fire`);
+    assert(Array.isArray(guards) || typeof guards.length === "number", `${file} declares a guard list`);
+    assert(guards.length > 0, `${file} names at least one guard (an empty list is a claim with no coverage)`);
+    for (const guard of guards) {
+      assert(declaredGuardExists(guard), `${file} -> ${guard}: the guard suite exists on disk`);
+    }
+  }
+
+  // The two incidents this table exists for, asserted as the exact ownership claim.
+  assertEquals(guardsForChangedFile("extension/background/service-worker.js"), ["tests/onmessage-sender-guard.test.ts"]);
+  assertEquals(guardsForChangedFile("extension/lib/script-host.js"), ["tests/sandbox-egress-confinement.test.ts"]);
+
+  // BOTH tables are consulted: a caller must never have to know which table an entry lives in
+  // (the HTML entries keep their own table, and a rule that read only one would re-open the gap).
+  assert(
+    guardsForChangedFile("extension/ntp/ntp.html").includes("tests/thread-export-entry-html.test.ts"),
+    "the HTML entry table is consulted by the same helper",
+  );
+
+  // No entry, no claim — an unregistered file owns no KNOWN guard, and the helper must not invent one.
+  assertEquals(guardsForChangedFile("extension/lib/pure.js"), []);
+  assertEquals(guardsForChangedFile(undefined), []);
+
+  // Path separator normalisation: a Windows-shaped path must not make the registry miss a file.
+  assertEquals(guardsForChangedFile("extension\\lib\\script-host.js"), guardsForChangedFile("extension/lib/script-host.js"));
+
+  // OWNERSHIP, not filenames (cac6c): the guard that polices service-worker.js shares no basename
+  // with it, so a naming convention would never have found it — and nothing may be keyed to a line
+  // number, which khwi9 rotted by moving a policed listener 14 lines.
+  for (const [file, guards] of entries) {
+    for (const guard of guards) {
+      const basenameMatch = guard.includes(file.split("/").pop().replace(/\.js$/, ""));
+      assert(!basenameMatch || file.endsWith(".html"), `${file} -> ${guard}: the entry is not a filename coincidence`);
+    }
+  }
 });

@@ -95,6 +95,56 @@ export const HTML_EXPORT_ENTRY_GUARDS = Object.freeze({
   "extension/artifact/artifact.html": Object.freeze(["tests/thread-export-entry-html.test.ts"]),
 });
 
+/** Files whose coverage is a DEDICATED guard suite that no import edge can select, by
+ *  exact path.
+ *
+ *  WHY THIS TABLE EXISTS (chrome-agent-platform-h346c): five landed deltas in two days
+ *  edited a file whose dedicated guard was NOT in the selection, and the plan still
+ *  reported `kind: "subset"` — a certificate for a tree the selection never covered.
+ *  lrhyl/khwi9/cac6c on extension/background/service-worker.js (a P1 reply-before-trust
+ *  dispatcher hole reached main), ibdr4 on extension/lib/script-host.js, and the
+ *  qjoji+5b9mp landing whose manifest was missing sandbox-egress-confinement while the
+ *  union was certified green over a red main. Every one of those files was
+ *  import-REACHABLE (so `classifyUncovered` never looked at it) — which is exactly why
+ *  the guard tables that only feed the uncovered path cannot close this hole. The rule
+ *  this table serves is applied to EVERY changed file, covered or not.
+ *
+ *  TWO PROPERTIES ARE LOAD-BEARING, both learned from the incidents:
+ *  - It is keyed by FILE PATH only. Never a line number (khwi9 moved the policed
+ *    listener from 13393 to 13407 and any line-keyed entry rotted instantly — cac6c).
+ *  - The map is by OWNERSHIP, not by filename: service-worker.js owns
+ *    onmessage-sender-guard.test.ts, which shares no basename with it, so a naming
+ *    convention would never have found it.
+ *
+ *  An entry here is a claim that the suite POLICES the file, not merely that it imports
+ *  it. Adding one costs that suite's runtime to every delta touching the file, so it is
+ *  a deliberate list, not a generated one. */
+export const DEDICATED_FILE_GUARDS = Object.freeze({
+  "extension/background/service-worker.js": Object.freeze([
+    // cac6c: the AST census of EVERY runtime.onMessage listener in extension/. It walks
+    // the tree with fs.readdirSync, so it has no static import edge from the file it
+    // polices, and three consecutive sw.js deltas never selected it.
+    "tests/onmessage-sender-guard.test.ts",
+  ]),
+  "extension/lib/script-host.js": Object.freeze([
+    // The egress-confinement journey imports script-host dynamically INSIDE a test body,
+    // so the static reverse map cannot see it either (a detection gap filed as ff920).
+    "tests/sandbox-egress-confinement.test.ts",
+  ]),
+});
+
+/** Every dedicated guard the changed file owns — the ONE answer to "does this file own a
+ *  guard, and which?". Both tables are consulted so callers never have to know that the
+ *  HTML entries live in their own table (h346c: a rule that only read one of them would
+ *  have re-created the gap it exists to close). */
+export function guardsForChangedFile(rel, tables = { dedicated: DEDICATED_FILE_GUARDS, html: HTML_EXPORT_ENTRY_GUARDS }) {
+  const path = String(rel ?? "").replace(/\\/g, "/");
+  const out = [];
+  if (Object.hasOwn(tables.dedicated ?? {}, path)) out.push(...tables.dedicated[path]);
+  if (Object.hasOwn(tables.html ?? {}, path)) out.push(...tables.html[path]);
+  return [...new Set(out)];
+}
+
 /**
  * The three files the post-commit version hook rewrites.
  *

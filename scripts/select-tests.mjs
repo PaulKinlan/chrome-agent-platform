@@ -47,7 +47,14 @@ import { constants as osConstants } from "node:os";
 import { tokenizer } from "acorn";
 import { partition } from "./test-partition.mjs";
 import { announce, runSerialFiles } from "./lib/serial-phase.mjs";
-import { HTML_EXPORT_ENTRY_GUARDS, isRepoMetadata, isSelectorInfrastructure, mapUncovered } from "./lib/changed-file-mapping.mjs";
+import {
+  DEDICATED_FILE_GUARDS,
+  HTML_EXPORT_ENTRY_GUARDS,
+  guardsForChangedFile,
+  isRepoMetadata,
+  isSelectorInfrastructure,
+  mapUncovered,
+} from "./lib/changed-file-mapping.mjs";
 import {
   LOCKFILE_CLASS_FILES,
   classifyLockfileDelta,
@@ -1231,7 +1238,7 @@ export function exitGate(rc, { graph, ran, changed = null, failed = null }, seam
  * The selector's decision, pure of printing and of running (chrome-agent-platform-0eq00 plan mode).
  * `kind: "full"` means the subset cannot validate this change: callers must run the full suite.
  *
- * @param {{ base?: string, changedFiles?: (base: string) => string[], reverseGraph?: () => any, lockfileOptions?: any }} [opts]
+ * @param {{ base?: string, changedFiles?: (base: string) => string[], reverseGraph?: () => any, lockfileOptions?: any, dedicatedGuards?: Record<string, readonly string[]>, htmlGuards?: Record<string, readonly string[]> }} [opts]
  * @returns {{
  *   kind: "subset" | "full",
  *   files: string[] | null,
@@ -1240,6 +1247,8 @@ export function exitGate(rc, { graph, ran, changed = null, failed = null }, seam
  *   mapped: Array<{ file: string, mechanism: string, tests: string[] }>,
  *   unmappable: Array<{ file: string, mechanism: string }>,
  *   notices: string[],
+ *   guardGap: Array<{ file: string, guard: string }>,
+ *   omittedReason?: string,
  *   lockfileDelta: string[],
  *   failClosedHeader?: string,
  *   reason: string,
@@ -1254,6 +1263,10 @@ export function planSelection({
   changedFiles: changedFilesFn = changedFiles,
   reverseGraph: reverseGraphFn = buildReverseGraph,
   lockfileOptions = {},
+  // h346c: the guard registry is a seam so the fail-closed leg (a registered guard that is NOT in
+  // the tree) is testable without inventing a real broken entry in the shipped table.
+  dedicatedGuards = DEDICATED_FILE_GUARDS,
+  htmlGuards = HTML_EXPORT_ENTRY_GUARDS,
 } = {}) {
   const changed = changedFilesFn(base);
   const notices = [];
@@ -1334,19 +1347,85 @@ export function planSelection({
   for (const m of mapped) {
     notices.push(`select-tests: ${m.file} has no importer — ${m.mechanism}; selecting its ${m.tests.length} inspecting guard(s).`);
   }
+
+  // chrome-agent-platform-h346c: a GUARD-OWNING changed file MUST carry its dedicated guard.
+  //
+  // This runs for EVERY changed file, covered or not, and that is the whole point: the five
+  // incidents this bead exists for were all files the import graph REACHES
+  // (service-worker.js, script-host.js), so they never reach classifyUncovered and the guard
+  // tables that only feed the uncovered path could not see them. A subset that executes a
+  // greener, smaller selection is indistinguishable from a real pass at the moment a merger
+  // reads it — so the guard is either selected here or the gate refuses.
+  //
+  // The registry is keyed by path only (no line numbers: khwi9 moved a policed listener 14
+  // lines and rotted a line-keyed entry) and by ownership (not filename: service-worker.js
+  // owns onmessage-sender-guard.test.ts).
+  const guardRequirements = changed.flatMap((file) =>
+    guardsForChangedFile(file, { dedicated: dedicatedGuards, html: htmlGuards }).map((guard) => ({ file, guard })));
+  const unresolvableGuard = guardRequirements.find(({ guard }) => !existsSync(join(ROOT, guard)));
+  if (unresolvableGuard) {
+    return {
+      kind: "full",
+      files: null,
+      changed,
+      reverse,
+      uncovered,
+      mapped,
+      unmappable: [{
+        file: unresolvableGuard.file,
+        mechanism: `the dedicated guard this file owns does not exist in the tree: ${unresolvableGuard.guard}` +
+          ` — a registry entry naming a suite the selection cannot run is a coverage claim nobody can honour`,
+      }],
+      notices,
+      guardGap: [{ file: unresolvableGuard.file, guard: unresolvableGuard.guard }],
+      failClosedHeader:
+        "select-tests: FAIL CLOSED — a guard-owning changed file names a dedicated guard that cannot be resolved:",
+      reason: `dedicated guard not resolvable: ${unresolvableGuard.guard}`,
+    };
+  }
+
+  const files = selectTestFiles(changed, reverse, mapped);
+  for (const { file, guard } of guardRequirements) {
+    if (files.includes(guard)) continue;
+    // Forced in AFTER selectTestFiles, deliberately: that function drops FAST_SUBSET_EXCLUDED
+    // suites unless the change IS the suite, and a dedicated guard is precisely a suite that
+    // must run for a change that does not mention it.
+    files.push(guard);
+    notices.push(`select-tests: ${file} owns a dedicated guard — adding ${guard} to the selection (h346c).`);
+  }
+  files.sort();
   return {
     kind: "subset",
-    files: selectTestFiles(changed, reverse, mapped),
+    files,
     changed,
     reverse,
     uncovered,
     mapped,
     unmappable: [],
     notices,
+    guardGap: guardGapFor(changed, files, { dedicated: dedicatedGuards, html: htmlGuards }),
     lockfileDelta: lockfile?.ledger ?? [],
     omittedReason: OMITTED_UNSELECTED_REASON,
-    reason: "",
+    reason: ""
   };
+}
+
+/** The changed files whose DEDICATED guard is not in the selection, as `{file, guard}` pairs.
+ *
+ *  Exported because it is the gate's own stop signal (h346c, the merger's ask): the terminal
+ *  output prints this count so an invisible selection gap becomes an explicit number at the
+ *  moment someone decides to merge. After planSelection's enforcement a subset plan can only
+ *  have a non-zero count if something downstream dropped a selected suite — i.e. a non-zero
+ *  number is a real problem, never routine noise. */
+export function guardGapFor(changed, selected, tables = { dedicated: DEDICATED_FILE_GUARDS, html: HTML_EXPORT_ENTRY_GUARDS }) {
+  const ran = new Set(selected ?? []);
+  const gaps = [];
+  for (const file of changed ?? []) {
+    for (const guard of guardsForChangedFile(file, tables)) {
+      if (!ran.has(guard)) gaps.push({ file, guard });
+    }
+  }
+  return gaps;
 }
 
 /**
@@ -1466,7 +1545,10 @@ async function main() {
         base,
         files: plan.files ?? [],
         changed: plan.changed,
-        unmapped: [],
+        // fhh50 residual (h346c): this was hardcoded `[]`, so the JSON plan could never name the
+        // files that actually forced the refusal — the reason lines and the unmapped list were
+        // derived from different sources. plan.unmappable IS the unmapped set.
+        unmapped: plan.unmappable.map((u) => u.file),
         unmappable: plan.unmappable.map((u) => ({ file: u.file, mechanism: u.mechanism })),
         mapped: plan.mapped.map((m) => ({ file: m.file, tests: m.tests })),
         lockfileDelta: plan.lockfileDelta ?? [],
@@ -1477,6 +1559,22 @@ async function main() {
     return;
   }
   for (const notice of plan.notices) console.error(notice);
+  // chrome-agent-platform-h346c, the merger's ask: an invisible selection gap becomes an explicit
+  // NUMBER at the one moment someone decides to merge. A zero is a pass; a non-zero is a stop, so
+  // the non-zero form names each file -> guard pair rather than leaving a reader to find it.
+  {
+    // A FULL plan runs every suite, so by definition no guard is missing: only the explicit
+    // guardGap (an unresolvable registry entry, which is a real stop) can be non-empty here.
+    // Computing the subset gap against a null selection would print a false STOP on the one
+    // path that is already safe.
+    const gap = plan.guardGap ?? (plan.kind === "full" ? [] : guardGapFor(plan.changed, plan.files ?? []));
+    console.error(
+      gap.length === 0
+        ? "select-tests: guard-owning changed files whose guard did not run: 0"
+        : `select-tests: guard-owning changed files whose guard did not run: ${gap.length} — STOP, this selection does not cover them:\n` +
+          gap.map((g) => `  ${g.file} -> ${g.guard}`).join("\n"),
+    );
+  }
   if (plan.kind === "subset") {
     const fanIn = selectionFanInNotice({ selected: plan.files?.length ?? 0, population: allTestFiles().length });
     if (fanIn) console.error(fanIn);
