@@ -1036,6 +1036,7 @@ export function approvalCardTitle(action, detail = null) {
     case "script.run": return "Run this script now?";
     case "task.schedule-script": return "Run this script on a schedule?";
     case "fs.write": return "Write this file?";
+    case "named-agent.set-provider": return "Change this agent's provider?";
     case "webmcp.use-tool": return detail?.kind === "webmcp-tool"
       ? `Use ${detail.origin}’s ${detail.tool}?`
       : "Use this site tool?";
@@ -2213,11 +2214,19 @@ export async function runConversationTurn(container, { text, attachments = [], h
     // A local-file write (CAP-FB-20260830-LOCAL-FILE-EDIT-TOOLS-01) rides the
     // SAME card: the file's relative path, the on-disk bytes as "before".
     const isFileWrite = detail.kind === "fs.write";
+    // A model-authored provider change (chrome-agent-platform-awaom) rides the
+    // SAME card: the current vs proposed provider/baseURL/model as the diff, so
+    // the owner approves the exact host — not an opaque ref.
+    const isProviderChange = detail.kind === "named-agent.set-provider";
     const noun = detail.kind === "script.update" ? "script" : isFileWrite ? "file" : "artifact";
-    card.setAttribute("title", `${isFileWrite ? "Write" : "Update"} ${name}? (+${added} -${removed})`);
-    card.setAttribute("body", isFileWrite
-      ? "The agent wants to write this file in a folder you granted. Review the changes, then approve or deny."
-      : `The agent wants to change this ${noun}. Review the changes, then approve or deny.`);
+    card.setAttribute("title", isProviderChange
+      ? `Change ${name}'s provider? (+${added} -${removed})`
+      : `${isFileWrite ? "Write" : "Update"} ${name}? (+${added} -${removed})`);
+    card.setAttribute("body", isProviderChange
+      ? `The agent wants to change where the named agent “${name}” sends its model traffic (provider, base URL, model).${detail.provenance === "model" ? " This change was authored by the model: the base URL below is model-chosen, and an existing stored key may be carried to it." : ""} Review the change, then approve or deny.`
+      : isFileWrite
+        ? "The agent wants to write this file in a folder you granted. Review the changes, then approve or deny."
+        : `The agent wants to change this ${noun}. Review the changes, then approve or deny.`);
     if (card.querySelector?.("artifact-diff")) return;
     const diff = document.createElement("artifact-diff");
     diff.setAttribute("slot", "extra");
@@ -2332,7 +2341,7 @@ export async function runConversationTurn(container, { text, attachments = [], h
       // live behind the SW's `approval.detail` principal gate (never in the
       // model-facing envelope), so they are fetched here, once, for this card.
       const editApproval = actionApproval ? requirement.approvals[0] : null;
-      if (editApproval && (editApproval.action === "asset.update" || editApproval.action === "script.update" || editApproval.action === "fs.write")) {
+      if (editApproval && (editApproval.action === "asset.update" || editApproval.action === "script.update" || editApproval.action === "fs.write" || editApproval.action === "named-agent.set-provider")) {
         augmentApprovalCardWithDiff(card, editApproval);
       }
     }

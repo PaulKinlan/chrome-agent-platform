@@ -874,14 +874,16 @@ export function approvalCardDenial({ approvalId, action, targetRef, detail }) {
 // they never enter the model-facing envelope (approvalCardDenial), because the
 // current body is not necessarily model-authored. The record is staged in the
 // approval store keyed by approvalId and evicted with the approval row.
-export const STAGED_APPROVAL_DETAIL_KINDS = new Set(["asset.update", "script.update", "fs.write"]);
+export const STAGED_APPROVAL_DETAIL_KINDS = new Set(["asset.update", "script.update", "fs.write", "named-agent.set-provider"]);
 /** Validate a staged edit detail ({ kind, name, oldContent, newContent, added,
- * removed, oldLabel, newLabel }). A malformed record (unknown kind, no name)
- * is dropped — the card then falls back to the opaque form. Content is NEVER
- * clipped (dptw): the owner approves only a diff shown in full. The `added` /
- * `removed` counts are computed by the caller with the diff core over the SAME
- * two bodies stored here, so the card title's `+n -m` can never disagree with
- * the rendered diff. */
+ * removed, oldLabel, newLabel, provenance? }). A malformed record (unknown kind,
+ * no name) is dropped — the card then falls back to the opaque form. Content is
+ * NEVER clipped (dptw): the owner approves only a diff shown in full. The
+ * `added` / `removed` counts are computed by the caller with the diff core over
+ * the SAME two bodies stored here, so the card title's `+n -m` can never
+ * disagree with the rendered diff. The optional `provenance` (bounded, 64)
+ * records WHO authored the change — for named-agent.set-provider it is the
+ * model principal (set_agent_provider), never the owner's own Settings click. */
 export function boundStagedApprovalDetail(detail) {
   if (!detail || typeof detail !== "object" || Array.isArray(detail)) return null;
   if (!STAGED_APPROVAL_DETAIL_KINDS.has(detail.kind)) return null;
@@ -889,6 +891,7 @@ export function boundStagedApprovalDetail(detail) {
   const count = (value) => (Number.isSafeInteger(value) && value >= 0 ? value : 0);
   const name = str(detail.name);
   if (!name) return null;
+  const provenance = str(detail.provenance).slice(0, 64);
   return {
     kind: detail.kind,
     name,
@@ -898,6 +901,7 @@ export function boundStagedApprovalDetail(detail) {
     removed: count(detail.removed),
     oldLabel: str(detail.oldLabel) || `${name} (current)`,
     newLabel: str(detail.newLabel) || `${name} (proposed)`,
+    ...(provenance ? { provenance } : {}),
   };
 }
 

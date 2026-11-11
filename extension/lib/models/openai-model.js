@@ -13,6 +13,7 @@ import { normaliseModelId } from "./model-name.js";
 import { thoughtSignatureMiddleware } from "./thought-signature-middleware.js";
 import { toolCallFinishMiddleware } from "./tool-call-finish-middleware.js";
 import { safeProviderError } from "../pure-redact.js";
+import { fetchProviderWithGuardedRedirects } from "../provider-redirect-guard.js";
 
 const providerHttpLog = capLog("provider:http");
 
@@ -27,9 +28,28 @@ const providerHttpLog = capLog("provider:http");
 // _makeLoggingFetch below.
 const _loggedFetchFailures = new Set();
 
-export function makeLoggingFetch(knownSecrets = []) {
+export function makeLoggingFetch(knownSecrets = [], options = {}) {
+  // chrome-agent-platform-37fzt: every provider adapter (openai-compatible,
+  // anthropic-native, gemini-native) installs THIS function as the SDK fetch,
+  // so the T6 redirect guard lives here once and covers all transports: the
+  // configured destination dials as-is (owner preset, or model-authored and
+  // fenced pre-dial by modelAuthoredBaseURLRefusal), while every redirect hop
+  // is inspectable-or-refused and re-validated against checkFetchTarget
+  // BEFORE its request is issued. `options.fetch` is the injectable seam for
+  // tests (tests/provider-redirect-guard.test.ts).
+  const fetchImpl = typeof options?.fetch === "function" ? options.fetch : globalThis.fetch;
   return async function _loggingFetch(input, init) {
-    const res = await fetch(input, init);
+    let res;
+    try {
+      res = await fetchProviderWithGuardedRedirects(input, init, { fetchImpl });
+    } catch (err) {
+      // The guard's refusal message is secret-safe by construction (names the
+      // requested url, never the hop destination or a header value); log it so
+      // a redirected provider misconfiguration is diagnosable, then let the
+      // SDK surface it like any other dial failure.
+      providerHttpLog.error(`[provider] ${err?.message ?? String(err)}`);
+      throw err;
+    }
     if (!res.ok) {
       const url = typeof input === "string" ? input : input?.url ?? "(provider)";
       // SECRET-SAFE URL: credentials masked + the query dropped, bounded as the

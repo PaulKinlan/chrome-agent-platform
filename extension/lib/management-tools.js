@@ -347,7 +347,7 @@ export function managementToolset({ callRoute }) {
     }),
     set_agent_provider: tool({
       description:
-        "Set (or clear) a named agent's provider/model override. `config` is a COMPLETE provider-specific config (provider id + baseURL + apiKey + model); null clears it (the agent inherits the global provider).",
+        "Set (or clear) a named agent's provider/model override. `config` is a COMPLETE provider-specific config (provider id + baseURL + apiKey + model); null clears it (the agent inherits the global provider). A baseURL on a private, loopback or link-local host is refused for model-authored changes — those destinations (e.g. the ollama/lm-studio presets) are owner-only and must be set in Settings.",
       inputSchema: z.object({
         id: z.string().describe("the agent id (slug)"),
         config: z.object({
