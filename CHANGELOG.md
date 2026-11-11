@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.740] — 2026-11-11
+- Security and trust batch: every path that carries agent or tool traffic is now bounded and origin-fenced end to end — script, Python and MCP fetches read with a hard byte ceiling, refuse redirects that leave the configured origin, and never echo request URLs, keys or free-form error text back into the transcript; untrusted MCP schemas and document attachments are work-budgeted before they can compile or scan without limit; the dispatcher classifies a sender before it replies; and thread export, skill import and memory paths share one canonical redaction rule. Also: a faster side-panel boot, and refusals that name what is missing (a permission, a grant, an endpoint) instead of failing silently.
+
 ## [0.3.739] — 2026-10-22
 - Harden ACP offscreen doc check with number-enumerated scan and active falsifiers.
 - The extension's offscreen bundle is now held to a documented 258 KB limit, and the checks that guard it fail if the documentation and the code ever disagree about that number.

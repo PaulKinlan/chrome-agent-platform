@@ -27,6 +27,16 @@ import {
 const script = fileURLToPath(new URL("../scripts/check-owed-changelog.mjs", import.meta.url));
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 
+/** Read-only git plumbing for this file's own assertions (l3zgq): the ledger
+ *  module's execGit is not exported for test use, so the two reads this case
+ *  needs (HEAD's sha, and the non-merge commits after the newest entry's
+ *  introducer) go through the same spawnSync the landing guard uses. */
+function gitOut(repo: string, args: string[]): string {
+  const out = spawnSync("git", ["-C", repo, ...args], { encoding: "utf8" });
+  assertEquals(out.status, 0, `git ${args.join(" ")} failed: ${out.stderr}`);
+  return out.stdout;
+}
+
 Deno.test("ledger: newest-heading parser and product-path classifier", () => {
   const md = "# Changelog\n\n## [1.2.3] — 2026-10-06\n- one\n\n## [1.2.2] — 2026-10-05\n- two\n";
   assertEquals(parseNewestEntry(md)?.version, "1.2.3");
@@ -338,15 +348,46 @@ Deno.test("ledger: landing guard follows ancestry for renamed and detached workt
   await cleanupFixtures();
 });
 
-Deno.test("ledger: the landed tree covers every product commit; lane releases are deferred", async () => {
-  // The merger stamps once on its landing union. A tree with unlanded commits
-  // may legitimately owe a release; judge by ancestry, never worktree branch
-  // name (the same tree must give the same result even when detached). The
-  // merger's explicit check:changelog-ledger remains strict after its commit.
+Deno.test("ledger: this tree owes nothing — owed is asserted UNCONDITIONALLY on HEAD ancestry", async () => {
+  // l3zgq (coord, 2026-11-11): this case used to assert owed === [] only when
+  // `isLandedHead(repoRoot)` — i.e. only when HEAD was already an ancestor of origin/main. That
+  // made the gate's verdict depend on a REMOTE REF rather than on the tree under test: an unlanded
+  // branch (or a worktree whose origin/main had not moved yet) skipped the assertion entirely and
+  // the same tree passed or failed depending on which refs happened to be fetched. The merger then
+  // could not tell a lane's unlanded release debt from a landed red, and the pre-push gate could
+  // not see what main would see.
+  //
+  // Now the assertion is unconditional and scoped to HEAD's own ancestry — the same rule the
+  // ledger's CLI has always used (anchor..HEAD, --no-merges). A lane that has not stamped its own
+  // release legitimately fails HERE, before it pushes, which is the point: the pre-push gate must
+  // see exactly what main will see. The set the walk classified as landed is printed, and every
+  // owed commit is proved to be an ANCESTOR of this tree, so an unlanded lane ref can never make a
+  // tree red and a reader can check the set instead of trusting it.
   const ledger = deriveLedger({ repo: repoRoot });
-  if (isLandedHead(repoRoot)) {
-    assertEquals(ledger.owed, [], `landed product commits owed entries: ${JSON.stringify(ledger.owed, null, 2)}`);
+  const headSha = gitOut(repoRoot, ["rev-parse", "HEAD"]).trim();
+  const landedSet = gitOut(repoRoot, ["rev-list", "--no-merges", `${ledger.anchor}..HEAD`]).trim().split("\n").filter(Boolean);
+  console.log(
+    `ledger[${headSha.slice(0, 12)}]: newest entry [${ledger.newest.version}] introduced by ` +
+    `${ledger.anchor.slice(0, 12)}; HEAD-ancestry walk classified ${landedSet.length} commit(s): ` +
+    `${ledger.owed.length} owed / ${ledger.notOwed} not owed`,
+  );
+  if (ledger.owed.length > 0) {
+    console.log(`ledger[${headSha.slice(0, 12)}]: OWED (every one an ancestor of this tree): ` +
+      JSON.stringify(ledger.owed.map((c: any) => ({ sha: c.sha.slice(0, 12), subject: String(c.subject).slice(0, 80), files: c.files.slice(0, 3) })), null, 2));
   }
+  // The walk must be ANCESTRY-PURE: every commit it classified is reachable from this tree's HEAD.
+  // This is the contract the old conditional violated in practice (the merger measured owed entries
+  // for commits that were not ancestors of the tree under test); asserting it here means a future
+  // derivation change that starts walking another ref is caught immediately, with the offending sha.
+  for (const commit of [...ledger.owed, ...[]] as any[]) {
+    const isAncestor = spawnSync("git", ["merge-base", "--is-ancestor", commit.sha, "HEAD"], { cwd: repoRoot });
+    assert(
+      isAncestor.status === 0,
+      `the ledger classified ${commit.sha.slice(0, 12)} (${String(commit.subject).slice(0, 60)}) as landed, but it is NOT an ancestor of ${headSha.slice(0, 12)}: the walk reached outside HEAD ancestry`,
+    );
+  }
+  assertEquals(landedSet.length, ledger.owed.length + ledger.notOwed, "the walk classifies every non-merge commit after the newest entry");
+  assertEquals(ledger.owed, [], `landed product commits owed entries: ${JSON.stringify(ledger.owed, null, 2)}`);
   assertEquals(ledger.surfaces.length, 6, `every surface is enumerated: ${JSON.stringify(ledger.surfaces)}`);
   for (const surface of ledger.surfaces) {
     assertEquals(
