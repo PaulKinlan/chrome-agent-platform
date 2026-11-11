@@ -1,5 +1,5 @@
 import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
-import { isMissingCdpContext, trackEmbeddedFrameContexts } from "../scripts/lib/embedded-frame-eval.ts";
+import { clampNextChangeMs, isMissingCdpContext, NEXT_CHANGE_MAX_MS, trackEmbeddedFrameContexts } from "../scripts/lib/embedded-frame-eval.ts";
 import { classifyReadyMarkerTimeout, measuredReadyLoad } from "../scripts/lib/serial-phase.mjs";
 
 // chrome-agent-platform-h6ow3: the readiness bound these cases declare is a DEADLINE, and a starved box
@@ -297,4 +297,44 @@ Deno.test("h6ow3: a slow box reds a FLAT 500ms readiness bound but not the load-
     assertEquals(answer.result, ownerDecision);
     assertEquals(answer.staleRetries, 0);
   } finally { derivedTracker.close(); }
+});
+
+// chrome-agent-platform-dctsa: the readiness waits are called as
+// `nextChange(deadline - Date.now())`, and the deadline can already have passed by the time a failing
+// branch reaches the call (the loop condition was true when evaluated, false when the branch runs).
+// Unclamped, that hands setTimeout a NEGATIVE delay: Deno/node schedule it (as 1 ms) but print a
+// PROCESS-LEVEL `TimeoutNegativeWarning`, so every real deadline expiry put a timer warning next to
+// the failure the caller was reporting — the reader then chases a timer bug that is not the cause.
+//
+// EVIDENCE IS DRIVEN, NOT PINNED TO SOURCE SHAPE (review FAIL, gpt-6-sol): the primary case spawns a
+// probe that runs the REAL tracker until its deadline is spent and captures the process's own stderr,
+// so what the test observes is the warning the runtime emits — not a helper's return value and not a
+// string that happens to appear in a file. Revert the clamp and this REDs (measured; see the bead).
+Deno.test("dctsa: a SPENT readiness deadline emits no negative-delay warning (driven through the real tracker)", async () => {
+  const output = await new Deno.Command(Deno.execPath(), {
+    args: ["run", "-A", "--no-check", "tests/fixtures/dctsa-spent-deadline-probe.ts"],
+    stdout: "piped",
+    stderr: "piped",
+  }).output();
+  const stdout = new TextDecoder().decode(output.stdout);
+  const stderr = new TextDecoder().decode(output.stderr);
+  assertEquals(output.code, 0, `the probe must exit cleanly (stdout=${stdout} stderr=${stderr})`);
+  assert(stdout.includes("DEADLINE_SPENT"), `the probe must actually spend the deadline, else this proves nothing: stdout=${stdout}`);
+  assert(
+    !stderr.includes("TimeoutNegativeWarning"),
+    `a spent readiness budget must not hand setTimeout a negative delay; the process said: ${stderr.trim() || "<nothing>"}`,
+  );
+});
+
+// The guard's BOUNDARIES are a separate, cheap case: what a spent/live/generous/unmeasurable budget
+// becomes. They document the contract; the case above is what proves the contract is wired in.
+Deno.test("dctsa: clamp boundaries (a spent budget waits 0 ms, a live one is honoured, a generous one is capped)", () => {
+  assertEquals(clampNextChangeMs(-5000), 0, "an exhausted budget waits 0 ms, never a negative delay");
+  assertEquals(clampNextChangeMs(-1), 0);
+  assertEquals(clampNextChangeMs(0), 0);
+  assertEquals(clampNextChangeMs(50), 50, "a live budget is honoured as given");
+  assertEquals(clampNextChangeMs(10_000), NEXT_CHANGE_MAX_MS, "the poll cap still bounds a generous budget");
+  assertEquals(clampNextChangeMs(Number.NaN), 0, "an unmeasurable budget must not become a NaN delay");
+  assertEquals(clampNextChangeMs(Number.POSITIVE_INFINITY), NEXT_CHANGE_MAX_MS, "+Infinity caps instead of busy-looping");
+  assertEquals(clampNextChangeMs(Number.NEGATIVE_INFINITY), 0);
 });

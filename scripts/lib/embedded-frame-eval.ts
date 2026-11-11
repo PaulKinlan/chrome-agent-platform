@@ -15,6 +15,26 @@ export function isMissingCdpContext(error: unknown): boolean {
   return STALE_CONTEXT.test(String(error instanceof Error ? error.message : error));
 }
 
+/** The longest a readiness wait parks between change notifications. */
+export const NEXT_CHANGE_MAX_MS = 120;
+
+/** Clamp a remaining-budget delay into a setTimeout-legal argument.
+ * dctsa: callers pass `deadline - Date.now()`, and the deadline can ALREADY have
+ * passed by the time a failing branch calls it (the loop condition was true when
+ * it was evaluated, false when the branch runs). A negative delay is legal for
+ * setTimeout but Deno/Node emit a process-level TimeoutNegativeWarning for it, so
+ * every real deadline expiry printed a timer warning next to the failure the
+ * caller was reporting — and the reader chases a timer bug that is not the cause.
+ * Clamping here (not at each call site) keeps one shape: a spent budget waits
+ * 0 ms. Pinned in tests/embedded-frame-eval.test.ts. */
+export function clampNextChangeMs(ms: number): number {
+  const n = Number(ms);
+  // NaN has no delay to honour (setTimeout(NaN) is 0 anyway, and a NaN delay is how a caller bug
+  // hides); +Infinity caps like any generous budget rather than collapsing to a spin.
+  if (Number.isNaN(n)) return 0;
+  return Math.max(0, Math.min(n, NEXT_CHANGE_MAX_MS));
+}
+
 export function trackEmbeddedFrameContexts(cdp: EmbeddedCdp, sessionId: string, opts: {
   /** Buffered context events captured BEFORE this subscription (the journey
    * harness's Cdp.executionContextEvents). q6ad9: the pooled Settings frame can
@@ -68,7 +88,7 @@ export function trackEmbeddedFrameContexts(cdp: EmbeddedCdp, sessionId: string, 
   };
   const nextChange = (ms: number): Promise<void> => new Promise((resolve) => {
     const finish = () => { clearTimeout(timer); waiters.delete(finish); resolve(); };
-    const timer = setTimeout(finish, Math.min(ms, 120));
+    const timer = setTimeout(finish, clampNextChangeMs(ms));
     waiters.add(finish);
   });
   const close = () => { stopCreated(); stopDestroyed(); stopCleared(); waiters.clear(); contexts.clear(); };
