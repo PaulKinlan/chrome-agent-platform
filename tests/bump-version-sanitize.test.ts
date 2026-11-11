@@ -37,6 +37,15 @@ async function bump(message: string, ...flags: string[]) {
     for (const f of ["bump-version.mjs", "sync-changelog.mjs"]) {
       await copyFile(path.join(REPO_SCRIPTS, f), path.join(dir, "scripts", f));
     }
+    // bump-version.mjs also imports the trailer matcher + sanitiser from
+    // scripts/lib/release-note.mjs (chrome-agent-platform-2h4j7), so the
+    // mirror carries that too — same module-resolution reasoning as the
+    // changelog filter below.
+    await mkdir(path.join(dir, "scripts", "lib"), { recursive: true });
+    await copyFile(
+      path.join(REPO_SCRIPTS, "lib", "release-note.mjs"),
+      path.join(dir, "scripts", "lib", "release-note.mjs"),
+    );
     // bump-version.mjs imports the changelog filter from the real tree, so the
     // mirror must carry it — without it the script dies on module resolution
     // before it can decide anything, and the test would read that as a bump
