@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.745] — 2026-11-11
+- Extension modules were reorganized so shared helpers live in one place; ids, credential redaction and hashing behave exactly as before.
+
 ## [0.3.744] — 2026-11-11
 - Emscripten package glue that reaches fetch, Worker or SharedWorker - including through wrappers, value aliases or static template-literal keys - is now refused at admission with a typed code instead of being silently admitted
 
