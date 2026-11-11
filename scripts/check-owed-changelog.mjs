@@ -121,15 +121,95 @@ function git(repo, args, options) {
   return execGit(repo, args, options);
 }
 
-/** The commit that introduced the newest changelog heading: the most recent commit
- *  where that heading string's occurrence count changed (pickaxe). Headings are
- *  unique and never deleted (check-changelog enforces uniqueness/descending), and a
- *  date-only edit does not change the `## [v]` count, so this is the introducer. */
+/** Tree text of `<rev>:CHANGELOG.md`, or null when that revision has no such path
+ *  (a history root, a partial fixture). */
+function changelogAt(repo, rev, run = git) {
+  try {
+    return run(repo, ["show", `${rev}:CHANGELOG.md`]);
+  } catch {
+    return null;
+  }
+}
+
+/** HEAD's FIRST-PARENT chain, newest first (one git call). The first-parent chain
+ *  is the mainline, so the commit where a heading entered the repository is
+ *  always on it — including when it entered inside a landing MERGE. */
+function firstParentChain(repo, run = git) {
+  return run(repo, ["rev-list", "--first-parent", "HEAD"])
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line !== "");
+}
+
+/** MERGE-AWARE fallback: the commit on HEAD's first-parent chain that INTRODUCED
+ *  the heading — the oldest chain commit that still contains it (equivalently: the
+ *  newest whose own predecessor does not).
+ *
+ *  WHY IT IS NEEDED (chrome-agent-platform-4smxg, 2026-11-11): git's pickaxe
+ *  (`-S`) never searches a merge commit's diff unless -m/-c/--cc is given, so a
+ *  release heading whose only home is a landing merge — a stamp folded into the
+ *  merge instead of its own commit — is invisible to the fast path below, and the
+ *  ledger fail-closed reded main. Adding `-m` is NOT the fix: it reports the merge
+ *  once per parent diff (so `-n 1` returns duplicate lines) and matches a
+ *  parent-relative ADDITION anywhere, so it also "finds" a older heading that an
+ *  already-released parent introduced — verified on the awaom landing, where
+ *  `git log -m -S'## [0.3.740]' -n 1` returns 8e5550167 although 99a2f8748 is
+ *  the real introducer, which would have made a merged tree pass with owed > 0.
+ *
+ *  A heading is never removed (check-changelog.mjs enforces uniqueness and
+ *  descending order), so "contains the heading" is MONOTONE along the chain: true
+ *  for the newest run of commits, false for everything older. A binary search is
+ *  therefore exact, deterministic and pickaxe-independent — ~log2(2290) = 12
+ *  CHANGELOG reads in this repo, against 1219 for a linear scan of the chain. */
+export function firstParentIntroducer(repo, version, run = git) {
+  const needle = `## [${version}]`;
+  const chain = firstParentChain(repo, run);
+  const has = (rev) => {
+    const text = changelogAt(repo, rev, run);
+    return text !== null && text.includes(needle);
+  };
+  if (chain.length === 0 || !has(chain[0])) return null; // not in HEAD's tree
+  let lo = 0; // newest … known to contain the heading
+  let hi = chain.length - 1;
+  let introducer = -1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (has(chain[mid])) {
+      introducer = mid; // keep looking older: the LAST containing commit introduced it
+      lo = mid + 1;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  return introducer >= 0 ? chain[introducer] : null;
+}
+
+/** The commit that introduced the newest changelog heading. Fast path: the most
+ *  recent commit where that heading string's occurrence count changed (pickaxe).
+ *  Headings are unique and never deleted (check-changelog enforces
+ *  uniqueness/descending), and a date-only edit does not change the `## [v]`
+ *  count, so this is the introducer. It cannot see the inside of a merge, so a
+ *  pickaxe miss falls back to the merge-aware first-parent walk above. */
 export function bumpCommitFor(repo, version, run = git) {
-  const out = run(repo, [
+  const picked = run(repo, [
     "log", `-S## [${version}]`, "--format=%H", "-n", "1", "--", "CHANGELOG.md",
-  ]).trim();
-  return out || null;
+  ])
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line !== "");
+  if (picked.length > 0) return picked[0];
+  return firstParentIntroducer(repo, version, run);
+}
+
+/** A truncated clone can genuinely lack the introducing commit; say so only when
+ *  it is true (the old message blamed shallow history for a pickaxe-semantics
+ *  defect, which sent readers to clone depths). */
+function isShallowRepo(repo, run = git) {
+  try {
+    return run(repo, ["rev-parse", "--is-shallow-repository"]).trim() === "true";
+  } catch {
+    return false;
+  }
 }
 
 // Every surface where this repo declares its version — the release-identity
@@ -218,8 +298,12 @@ export function deriveLedger({ repo, run = git }) {
   const anchor = bumpCommitFor(repo, newest.version, run);
   if (!anchor) {
     throw new Error(
-      `cannot find the commit that introduced "## [${newest.version}]" — ` +
-      `history may be shallow; the ledger fails closed rather than guess`,
+      `cannot find the commit that introduced "## [${newest.version}]" — no commit on ` +
+      `HEAD's first-parent chain (pickaxe plus tree walk) contains that heading` +
+      (isShallowRepo(repo, run)
+        ? `; this is a SHALLOW clone, so the commit may simply not be fetched (git fetch --unshallow)`
+        : ``) +
+      `; the ledger fails closed rather than guess`,
     );
   }
 

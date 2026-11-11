@@ -126,6 +126,15 @@ git checkout HEAD -- .beads/issues.jsonl
 # documented in docs/BEADS-EXPORT-DIVERGENCE.md; do not bypass all hooks.
 node scripts/check-beads-export-divergence.mjs
 # 3a. STAMP ONCE after applying all candidates, before the landing commit.
+# THE STAMP IS ITS OWN COMMIT — never fold it into the landing merge (chrome-agent-platform-4smxg).
+# The owed-changelog ledger anchors on the commit that INTRODUCED the newest `## [x.y.z]`
+# heading, and git's pickaxe does not search merge commits, so a heading whose only home is a merge
+# is the shape that reded main on 2026-11-11. The resolver is merge-aware now
+# (scripts/check-owed-changelog.mjs firstParentIntroducer), but the separate stamp commit stays the
+# documented shape: it keeps the release identity
+# auditable as one commit, and it keeps every other history tool that is not merge-aware working.
+# A tree-keyed gate verdict is ALSO unsound for this history-dependent suite: the SAME tree passes
+# as "merge + separate stamp commit" and fails as "one merge commit" (p681a).
 # Pass each candidate SHA with a Release-note trailer; the command reads trailers
 # from those commits, deduplicates their user-facing bullets and writes ONE new
 # version/changelog/About/inventory stamp on the union. Do not pass merge commits
