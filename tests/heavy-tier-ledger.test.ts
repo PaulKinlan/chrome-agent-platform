@@ -130,6 +130,76 @@ Deno.test("1lvay (c): the mega sweep exists, records its verdict, and files a P1
   assertEquals(/writeReceipt\(/.test(src), false, "the sweep must not emit a heavy-tier receipt");
 });
 
+import { recordSweepOutcomes } from "../scripts/heavy-mega-sweep.ts";
+
+Deno.test("mixed case: kat FAIL + mega PASS records mega PASS and kat FAIL, never one aggregate", () => {
+  const writtenMega: Array<{ sha: string; result: string; suites: unknown[]; detail: unknown }> = [];
+  const writtenTiers: Record<string, { sha: string; result: string; detail: unknown }> = {};
+
+  const writers = {
+    // deno-lint-ignore no-explicit-any
+    writeMegaRecord: (rec: any) => {
+      writtenMega.push(rec);
+      return "mega";
+    },
+    // deno-lint-ignore no-explicit-any
+    writeTierRecord: (id: string, rec: any) => {
+      writtenTiers[id] = rec;
+      return id;
+    },
+  };
+
+  const megaResults = [
+    { file: "tests/python-documents-bundle-3p3e11.test.ts", rc: 0, secs: 1416 },
+    { file: "tests/wasm-sync-workspace.test.ts", rc: 0, secs: 894 },
+  ];
+  const katResult = {
+    file: "kat-runner (kat population)",
+    rc: 1, // kat FAIL
+    secs: 30,
+  };
+
+  const outcomes = recordSweepOutcomes({
+    sha: "c5716c7415e293e48a9c60f28ce925afb53baf53",
+    tiers: ["mega", "kat"],
+    megaResults,
+    katResult,
+    writers,
+  });
+
+  // 1. Mega passed: its tier record must be recorded PASS, not contaminated by kat FAIL
+  assertEquals(outcomes.mega?.result, "pass");
+  assertEquals(writtenMega.length, 1);
+  assertEquals(writtenMega[0].result, "pass", "mega passed and must be recorded PASS");
+  assertEquals(writtenMega[0].suites.length, 2, "mega suites must contain only mega suites");
+
+  // 2. Kat failed: its tier record must be recorded FAIL
+  assertEquals(outcomes.kat?.result, "fail");
+  assertEquals(writtenTiers["kat-harnesses"]?.result, "fail", "kat failed and must be recorded FAIL");
+
+  // 3. Partial coverage honesty: when kat passes (rc=0), without running 'named', kat-harnesses
+  // is partial, never silently credited as PASS for the whole kat+named population.
+  const writtenMega2: any[] = [];
+  const writtenTiers2: Record<string, any> = {};
+  recordSweepOutcomes({
+    sha: "c5716c7415e293e48a9c60f28ce925afb53baf53",
+    tiers: ["mega", "kat"],
+    megaResults,
+    katResult: { file: "kat-runner (kat population)", rc: 0, secs: 20 },
+    writers: {
+      writeMegaRecord: (rec: any) => { writtenMega2.push(rec); return "mega"; },
+      writeTierRecord: (id: string, rec: any) => { writtenTiers2[id] = rec; return id; },
+    },
+  });
+  assertEquals(writtenMega2[0].result, "pass");
+  assertEquals(writtenTiers2["kat-harnesses"]?.result, "partial", "kat passing alone must record partial, not PASS");
+  // deno-lint-ignore no-explicit-any
+  const katDetail = writtenTiers2["kat-harnesses"]?.detail as any;
+  assertEquals(katDetail?.subPopulation, "kat");
+  assertEquals(katDetail?.coveredClasses, ["kat"]);
+  assertEquals(katDetail?.unrunClasses, ["named"]);
+});
+
 // ── 1lvay (d), re-pointed at the KAT population (coord, 2026-11-11) ────────────────────────────────
 // The invisible tier is not heavy: it is scripts/lib/harness-registry.ts, where 72 `kat` + 14 `named`
 // harnesses sit and `npm test` runs none of them. "Absent from the ledger" is exactly how they went

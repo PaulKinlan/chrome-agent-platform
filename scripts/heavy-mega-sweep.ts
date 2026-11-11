@@ -46,7 +46,7 @@ function runKatPopulation(): { file: string; rc: number; secs: number } {
   });
   const secs = Math.round((Date.now() - t0) / 1000);
   const rc = child.error ? 124 : (child.status ?? 1);
-  return { file: "kat-runner (kat+named population)", rc, secs };
+  return { file: "kat-runner (kat population)", rc, secs };
 }
 
 function runSuite(file: string): { file: string; rc: number; secs: number } {
@@ -102,6 +102,105 @@ function fileP1({ sha, failed }: { sha: string; failed: Array<{ file: string; se
   return { created: true, id };
 }
 
+export type SuiteRunResult = { file: string; rc: number; secs: number };
+
+export type TierOutcome = {
+  tier: "mega" | "kat";
+  result: "pass" | "fail" | "environmental" | "partial";
+  suites: SuiteRunResult[];
+  failed: SuiteRunResult[];
+  subPopulation?: string;
+};
+
+export function evaluateMegaRun(suites: SuiteRunResult[]): TierOutcome {
+  const failed = suites.filter((r) => r.rc !== 0 && r.rc !== ENVIRONMENTAL_REFUSAL_EXIT);
+  const envOnly = suites.length > 0 && failed.length === 0 && suites.some((r) => r.rc === ENVIRONMENTAL_REFUSAL_EXIT);
+  const result = failed.length ? "fail" : envOnly ? "environmental" : "pass";
+  return { tier: "mega", result, suites, failed };
+}
+
+export function evaluateKatRun(
+  katResult: SuiteRunResult | null,
+  options?: { namedRan?: boolean },
+): TierOutcome {
+  if (!katResult) {
+    return { tier: "kat", result: "fail", suites: [], failed: [], subPopulation: "none" };
+  }
+  const failed = katResult.rc !== 0 && katResult.rc !== ENVIRONMENTAL_REFUSAL_EXIT ? [katResult] : [];
+  const isEnv = katResult.rc === ENVIRONMENTAL_REFUSAL_EXIT;
+  const namedRan = Boolean(options?.namedRan);
+  // kat-runner only executes registry class 'kat' (72 harnesses). kat-harnesses covers kat+named (86 harnesses).
+  // If named did not run, passing kat is partial coverage — never credit the unrun named class as PASS.
+  const result = failed.length ? "fail" : isEnv ? "environmental" : namedRan ? "pass" : "partial";
+  const subPopulation = namedRan ? "kat+named" : "kat";
+  return {
+    tier: "kat",
+    result,
+    suites: [katResult],
+    failed,
+    subPopulation,
+  };
+}
+
+export function recordSweepOutcomes({
+  sha,
+  tiers,
+  megaResults = [],
+  katResult = null,
+  now = Date.now(),
+  writers = { writeMegaRecord, writeTierRecord },
+  options = {},
+}: {
+  sha: string;
+  tiers: string[];
+  megaResults?: SuiteRunResult[];
+  katResult?: SuiteRunResult | null;
+  now?: number;
+  writers?: {
+    writeMegaRecord: typeof writeMegaRecord;
+    writeTierRecord: typeof writeTierRecord;
+  };
+  options?: { namedRan?: boolean };
+}): {
+  mega?: TierOutcome;
+  kat?: TierOutcome;
+} {
+  const outcomes: {
+    mega?: TierOutcome;
+    kat?: TierOutcome;
+  } = {};
+
+  if (tiers.includes("mega")) {
+    const mega = evaluateMegaRun(megaResults);
+    outcomes.mega = mega;
+    writers.writeMegaRecord({
+      sha,
+      result: mega.result as "pass" | "fail" | "environmental",
+      at: now,
+      suites: mega.suites,
+      detail: { tiers: ["mega"] },
+    });
+  }
+
+  if (tiers.includes("kat")) {
+    const kat = evaluateKatRun(katResult, options);
+    outcomes.kat = kat;
+    writers.writeTierRecord("kat-harnesses", {
+      sha,
+      result: kat.result as "pass" | "fail" | "environmental",
+      at: now,
+      detail: {
+        subPopulation: kat.subPopulation,
+        coveredClasses: kat.subPopulation === "kat+named" ? ["kat", "named"] : ["kat"],
+        unrunClasses: kat.subPopulation === "kat+named" ? [] : ["named"],
+        suites: kat.suites,
+      },
+    });
+  }
+
+  return outcomes;
+}
+
 function main() {
   const dry = Deno.args.includes("--dry-run");
   const tierArg = Deno.args.find((a) => a.startsWith("--tier="))?.split("=")[1] ?? "mega";
@@ -121,30 +220,38 @@ function main() {
     if (tiers.includes("kat")) console.log("  would run deno run -A scripts/kat-runner.ts (every registry KAT)");
     return 0;
   }
-  const results: Array<{ file: string; rc: number; secs: number }> = [];
-  if (tiers.includes("mega")) results.push(...MEGA_HEAVY_FILES.map((f) => runSuite(f)));
-  if (tiers.includes("kat")) results.push(runKatPopulation());
-  const failed = results.filter((r) => r.rc !== 0 && r.rc !== ENVIRONMENTAL_REFUSAL_EXIT);
-  const envOnly = results.length > 0 && failed.length === 0 && results.some((r) => r.rc === ENVIRONMENTAL_REFUSAL_EXIT);
-  // A product red is a red even on a stolen box; only a run that reported nothing usable is environmental.
-  const result = failed.length ? "fail" : envOnly ? "environmental" : "pass";
-  const suites = results.map((r): { file: string; rc: number; secs: number } => ({ file: r.file, rc: r.rc, secs: r.secs }));
-  if (tiers.includes("mega")) {
-    writeMegaRecord({ sha, result, at: Date.now(), suites, detail: { tiers } });
-  }
-  // The KAT population gets its OWN record: the landing gate reads it to write the ledger line, and a
-  // mega sweep must never be able to stand in for a KAT run (different population, different failure).
-  if (tiers.includes("kat")) {
-    const kat = results.find((r) => r.file.startsWith("kat-runner"));
-    writeTierRecord("kat-harnesses", { sha, result: kat && kat.rc === 0 ? "pass" : "fail", at: Date.now(), detail: suites });
-  }
-  console.log(`heavy-mega-sweep: ${result.toUpperCase()} (${results.map((r) => `${r.file} rc=${r.rc} ${r.secs}s`).join("; ")})`);
-  if (result === "fail") {
-    const filed = fileP1({ sha, failed });
+  const megaResults: Array<{ file: string; rc: number; secs: number }> = [];
+  let katResult: { file: string; rc: number; secs: number } | null = null;
+  if (tiers.includes("mega")) megaResults.push(...MEGA_HEAVY_FILES.map((f) => runSuite(f)));
+  if (tiers.includes("kat")) katResult = runKatPopulation();
+
+  const outcomes = recordSweepOutcomes({ sha, tiers, megaResults, katResult });
+
+  const allFailed: SuiteRunResult[] = [
+    ...(outcomes.mega?.failed ?? []),
+    ...(outcomes.kat?.failed ?? []),
+  ];
+  const allSuites: SuiteRunResult[] = [
+    ...(outcomes.mega?.suites ?? []),
+    ...(outcomes.kat?.suites ?? []),
+  ];
+  const anyEnvironmental =
+    (outcomes.mega?.result === "environmental") ||
+    (outcomes.kat?.result === "environmental");
+
+  const summary = [
+    outcomes.mega ? `mega=${outcomes.mega.result}` : null,
+    outcomes.kat ? `kat=${outcomes.kat.result}(${outcomes.kat.subPopulation})` : null,
+  ].filter(Boolean).join(" ");
+
+  console.log(`heavy-mega-sweep: ${summary} (${allSuites.map((r) => `${r.file} rc=${r.rc} ${r.secs}s`).join("; ")})`);
+
+  if (allFailed.length > 0) {
+    const filed = fileP1({ sha, failed: allFailed });
     console.log(`heavy-mega-sweep: ${filed.created ? "filed P1" : "commented on existing P1"} ${filed.id ?? "(id unknown)"}`);
     return 1;
   }
-  if (result === "environmental") {
+  if (anyEnvironmental) {
     console.error("heavy-mega-sweep: ENVIRONMENTAL REFUSAL — the box could not measure these suites; no P1 filed");
     return ENVIRONMENTAL_REFUSAL_EXIT;
   }
