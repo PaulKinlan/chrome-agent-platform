@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.3.741] — 2026-11-11
+- owner approval cards for agent provider changes now show the exact provider, resolved base URL and model with a key-carry warning; models cannot point agent traffic at loopback, private or metadata hosts - including through a redirect - and a provider change that cannot be displayed is refused outright.
+- Provider-change approvals can no longer be staged or approved without a resolved destination, and the approval card stays non-interactive until the exact change (and its destination host) is loaded — an owner can never consent to an undisclosed host.
+- A provider-change approval reopened from another tab or a restored thread can no longer be approved without the exact destination being shown first — the card waits for the change detail everywhere, not just in the live run.
+
 ## [0.3.740] — 2026-11-11
 - Security and trust batch: every path that carries agent or tool traffic is now bounded and origin-fenced end to end — script, Python and MCP fetches read with a hard byte ceiling, refuse redirects that leave the configured origin, and never echo request URLs, keys or free-form error text back into the transcript; untrusted MCP schemas and document attachments are work-budgeted before they can compile or scan without limit; the dispatcher classifies a sender before it replies; and thread export, skill import and memory paths share one canonical redaction rule. Also: a faster side-panel boot, and refusals that name what is missing (a permission, a grant, an endpoint) instead of failing silently.
 

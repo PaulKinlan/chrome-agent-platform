@@ -6,7 +6,7 @@ import {
   getModel,
   getModelForAgent,
   getProviderConfig,
-  resolveModelFromConfig, withEffectiveBaseURL, developerFeaturesOn, OUTBOUND_HOSTS } from "../lib/provider.js";
+  resolveModelFromConfig, withEffectiveBaseURL, effectiveBaseURL, developerFeaturesOn, OUTBOUND_HOSTS } from "../lib/provider.js";
 import {
   NotificationRegistry,
   handleNotificationClick,
@@ -1293,7 +1293,7 @@ import { tool, generateText } from "ai";
 import { z } from "zod";
 import { setRunFence, clearRunFence, runAborted } from "../lib/run-fence.js";
 import { setRunContext, clearRunContext, currentRunContext } from "../lib/run-context.js";
-import { checkFetchPolicy, extractFetchHosts } from "../lib/fetch-policy.js";
+import { checkFetchPolicy, checkFetchTarget, extractFetchHosts } from "../lib/fetch-policy.js";
 import { readResponseTextBounded } from "../lib/fetch-body-bound.js";
 import {
   PYTHON_NETWORK_GRANTS_KEY,
@@ -6066,9 +6066,20 @@ async function requireOwnerApproval(context, action, target, payload, detail = u
   if (!pending.deduped) securityApprovalEvent("requested", action, targetRef);
   // Stage the private diff detail for the owner's card (model path only — the
   // owner-direct / Settings paths never publish an in-context card). Best
-  // effort: a failure here only falls the card back to its opaque form.
-  if (stagedDetail && context?.principal === "model") {
-    stageApprovalDetail(ownerApprovalStore, pending.approvalId, stagedDetail);
+  // effort for the edit actions: a failure there only falls the card back to
+  // its opaque form. NOT best effort for named-agent.set-provider
+  // (chrome-agent-platform-nat8y): a model-authored provider/host change whose
+  // detail cannot be staged is REFUSED — the owner must never be asked to
+  // approve a credential destination they cannot see, which is the exact
+  // degradation awaom exists to remove.
+  if (context?.principal === "model" && (stagedDetail || action === "named-agent.set-provider")) {
+    const staged = stagedDetail
+      ? stageApprovalDetail(ownerApprovalStore, pending.approvalId, stagedDetail)
+      : { ok: false, error: "no staged detail supplied" };
+    if (!staged.ok && action === "named-agent.set-provider") {
+      resolvePendingApproval(ownerApprovalStore, pending.approvalId, false);
+      return { ok: false, error: "This provider change could not be shown for approval.", approvalDenied: true, action };
+    }
   }
 
   // A model-originated mutation stays inside THIS tool invocation. Publish its
@@ -6599,6 +6610,135 @@ function namedBoundMutationPayload(request, existing) {
     canonicalField("request", request),
     canonicalField("existing", namedExistingPayload(existing)),
   );
+}
+
+// ── staged provider-change detail for the owner card (chrome-agent-platform-awaom) ──
+// A model can author a named agent's provider baseURL via set_agent_provider,
+// and a blank same-provider save CARRIES THE AGENT'S EXISTING STORED KEY onto
+// that config. The approval card must therefore show what the owner is really
+// approving — the exact old vs new host plus the key-carry marker — or the
+// approval is a rubber stamp on an opaque ref. Both sides render as plain text
+// lines for the card's diff core. The apiKey VALUE never appears here (or
+// anywhere on the card): only presence markers and the carry-forward flag.
+function providerChangeDetailText(provider, keyLine) {
+  if (!provider) return "provider: (inherit the global default)\n";
+  // nat8y: the card names the endpoint the run will ACTUALLY reach — an empty
+  // stored baseURL renders as the catalog-resolved default, not a sentence.
+  // Round-4: a provider with NO network destination by design (demo) says so
+  // honestly; the placeholder below is unreachable for a proposed change
+  // (staging refuses it) and remains only as honest old-side display.
+  const storedBase = singleLineCardValue(provider.baseURL);
+  const resolvedBase = singleLineCardValue(effectiveBaseURL(provider));
+  const baseLine = storedBase
+    ? storedBase
+    : resolvedBase
+      ? `${resolvedBase} (resolved — the ${singleLineCardValue(provider.provider)} preset's default endpoint)`
+      : provider.provider === "demo"
+        ? "none (the demo provider makes no network calls)"
+        : "(no endpoint could be resolved for this provider)";
+  return [
+    `provider: ${singleLineCardValue(provider.provider)}`,
+    `baseURL: ${baseLine}`,
+    `model: ${singleLineCardValue(provider.model) || "(the provider's default model)"}`,
+    `apiKey: ${keyLine}`,
+    "",
+  ].join("\n");
+}
+
+// snjrg: every value interpolated into the card is rendered as ONE line. The
+// WHATWG URL parser strips ASCII tab/newline, so a model-authored value with an
+// embedded newline would otherwise forge extra card lines (a fake key-presence
+// marker) while the request still resolves to the model's host. Collapsing
+// control characters here keeps the owner-facing text trustworthy even for
+// values that predate the route-level refusal below (e.g. an owner-saved
+// baseURL carrying a newline already in the stored record).
+function singleLineCardValue(value) {
+  // eslint-disable-next-line no-control-regex
+  return String(value ?? "").replace(/[\u0000-\u001f\u007f-\u009f]+/g, " ").trim();
+}
+
+// lhbh8: fence the MODEL-authored provider destination. The set-provider route
+// lets a model choose the host the agent's provider traffic — with its
+// PRESERVED STORED KEY — will be sent to, so the model path pays the same SSRF
+// predicate every host-bridged fetch pays (checkFetchTarget: parses, http(s),
+// never loopback/private/link-local), plus a control-character refusal (a
+// newline both forges card lines and mutates between validation and dial).
+// The fence covers the RESOLVED endpoint: a preset with an empty baseURL (e.g.
+// ollama → http://localhost:11434/v1) is still a model-chosen destination.
+// Owner saves are NOT fenced — the loopback presets are the owner's own call
+// in Settings; this is principal-scoped, not global.
+function modelAuthoredBaseURLRefusal(normalized, principal) {
+  if (principal !== "model" || normalized == null) return null;
+  const raw = String(normalized.baseURL ?? "");
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u001f\u007f-\u009f]/.test(raw)) {
+    return "A model-authored provider baseURL may not contain control characters (newlines/tabs).";
+  }
+  const resolved = raw || effectiveBaseURL(normalized);
+  if (!resolved) return null; // e.g. the demo provider: no network destination to fence
+  const checked = checkFetchTarget(resolved);
+  if (!checked.ok) {
+    return `A model-authored provider baseURL must be a clean http(s) URL to a public host — refused (${checked.error}). ` +
+      "Private, loopback and link-local destinations are owner-only: set them in Settings.";
+  }
+  return null;
+}
+
+function providerChangeStagedDetail(existing, normalized, slug, principal) {
+  const storedKey = typeof existing?.provider?.apiKey === "string" ? existing.provider.apiKey : "";
+  const newKey = typeof normalized?.apiKey === "string" ? normalized.apiKey : "";
+  const carried = Boolean(newKey && storedKey && newKey === storedKey);
+  const oldText = providerChangeDetailText(
+    existing?.provider ?? null,
+    storedKey ? "a stored key is attached (value never shown)" : "no key attached",
+  );
+  const newText = providerChangeDetailText(
+    normalized,
+    normalized == null
+      ? ""
+      : carried
+        ? "the agent's EXISTING stored key is carried to this host (value never shown)"
+        : newKey
+          ? "a new key is attached (value never shown)"
+          : "no key attached",
+  );
+  const summary = lineDiffSummary(oldText, newText);
+  const name = typeof existing?.name === "string" && existing.name ? existing.name : String(slug || "agent");
+  // awaom round-4 (coord finding a): the approval must NEVER stage without a
+  // resolved destination the owner can see. Resolved per case:
+  //   - clearing the override (config null) reverts to the OWNER's global
+  //     provider — it cannot introduce a destination, so the sentinel
+  //     "inherit-global-default" is the whole disclosure;
+  //   - the demo provider makes NO network calls — there is no destination to
+  //     disclose, and the sentinel says exactly that;
+  //   - every network provider must resolve to a concrete endpoint
+  //     (effectiveBaseURL: stored baseURL, else the preset's catalogue
+  //     default). openai-compatible with no baseURL resolves to NOTHING, and a
+  //     card that cannot name its destination is REFUSED — producer side via
+  //     this null (requireOwnerApproval fails closed on it), validator side
+  //     via boundStagedApprovalDetail refusing a missing/empty field.
+  let resolvedDestination;
+  if (normalized == null) resolvedDestination = "inherit-global-default";
+  else if (normalized.provider === "demo") resolvedDestination = "demo-no-network";
+  else {
+    const resolved = effectiveBaseURL(normalized);
+    if (!resolved) return null;
+    resolvedDestination = resolved;
+  }
+  return {
+    kind: "named-agent.set-provider",
+    name,
+    oldContent: oldText,
+    newContent: newText,
+    added: summary.added,
+    removed: summary.removed,
+    oldLabel: `${name} provider (current)`,
+    newLabel: `${name} provider (proposed)`,
+    resolvedDestination,
+    // WHO authored this change: the model principal (set_agent_provider) is the
+    // case the card must name; owner surfaces never stage (owner-direct path).
+    provenance: principal === "model" ? "model" : String(principal ?? ""),
+  };
 }
 
 /** An artifact's identity: enough to reference, open or render it, with none of
@@ -9400,12 +9540,20 @@ const handlers = mergeRouteMaps(
     // Set (or clear) a named agent's provider override. `config` is a COMPLETE
     // provider-specific config (the apiKey flows ONLY from the Settings UI input
     // → storage → model resolution; never surfaced back). Returns the REDACTED
-    // agent (no apiKey).
+    // agent (no apiKey). The apiKey does enter the approval PAYLOAD below, but
+    // that payload is digest-only (payloadDigest → HMAC row): it is never
+    // rendered on the card and never returned to the model. The card shows the
+    // key's PRESENCE via the staged provider-change detail (awaom).
     // KEY PRESERVATION: run BEFORE normalizeAgentProvider, which would coerce an
     // absent apiKey (undefined) to "" and destroy the blank-save signal.
     config = await preserveExistingProviderKey(id, config);
     const normalized = config == null ? null : normalizeAgentProvider(config);
     if (config != null && normalized == null) return { ok: false, error: "invalid provider configuration" };
+    // lhbh8/snjrg: a model-authored destination is fenced BEFORE any approval
+    // card is staged — a refused change never asks the owner to rubber-stamp
+    // a loopback/private/metadata host or a newline-forged card.
+    const modelRefusal = modelAuthoredBaseURLRefusal(normalized, context?.principal);
+    if (modelRefusal) return { ok: false, error: modelRefusal };
     const r = await setNamedAgentProvider(id, normalized, {
       gateBeforeMutation: async ({ slug, existing }) => {
         let request;
@@ -9418,11 +9566,17 @@ const handlers = mergeRouteMaps(
             ]);
           request = namedBoundMutationPayload(request, existing);
         } catch { return { ok: false, error: "provider payload is not approvable" }; }
+        // Stage the provider-change detail (old vs new host + key-carry marker,
+        // NEVER the key value) so the owner's card shows the exact host being
+        // approved, with its model-authored provenance (chrome-agent-platform-awaom).
+        const stagedDetail = providerChangeStagedDetail(existing, normalized, slug, context?.principal);
         return await requireOwnerApproval(
           context,
           "named-agent.set-provider",
           canonicalOperationTarget("provider", { id: slug }),
           request,
+          undefined,
+          stagedDetail,
         );
       },
     });

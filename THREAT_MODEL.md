@@ -363,7 +363,17 @@ consequences are carried by the matching register entry where one exists.
   the extension at loopback/metadata hosts, and the request to such a target is never issued. Because a
   browser service worker cannot read `Location` on a manual redirect, no redirect at all is followed
   inside the extension: the affected page is skipped and the honest "N of M pages" window reports it.
-  **Tests:** `tests/cap-fetch-deny.test.ts`, `tests/skill-import-ssrf.test.ts`, and the real-loopback-server
+  The provider transports hold the same rule (37fzt): every language-model adapter installs one logging
+  fetch (`extension/lib/models/openai-model.js#makeLoggingFetch`) which routes every request through
+  `extension/lib/provider-redirect-guard.js#fetchProviderWithGuardedRedirects` — `redirect: "manual"`, an
+  `opaqueredirect` refused fail-closed, every inspectable `Location` hop re-validated with `checkFetchTarget`
+  BEFORE its request is issued with a bounded hop count, and credential headers (`Authorization`, `Cookie`,
+  `x-api-key`, `x-goog-api-key`, `Proxy-Authorization`) stripped on a cross-origin hop exactly as the browser
+  strips them on a redirect it follows itself. The CONFIGURED destination is not re-validated there: it is
+  either owner-configured (the loopback ollama/lm-studio presets keep working) or model-authored and fenced
+  pre-dial by `extension/background/service-worker.js#modelAuthoredBaseURLRefusal`, which refuses a
+  loopback/private/link-local/metadata baseURL before any approval card is staged.
+  **Tests:** `tests/cap-fetch-deny.test.ts`, `tests/skill-import-ssrf.test.ts`, `tests/provider-redirect-guard.test.ts`, and the real-loopback-server
   proof in `tests/site-docs-fallback.test.ts` ("15zzc: an enrolled origin whose docs 302 to another host never
   causes a request to that host"); live SSRF
   probe at `scripts/security-suite.ts:389`. **Residual, stated in the source:** DNS-to-private/rebinding of a public hostname

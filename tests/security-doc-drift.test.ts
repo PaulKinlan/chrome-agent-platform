@@ -220,6 +220,9 @@ function assertLiveRouteCitations(model: string, pure: string, worker: string,
     ["extension/lib/owner-approval.js", read("extension/lib/owner-approval.js")],
     ["extension/lib/acp-model-host.js", read("extension/lib/acp-model-host.js")],
     ["extension/lib/emscripten-host.js", read("extension/lib/emscripten-host.js")],
+    // 37fzt: the provider transport's T6 redirect guard and its adapter chokepoint.
+    ["extension/lib/provider-redirect-guard.js", read("extension/lib/provider-redirect-guard.js")],
+    ["extension/lib/models/openai-model.js", read("extension/lib/models/openai-model.js")],
     // vuhqh: files whose enforcement CALLS are censused below — registered here so the
     // same fail-closed rule applies (a census file that vanishes fails the gate).
     ["extension/lib/runtime-context.js", read("extension/lib/runtime-context.js")],
@@ -270,6 +273,10 @@ function assertLiveRouteCitations(model: string, pure: string, worker: string,
   const skillDiscover = ["extension/lib/skill-import.js", "discoverRepoSkillsAndCommands"];
   const skillBatch = ["extension/lib/skill-import.js", "installBatchSkillsAndCommands"];
   const scriptHostFetch = ["extension/lib/script-host.js", "runFetch"];
+  // 37fzt: provider-transport redirect guard anchors (T6).
+  const providerRedirectGuard = ["extension/lib/provider-redirect-guard.js", "fetchProviderWithGuardedRedirects"];
+  const providerLoggingFetch = ["extension/lib/models/openai-model.js", "makeLoggingFetch"];
+  const providerPreDialFence = ["extension/background/service-worker.js", "modelAuthoredBaseURLRefusal"];
   const mcpNormalize = ["extension/lib/mcp-config.js", "normalizeMcpServerList"];
   const mcpMount = ["extension/lib/mcp-client-core.js", "mountRemoteMcpServers"];
   const mcpGuardedFetch = ["extension/lib/mcp-client-core.js", "createGuardedMcpFetch"];
@@ -303,7 +310,8 @@ function assertLiveRouteCitations(model: string, pure: string, worker: string,
     [section(model, "### T4.", "### T5."), [allowlist, namedTools, exportFolder]],
     [section(model, "### T6.", "### T7."), [fetchRoute, pythonFetch, fetchPolicyPrivate, fetchPolicyCheck,
       fetchPolicyExtract, pythonNetwork, enclaveProxyRoutes, skillUrl, skillRedirects, skillGitHub,
-      skillDiscover, skillBatch, scriptHostFetch, swRoute("skill.import")]],
+      skillDiscover, skillBatch, scriptHostFetch, swRoute("skill.import"),
+      providerRedirectGuard, providerLoggingFetch, providerPreDialFence]],
     [section(model, "### T13.", "### T14."), [hooksSubscribe, backgroundSet, swRoute("dispatchHook")]],
     [section(model, "### T14.", "### T15."), [mcpNormalize, mcpMount, mcpGuardedFetch, mcpGuardedBinding]],
     [section(model, "### T19.", "## 6."), [swRoute("browser.destructive-action"), destructiveActions]],
