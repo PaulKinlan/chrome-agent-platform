@@ -645,6 +645,12 @@ and each names the executable check that would catch a regression.
   than bypassed — an absent broker is not permission to bypass the broker. All three boundaries are
   mechanised in `tests/scripts.test.ts` (nv5lt) — dropping any precondition, weakening the
   route-less-runtime guard, or adding a second direct site, breaks this invariant.
+  Since ibdr4 the fallback ALSO pays the shared private-address deny list
+  (`extension/lib/fetch-policy.js#isPrivateOrLoopbackHost`, applied in `extension/lib/script-host.js#validateUrl`
+  before either route): a loopback / RFC1918 / link-local / metadata destination is refused with the fixed
+  `private_host_refused` code and a static hint before any request is issued, so the sanctioned site is no
+  longer the one unpolicied egress; pinned in `tests/script-host.test.ts` (ibdr4 — removing the predicate
+  reds the pin).
 - **INV-6 — A credential-shaped key never reaches a prompt, a log, a receipt or an error
   string.** `extension/lib/pure-redact.js#SECRET_KEY_RE` classifies the credential-shaped keys that
   `extension/lib/pure-redact.js#redactSecrets` strips recursively (`redactSecretText` and
