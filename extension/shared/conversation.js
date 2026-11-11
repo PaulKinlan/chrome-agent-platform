@@ -200,6 +200,17 @@ export function wireReplayApprovals(container) {
       card.setAttribute?.("state", "denied");
       return;
     }
+    // rrnwp: a detail-gated action resolves ONLY from a card that has shown
+    // its detail — on the replay path the card reaches "pending" solely via a
+    // successful detail render, so anything else (still loading, error, or a
+    // synthetic approval-decision event) is refused, never resolved.
+    const gatedReplayApproval = d.requirement.approvals?.[0];
+    if (gatedReplayApproval && approvalCardNeedsDetailGate(gatedReplayApproval.action)
+        && card.getAttribute?.("state") !== "pending") {
+      card.setAttribute?.("state", "error");
+      card.setAttribute?.("detail", "The exact change must be shown before it can be approved — it could not be loaded here, so the request expires on its own.");
+      return;
+    }
     const outcome = await approvePermissionRequirement(d.requirement)
       .catch((e) => ({ ok: false, errors: [String(e?.message ?? e)] }));
     if (!outcome?.ok) {
@@ -440,6 +451,7 @@ export function renderRunTranscript(container, executionId, { onStatus = null, c
       requestId: ev.requestId ?? null,
       approvalId: ev.approvalId ?? null,
     });
+    wireDetailGate(card, spec.requirement.approvals?.[0]);
     const key = approvalEventKey(ev);
     if (card && key) approvalCards.set(key, card);
     // The status row reads the SAME projection the sidebar dot and the hub
@@ -619,7 +631,10 @@ export function replayPendingApprovalsForThread(container, threadId, executionId
       requestId: ev.requestId ?? null,
       approvalId: ev.approvalId ?? null,
     });
-    if (card) mounted.push(card);
+    if (card) {
+      mounted.push(card);
+      wireDetailGate(card, spec.requirement.approvals?.[0]);
+    }
   }
   return mounted;
 }
@@ -678,7 +693,110 @@ export function approvalCardSpecFromRequest(ev) {
         : `Action: ${approval.action}\nTarget reference: ${approval.targetRef || requirement.reason.split(": ").slice(1).join(": ")}`,
     ...(siteTool ? { approveLabel: siteToolCopy.approveLabel, denyLabel: "Deny" } : {}),
     ...(!siteTool && approval.detail ? { cardDetail: approval.detail } : {}),
+    // rrnwp: a detail-gated action (named-agent.set-provider) whose envelope
+    // deliberately carries no staged detail must mount NON-INTERACTIVE on the
+    // replay/projection paths too — the detail fetch below is what turns it
+    // actionable, exactly like the live run's card.
+    ...(approvalCardNeedsDetailGate(approval.action) && !approval.detail ? { state: "loading" } : {}),
   };
+}
+
+// awaom round-4 (coord finding b) + rrnwp: whether an approval action's card
+// may show its decision buttons BEFORE the staged detail resolves. For
+// named-agent.set-provider the staged detail is the ONLY place the destination
+// host exists — an opaque-but-clickable card is consent to an undisclosed host
+// (the P1), so that card is detail-gated on EVERY surface (live run, replayed
+// thread, second tab): non-interactive ("loading") until the detail resolves,
+// disabled ("error", no approve path) when it fails. Edit approvals
+// (asset.update / script.update / fs.write) keep their deliberate opaque
+// fallback: the envelope names the artifact and the diff is auxiliary — the
+// detail is not the consent basis there.
+function approvalCardNeedsDetailGate(action) {
+  return action === "named-agent.set-provider";
+}
+
+// Fetch the staged edit detail (current + proposed body) for an edit approval
+// and render it as an <artifact-diff> slotted into the card, with a title that
+// names the artifact and its +n -m. The detail is the extension principal's to
+// read (SW `approval.detail` gate); for NON-gated kinds a failure or a missing
+// record leaves the card in its opaque form — the decision still works. For a
+// detail-gated kind the card instead fails CLOSED: disabled with the honest
+// reason, never actionable without the detail (the pending row expires on its
+// own, 60 s SW-side TTL). Module scope so the LIVE card, the REPLAYED card and
+// the second-tab card share one behaviour (rrnwp).
+async function augmentApprovalCardWithDetail(card, approval) {
+  const gated = approvalCardNeedsDetailGate(approval?.action);
+  let detail = null;
+  try {
+    const res = await send("approval.detail", { approvalId: approval.approvalId });
+    if (res?.ok && res.detail && typeof res.detail === "object") detail = res.detail;
+  } catch { detail = null; }
+  if (!detail || !card || typeof document === "undefined") {
+    if (gated && card && typeof card.setAttribute === "function") {
+      const current = card.getAttribute?.("state");
+      if (!current || current === "pending" || current === "loading") {
+        card.setAttribute("detail", "The exact provider change could not be loaded, so this approval cannot be granted from here — the request expires on its own.");
+        card.setAttribute("state", "error");
+        card.focusStatus?.();
+      }
+    }
+    return false;
+  }
+  // The card may already have been decided (granted/denied) or replaced; a
+  // detail-gated card still in its "loading" state is waiting for exactly this.
+  const cardState = card.getAttribute?.("state");
+  if (cardState && cardState !== "pending" && cardState !== "loading") return false;
+  const name = typeof detail.name === "string" && detail.name ? detail.name : "this artifact";
+  const added = Number.isSafeInteger(detail.added) ? detail.added : 0;
+  const removed = Number.isSafeInteger(detail.removed) ? detail.removed : 0;
+  // A local-file write (CAP-FB-20260830-LOCAL-FILE-EDIT-TOOLS-01) rides the
+  // SAME card: the file's relative path, the on-disk bytes as "before".
+  const isFileWrite = detail.kind === "fs.write";
+  // A model-authored provider change (chrome-agent-platform-awaom) rides the
+  // SAME card: the current vs proposed provider/baseURL/model as the diff, so
+  // the owner approves the exact host — not an opaque ref.
+  const isProviderChange = detail.kind === "named-agent.set-provider";
+  const noun = detail.kind === "script.update" ? "script" : isFileWrite ? "file" : "artifact";
+  card.setAttribute("title", isProviderChange
+    ? `Change ${name}'s provider? (+${added} -${removed})`
+    : `${isFileWrite ? "Write" : "Update"} ${name}? (+${added} -${removed})`);
+  card.setAttribute("body", isProviderChange
+    ? `The agent wants to change where the named agent “${name}” sends its model traffic (provider, base URL, model).${detail.provenance === "model" ? " This change was authored by the model: the base URL below is model-chosen, and an existing stored key may be carried to it." : ""} Review the change, then approve or deny.`
+    : isFileWrite
+      ? "The agent wants to write this file in a folder you granted. Review the changes, then approve or deny."
+      : `The agent wants to change this ${noun}. Review the changes, then approve or deny.`);
+  if (card.querySelector?.("artifact-diff")) return true;
+  const diff = document.createElement("artifact-diff");
+  diff.setAttribute("slot", "extra");
+  diff.setAttribute("mode", "unified");
+  diff.beforeLabel = typeof detail.oldLabel === "string" && detail.oldLabel ? detail.oldLabel : `${name} (current)`;
+  diff.afterLabel = typeof detail.newLabel === "string" && detail.newLabel ? detail.newLabel : `${name} (proposed)`;
+  diff.before = typeof detail.oldContent === "string" ? detail.oldContent : "";
+  diff.after = typeof detail.newContent === "string" ? detail.newContent : "";
+  card.appendChild(diff);
+  // awaom round-4: the detail-gated card was rendered non-interactive
+  // ("loading"); now that the detail it waited on is rendered, it becomes
+  // actionable — the consent surface exists ONLY with the destination shown.
+  if (gated) {
+    card.removeAttribute("detail");
+    card.setAttribute("state", "pending");
+    card.focusApprove?.();
+  }
+  return true;
+}
+
+// rrnwp: a replayed / second-tab card for a detail-gated action mounts in
+// "loading" (the spec carries no detail by design) and fetches it here;
+// retry re-fetches the DETAIL, never exposes the bare decision.
+function wireDetailGate(card, approval) {
+  if (!card || !approvalCardNeedsDetailGate(approval?.action)) return;
+  card.addEventListener?.("retry", () => {
+    if (card.getAttribute?.("state") !== "error") return;
+    card.removeAttribute("detail");
+    card.setAttribute("state", "loading");
+    void augmentApprovalCardWithDetail(card, approval);
+  });
+  void augmentApprovalCardWithDetail(card, approval);
 }
 
 // ── the run flow ───────────────────────────────────────────────────────────
@@ -2194,83 +2312,6 @@ export async function runConversationTurn(container, { text, attachments = [], h
       card?.focusRetry?.();
     }
   };
-  // awaom round-4 (coord finding b): whether an approval action's card may show
-  // its decision buttons BEFORE the staged detail resolves. For
-  // named-agent.set-provider the staged detail is the ONLY place the destination
-  // host exists — an opaque-but-clickable card is consent to an undisclosed host
-  // (the P1), so that card is detail-gated: non-interactive ("loading") until
-  // the detail resolves, disabled ("error", no approve path) when it fails.
-  // Edit approvals (asset.update / script.update / fs.write) keep their
-  // deliberate opaque fallback: the envelope names the artifact and the diff is
-  // auxiliary — the detail is not the consent basis there.
-  const approvalCardNeedsDetailGate = (action) => action === "named-agent.set-provider";
-  // Fetch the staged edit detail (current + proposed body) for an edit
-  // approval and render it as an <artifact-diff> slotted into the card, with a
-  // title that names the artifact and its +n -m. The detail is the extension
-  // principal's to read (SW `approval.detail` gate); for NON-gated kinds a
-  // failure or a missing record leaves the card in its opaque form — the
-  // decision still works. For a detail-gated kind the card instead fails
-  // CLOSED: disabled with the honest reason, never actionable without the
-  // detail (the pending row expires on its own, 60 s SW-side TTL).
-  const augmentApprovalCardWithDiff = async (card, approval) => {
-    const gated = approvalCardNeedsDetailGate(approval?.action);
-    let detail = null;
-    try {
-      const res = await send("approval.detail", { approvalId: approval.approvalId });
-      if (res?.ok && res.detail && typeof res.detail === "object") detail = res.detail;
-    } catch { detail = null; }
-    if (!detail || !card || typeof document === "undefined") {
-      if (gated && card && typeof card.setAttribute === "function") {
-        const current = card.getAttribute?.("state");
-        if (!current || current === "pending" || current === "loading") {
-          card.setAttribute("detail", "The exact provider change could not be loaded, so this approval cannot be granted from here — the request expires on its own.");
-          card.setAttribute("state", "error");
-          card.focusStatus?.();
-        }
-      }
-      return false;
-    }
-    // The card may already have been decided (granted/denied) or replaced; a
-    // detail-gated card still in its "loading" state is waiting for exactly this.
-    const cardState = card.getAttribute?.("state");
-    if (cardState && cardState !== "pending" && cardState !== "loading") return false;
-    const name = typeof detail.name === "string" && detail.name ? detail.name : "this artifact";
-    const added = Number.isSafeInteger(detail.added) ? detail.added : 0;
-    const removed = Number.isSafeInteger(detail.removed) ? detail.removed : 0;
-    // A local-file write (CAP-FB-20260830-LOCAL-FILE-EDIT-TOOLS-01) rides the
-    // SAME card: the file's relative path, the on-disk bytes as "before".
-    const isFileWrite = detail.kind === "fs.write";
-    // A model-authored provider change (chrome-agent-platform-awaom) rides the
-    // SAME card: the current vs proposed provider/baseURL/model as the diff, so
-    // the owner approves the exact host — not an opaque ref.
-    const isProviderChange = detail.kind === "named-agent.set-provider";
-    const noun = detail.kind === "script.update" ? "script" : isFileWrite ? "file" : "artifact";
-    card.setAttribute("title", isProviderChange
-      ? `Change ${name}'s provider? (+${added} -${removed})`
-      : `${isFileWrite ? "Write" : "Update"} ${name}? (+${added} -${removed})`);
-    card.setAttribute("body", isProviderChange
-      ? `The agent wants to change where the named agent “${name}” sends its model traffic (provider, base URL, model).${detail.provenance === "model" ? " This change was authored by the model: the base URL below is model-chosen, and an existing stored key may be carried to it." : ""} Review the change, then approve or deny.`
-      : isFileWrite
-        ? "The agent wants to write this file in a folder you granted. Review the changes, then approve or deny."
-        : `The agent wants to change this ${noun}. Review the changes, then approve or deny.`);
-    if (card.querySelector?.("artifact-diff")) return;
-    const diff = document.createElement("artifact-diff");
-    diff.setAttribute("slot", "extra");
-    diff.setAttribute("mode", "unified");
-    diff.beforeLabel = typeof detail.oldLabel === "string" && detail.oldLabel ? detail.oldLabel : `${name} (current)`;
-    diff.afterLabel = typeof detail.newLabel === "string" && detail.newLabel ? detail.newLabel : `${name} (proposed)`;
-    diff.before = typeof detail.oldContent === "string" ? detail.oldContent : "";
-    diff.after = typeof detail.newContent === "string" ? detail.newContent : "";
-    card.appendChild(diff);
-    // awaom round-4: the detail-gated card was rendered non-interactive
-    // ("loading"); now that the detail it waited on is rendered, it becomes
-    // actionable — the consent surface exists ONLY with the destination shown.
-    if (gated) {
-      card.removeAttribute("detail");
-      card.setAttribute("state", "pending");
-      card.focusApprove?.();
-    }
-  };
   const maybeRenderApproval = (result, { blocking = false, requestId = null, toolCard = null, preRun = false, settle = null } = {}) => {
     const requirement = normalizePermissionRequirement(result);
     if (!requirement) return;
@@ -2347,7 +2388,7 @@ export async function runConversationTurn(container, { text, attachments = [], h
         const gatedApproval = requirement.approvals?.[0];
         if (gatedApproval && approvalCardNeedsDetailGate(gatedApproval.action)) {
           card.setAttribute("state", "loading");
-          void augmentApprovalCardWithDiff(card, gatedApproval);
+          void augmentApprovalCardWithDetail(card, gatedApproval);
           return;
         }
         card.setAttribute("state", "pending");
@@ -2390,7 +2431,7 @@ export async function runConversationTurn(container, { text, attachments = [], h
       // model-facing envelope), so they are fetched here, once, for this card.
       const editApproval = actionApproval ? requirement.approvals[0] : null;
       if (editApproval && (editApproval.action === "asset.update" || editApproval.action === "script.update" || editApproval.action === "fs.write" || editApproval.action === "named-agent.set-provider")) {
-        void augmentApprovalCardWithDiff(card, editApproval);
+        void augmentApprovalCardWithDetail(card, editApproval);
       }
     }
     const entry = { requirement, status: "pending", card, blocking, requestId, requestIds: requestId ? [requestId] : [], ...(preRun ? { preRun: true } : {}), ...(typeof settle === "function" ? { settle } : {}) };

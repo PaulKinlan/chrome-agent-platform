@@ -64,9 +64,11 @@ class StubElement {
   hasAttribute(n) { return this._attrs.has(n); }
   removeAttribute(n) { this._attrs.delete(n); }
   addEventListener(t, f) { (this.listeners[t] ??= []).push(f); }
+  removeEventListener(t, f) { this.listeners[t] = (this.listeners[t] ?? []).filter((x) => x !== f); }
   dispatch(t, e = {}) { for (const f of this.listeners[t] ?? []) f(e); }
-  appendChild(k) { this.children.push(k); return k; }
-  append(...kids) { this.children.push(...kids); }
+  dispatchEvent(ev) { for (const f of this.listeners[ev?.type] ?? []) f(ev); return true; }
+  appendChild(k) { this.children.push(k); k.connectedCallback?.(); return k; }
+  append(...kids) { this.children.push(...kids); for (const k of kids) k.connectedCallback?.(); }
   querySelector(sel) {
     // The augment guard checks for an existing artifact-diff.
     if (sel === "artifact-diff") return this.children.find((k) => k.localName === "artifact-diff") ?? null;
@@ -294,4 +296,100 @@ Deno.test("awaom round-4 (finding b): a detail failure DISABLES the card — nev
   assert(!states.includes("pending"), "the card was actionable at NO point — pending never appears");
   chromeMock.settleRun();
   await turn.catch(() => null);
+});
+
+// ---------------------------------------------------------------------------
+// Layer 3 — rrnwp: the REPLAY path (reopen thread / second hub tab / a
+// projection that attached late). Round-4 gated only runConversationTurn's
+// live card; the replayed card rebuilt from the cached approval-request event
+// mounted pending and clickable with no destination anywhere — and
+// wireReplayApprovals resolved it with no evidence the detail was ever shown.
+// ---------------------------------------------------------------------------
+
+Deno.test("rrnwp: the replayed-card spec for a detail-gated action mounts in 'loading', other actions unchanged", async () => {
+  const conv = await import(`../extension/shared/conversation.js?t=${Math.random()}`);
+  const spec = conv.approvalCardSpecFromRequest({
+    type: "approval-request",
+    approvalId: "ap-1",
+    result: {
+      waitingForPermission: true,
+      permissionRequirement: { approvals: [{ approvalId: "ap-1", action: "named-agent.set-provider", targetRef: "provider:9f1c2ab7" }] },
+    },
+  });
+  assertEquals(spec.state, "loading", "the gated replay spec mounts non-interactive");
+  const editSpec = conv.approvalCardSpecFromRequest({
+    type: "approval-request",
+    approvalId: "ap-2",
+    result: {
+      waitingForPermission: true,
+      permissionRequirement: { approvals: [{ approvalId: "ap-2", action: "asset.update", targetRef: "asset:x" }] },
+    },
+  });
+  assertEquals(editSpec.state, undefined, "edit approvals keep the default (opaque fallback by design)");
+});
+
+async function driveReplayedApproval(detailBehavior) {
+  globalThis.document = fakeDocument;
+  const chromeMock = installTurnChromeMock({ detailBehavior });
+  const conv = await import(`../extension/shared/conversation.js?t=${Math.random()}`);
+  conv.subscribeProgress(() => {}, { replayPending: false });
+  chromeMock.emit({
+    type: "approval-request",
+    threadId: "t-1",
+    runId: "run-1",
+    executionId: "exec-1",
+    approvalId: "ap-replay",
+    requestId: "req-replay",
+    result: {
+      waitingForPermission: true,
+      permissionRequirement: { approvals: [{ approvalId: "ap-replay", action: "named-agent.set-provider", targetRef: "provider:9f1c2ab7" }] },
+    },
+  });
+  const container = fakeDocument.createElement("agent-conversation");
+  const unwire = conv.wireReplayApprovals(container);
+  const mounted = conv.replayPendingApprovalsForThread(container, "t-1");
+  assertEquals(mounted.length, 1, "the replayed approval mounted one card");
+  const card = mounted[0];
+  return { card, chromeMock, container, unwire };
+}
+
+Deno.test("rrnwp: the REPLAYED provider-approval card is non-interactive until its detail resolves, then approves through the normal route", async () => {
+  const { card, chromeMock, unwire } = await driveReplayedApproval("pending-then-resolve");
+  assertEquals(card.getAttribute("state"), "loading", "the replayed card mounts non-interactive");
+  assertEquals(String(card._root?.innerHTML ?? "").includes('class="approve"'), false, "no approve button on the replayed card while loading");
+  assertEquals(chromeMock.detailCallCount(), 1, "the replay path fetched the detail");
+
+  chromeMock.resolveDetail();
+  await flush();
+  assertEquals(card.getAttribute("state"), "pending", "the replayed card becomes actionable only WITH its detail");
+  assert(String(card._root?.innerHTML ?? "").includes('class="approve"'), "the approve button exists with the detail shown");
+  assert(card.querySelector("artifact-diff"), "the diff (with the destination) is the consent surface");
+
+  // The owner's decision flows through the normal replay resolution.
+  card.dispatch("approve");
+  await flush();
+  assert(
+    chromeMock.sent.some((m) => m?.type === "management.resolve-approval" && m.approvalId === "ap-replay" && m.approve === true),
+    "a shown-detail approve resolves the pending row",
+  );
+  unwire();
+});
+
+Deno.test("rrnwp: a replayed card whose detail fails is NEVER resolvable — even by a synthetic approve event", async () => {
+  const { card, chromeMock, unwire } = await driveReplayedApproval("fail");
+  assertEquals(card.getAttribute("state"), "error", "the failed detail disables the replayed card");
+  card.dispatch("approve");
+  await flush();
+  assertEquals(
+    chromeMock.sent.filter((m) => m?.type === "management.resolve-approval").length,
+    0,
+    "no resolve message leaves the surface for a card that never showed its detail",
+  );
+  assertEquals(card.getAttribute("state"), "error", "the card stays disabled");
+  assert(
+    String(card.getAttribute("detail") ?? "").includes("must be shown before it can be approved")
+      || String(card.getAttribute("detail") ?? "").includes("cannot be granted"),
+    "the card states honestly why it cannot be used",
+  );
+  unwire();
 });
