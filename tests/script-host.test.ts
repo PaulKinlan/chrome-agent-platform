@@ -5,7 +5,7 @@
 // addressed to a DIFFERENT host (no double-execution) and claims the announce.
 // @ts-nocheck — the handler's sendResponse is intentionally loose here.
 
-import { assertEquals } from "jsr:@std/assert@1";
+import { assert, assertEquals } from "jsr:@std/assert@1";
 import { handleScriptRunMessage } from "../extension/lib/script-host.js";
 
 Deno.test("script host: announce responds with a claim + the host id", () => {
@@ -223,6 +223,69 @@ Deno.test("script host sab0g: the BROKERED route keeps the service worker as the
     assertEquals(res.ok, false);
     assertEquals(res.error, "forbidden_host", "the service worker's code contract is what surfaces, not a host-side one");
     assertEquals(fetchedDirectly, false, "the host must never fetch on its own for a brokered, run-scoped call");
+  } finally {
+    globalThis.chrome = origChrome;
+    globalThis.fetch = origFetch;
+  }
+});
+
+Deno.test("script host z7i3m: the unscoped fallback REFUSES redirects instead of following them into a refused destination", async () => {
+  // The fallback is the one sanctioned direct-fetch site (INV-5). It refuses private/loopback
+  // destinations as WRITTEN (ibdr4), so a public origin that 30x-redirects to 127.0.0.1 /
+  // 169.254.169.254 was the residual: plain fetch followed the hop and ISSUED it from the user's
+  // network position. The brokered route refuses 30x (service-worker.js cap:fetch uses
+  // redirect:'manual'), so one path refused redirects and the weaker one followed them.
+  // MUTANTS, both measured: (a) drop the redirect refusal -> the pin REDs on the returned code;
+  // (b) drop redirect:'manual' from the fetch init -> the pin REDs on the init assertion.
+  const { runFetch } = await import("../extension/lib/script-host.js");
+
+  // 1. LIVE SERVER, no stub: prove that redirect:'manual' really does NOT issue the hop.
+  //    (/target arrival count is the authority; the response event is secondary.)
+  let targetArrivals = 0;
+  const server = Deno.serve({ port: 0, hostname: "127.0.0.1" }, (req) => {
+    const u = new URL(req.url);
+    if (u.pathname === "/go") {
+      return new Response(null, { status: 302, headers: { location: "/target" } });
+    }
+    targetArrivals += 1;
+    return new Response("target-ok");
+  });
+  const origFetch = globalThis.fetch;
+  let liveType = "";
+  let liveStatus = 0;
+  try {
+    const live = await origFetch(`http://127.0.0.1:${server.addr.port}/go`, { redirect: "manual" });
+    liveStatus = live.status;
+    liveType = live.type;
+    // Give a followed hop a chance to land before asserting absence.
+    await new Promise((r) => setTimeout(r, 250));
+    assertEquals(liveStatus, 302, "redirect:'manual' must surface the 30x itself");
+    assert(liveType !== "opaqueredirect" || liveStatus === 0, "manual mode returns the 30x (Deno/node) or an opaque redirect (browser)");
+    assertEquals(targetArrivals, 0, "manual mode must not ISSUE the redirect hop");
+  } finally {
+    await server.shutdown();
+  }
+
+  // 2. runFetch-level: the policy — a 3xx is a REFUSAL with a fixed code, the hop is never
+  //    issued, and the request asks for manual mode in the first place.
+  const origChrome = globalThis.chrome;
+  const initSeen = [];
+  let transportCalls = 0;
+  try {
+    delete globalThis.chrome; // the INV-5 fallback precondition: no runtime at all
+    globalThis.fetch = async (url, init) => {
+      transportCalls += 1;
+      initSeen.push({ url, init });
+      // A real 30x response shape, as the live server produced above.
+      return new Response(null, { status: 302, headers: { location: "http://127.0.0.1:9/secret" } });
+    };
+
+    const res = await runFetch({ url: "https://public.example/hop" }, null);
+    assertEquals(transportCalls, 1, "the fallback must issue exactly one request: it never chases the hop");
+    assertEquals(initSeen[0].init.redirect, "manual", "the fallback must not ask fetch to follow redirects");
+    assertEquals(res.ok, false, "a 30x is a refusal, not a body to read");
+    assertEquals(res.error, "redirect_refused", "the broker's code vocabulary, so both paths answer the same way");
+    assert(!JSON.stringify(res).includes("127.0.0.1"), "the redirect target is never echoed into a model-readable return");
   } finally {
     globalThis.chrome = origChrome;
     globalThis.fetch = origFetch;
