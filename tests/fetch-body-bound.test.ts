@@ -111,11 +111,18 @@ Deno.test("hvd4s source pins: BOTH brokers read through the helper; no unbounded
   // a lane added a comment block to this function — the pin then failed for a change that kept the
   // bound intact ("the bounded read is gone") while a change that DELETED the bound further down
   // could have satisfied it. A region that cannot be overtaken by comments is the honest shape.
+  //
+  // 9fka1: there is deliberately NO separate "the region stops at runFetch, not the next export"
+  // assertion here. The previous one searched for "\\nexport " in a TS literal, i.e. a LITERAL
+  // backslash-n that this source cannot contain, so it could never fire — the false-green shape
+  // this pin exists to remove. And once the end is `indexOf("\n}\n")`, "no top-level export in
+  // the region" is true by construction, so a positive version of the same line would be vacuous
+  // too. The real arms are the three tail assertions below: any early truncation moves the pinned
+  // statements out of the region and reds them.
   const rfEnd = host.indexOf("\n}\n", rfStart);
   assert(rfEnd > rfStart, "runFetch has a top-level closing brace");
   const rfRegion = host.slice(rfStart, rfEnd);
   assert(rfRegion.length > 500, "the runFetch region is a real function body, not a truncated slice");
-  assert(!rfRegion.includes("\\nexport "), "the runFetch region stops at runFetch, not the next export");
   assert(rfRegion.includes("const bounded = await readResponseTextBounded(res).catch(() => ({ text: \"\" }));"), "the runFetch fallback reads through the helper and degrades a read failure to empty text");
   assert(!rfRegion.includes("await res.text()"), "the fallback contains no unbounded full-body read");
   assert(rfRegion.includes("text: bounded.text"), "the fallback returns the bounded text");
