@@ -853,6 +853,7 @@ export interface BootStagingPolicyEvaluation {
   environmentalRefusal: boolean;
   refusalError?: BootStagingEnvironmentalRefusalError;
   error?: string;
+  evidenceSummary: string;
   warnings: string[];
   validRuns: BootStagingRunResult[];
   contendedRuns: BootStagingRunResult[];
@@ -865,11 +866,37 @@ export interface BootStagingPolicyEvaluation {
  * A median over fewer than a majority of the requested runs is not a median of the measurement — it is
  * a median of whatever survived, presented as if it described the box. Below this floor the honest
  * answer is UNKNOWN: the box could not measure, which is a different statement from "the change is
- * fine" and from "the change is broken". Majority-of-requested generalises if the run count changes.
+ * fine" and from "the change is broken". "Majority" must be STRICTLY more than half of the REQUESTED count:
+ * floor(n/2) + 1 (5 -> 3, 4 -> 3, 1 -> 1). Majority-of-requested generalises if the run count changes.
  */
 export function minimumValidRuns(requestedRuns: number): number {
   const n = Math.max(0, Math.trunc(requestedRuns));
-  return n <= 1 ? Math.max(1, n) : Math.ceil(n / 2);
+  return n <= 0 ? 0 : Math.floor(n / 2) + 1;
+}
+
+/**
+ * Formats the evidence base summary: "valid runs N of M, excluded X (steal ...)"
+ * so readers of logs, errors, and receipts can see the evidence base for all outcomes (PASS, FAIL, UNKNOWN).
+ */
+export function formatRunEvidenceSummary(
+  runs: BootStagingRunResult[],
+  validRuns?: BootStagingRunResult[],
+  contendedRuns?: BootStagingRunResult[],
+): string {
+  const valids = validRuns ?? runs.filter((r) => r.validMeasurement);
+  const contendeds = contendedRuns ?? runs.filter((r) => !r.validMeasurement);
+  const stealFigures = contendeds
+    .map((r) => {
+      if (r.hostWorstStealPct != null) {
+        return `steal ${Math.round(r.hostWorstStealPct)}%`;
+      }
+      const m = (r.hostEnvironment ?? "").match(/steal[=:\s]*\d+%/i)?.[0]?.trim();
+      return m ? m.replace("=", " ") : null;
+    })
+    .filter((v, i, a): v is string => Boolean(v) && a.indexOf(v) === i)
+    .join(" | ");
+  return `valid runs ${valids.length} of ${runs.length}, excluded ${contendeds.length}` +
+    (stealFigures ? ` (${stealFigures})` : "");
 }
 
 /**
@@ -900,6 +927,7 @@ export function evaluateBootStagingPolicy(
 
   const validRuns = runs.filter((r) => r.validMeasurement);
   const contendedRuns = runs.filter((r) => !r.validMeasurement);
+  const evidenceSummary = formatRunEvidenceSummary(runs, validRuns, contendedRuns);
 
   // 1. Record diagnostics for all excluded contended runs
   for (const r of contendedRuns) {
@@ -969,7 +997,8 @@ export function evaluateBootStagingPolicy(
       return {
         ok: false,
         environmentalRefusal: false,
-        error: `Run ${r.run}: severe long task breach detected: ${details} [${r.hostEnvironment}]`,
+        error: `Run ${r.run}: severe long task breach detected: ${details} [${r.hostEnvironment}] (${evidenceSummary})`,
+        evidenceSummary,
         warnings,
         validRuns,
         contendedRuns,
@@ -998,14 +1027,8 @@ export function evaluateBootStagingPolicy(
     const excludedSummary = contendedRuns
       .map((r) => `Run ${r.run}: ${r.invalidReason}`)
       .join("; ");
-    const stealFigures = contendedRuns
-      .map((r) => (r.hostEnvironment ?? "").match(/steal[^,;\]]*/i)?.[0]?.trim())
-      .filter((v, i, a): v is string => Boolean(v) && a.indexOf(v) === i)
-      .join(" | ");
     const detail =
-      `valid runs ${validRuns.length} of ${runs.length}, excluded ${contendedRuns.length}` +
-      (stealFigures ? ` (${stealFigures})` : "") +
-      ` — below the ${requiredValidRuns} valid runs a verdict needs, so this measurement cannot certify` +
+      `${evidenceSummary} — below the ${requiredValidRuns} valid runs a verdict needs, so this measurement cannot certify` +
       (excludedSummary ? `: ${excludedSummary}` : "");
     const refusal = new BootStagingEnvironmentalRefusalError(runs, detail);
     return {
@@ -1013,6 +1036,7 @@ export function evaluateBootStagingPolicy(
       environmentalRefusal: true,
       refusalError: refusal,
       error: refusal.message,
+      evidenceSummary,
       warnings,
       validRuns,
       contendedRuns,
@@ -1044,7 +1068,8 @@ export function evaluateBootStagingPolicy(
         return {
           ok: false,
           environmentalRefusal: false,
-          error: `Run ${r.run}: composer-ready took ${r.composerReadyMs}ms on uncontended host (must be < 150ms) [${r.hostEnvironment}]`,
+          error: `Run ${r.run}: composer-ready took ${r.composerReadyMs}ms on uncontended host (must be < 150ms) [${r.hostEnvironment}] (${evidenceSummary})`,
+          evidenceSummary,
           warnings,
           validRuns,
           contendedRuns,
@@ -1055,7 +1080,8 @@ export function evaluateBootStagingPolicy(
         return {
           ok: false,
           environmentalRefusal: false,
-          error: `Run ${r.run}: thread-list-hydrated took ${r.threadListHydratedMs}ms on uncontended host (must be <= 250ms) [${r.hostEnvironment}]`,
+          error: `Run ${r.run}: thread-list-hydrated took ${r.threadListHydratedMs}ms on uncontended host (must be <= 250ms) [${r.hostEnvironment}] (${evidenceSummary})`,
+          evidenceSummary,
           warnings,
           validRuns,
           contendedRuns,
@@ -1067,13 +1093,14 @@ export function evaluateBootStagingPolicy(
         `run(s), but every run carrying a task was measured above the repo's own quiet bound ` +
         `(CAP_QUIET_MAX_LOAD_PER_CORE=${taskRuns[0].hostQuietBound}): ` +
         taskRuns.map((r) => `Run ${r.run} load/core ${r.hostWorstLoadPerCore ?? "unknown"}`).join(", ") +
-        ` — host contention, not a page verdict`;
+        ` — host contention, not a page verdict (${evidenceSummary})`;
       const refusal = new BootStagingEnvironmentalRefusalError(runs, detail);
       return {
         ok: false,
         environmentalRefusal: true,
         refusalError: refusal,
         error: `ENVIRONMENT: ntp-boot-staging refusal — ${detail}`,
+        evidenceSummary,
         warnings,
         validRuns,
         contendedRuns,
@@ -1087,7 +1114,8 @@ export function evaluateBootStagingPolicy(
     return {
       ok: false,
       environmentalRefusal: false,
-      error: `ntp-boot-staging contract breach: median long tasks > 50ms across ${validRuns.length} valid run(s) is ${medianTaskCount} (expected 0). ${summary}`,
+      error: `ntp-boot-staging contract breach: median long tasks > 50ms across ${validRuns.length} valid run(s) is ${medianTaskCount} (expected 0) (${evidenceSummary}). ${summary}`,
+      evidenceSummary,
       warnings,
       validRuns,
       contendedRuns,
@@ -1120,7 +1148,8 @@ export function evaluateBootStagingPolicy(
       return {
         ok: false,
         environmentalRefusal: false,
-        error: `Run ${r.run}: composer-ready took ${r.composerReadyMs}ms on uncontended host (must be < 150ms) [${r.hostEnvironment}]`,
+        error: `Run ${r.run}: composer-ready took ${r.composerReadyMs}ms on uncontended host (must be < 150ms) [${r.hostEnvironment}] (${evidenceSummary})`,
+        evidenceSummary,
         warnings,
         validRuns,
         contendedRuns,
@@ -1137,7 +1166,8 @@ export function evaluateBootStagingPolicy(
       return {
         ok: false,
         environmentalRefusal: false,
-        error: `Run ${r.run}: thread-list-hydrated took ${r.threadListHydratedMs}ms on uncontended host (must be <= 250ms) [${r.hostEnvironment}]`,
+        error: `Run ${r.run}: thread-list-hydrated took ${r.threadListHydratedMs}ms on uncontended host (must be <= 250ms) [${r.hostEnvironment}] (${evidenceSummary})`,
+        evidenceSummary,
         warnings,
         validRuns,
         contendedRuns,
@@ -1148,13 +1178,14 @@ export function evaluateBootStagingPolicy(
 
   if (loadedLatencyBreaches.length > 0) {
     const detail = `${loadedLatencyBreaches.join("; ")} — measured above the repo's own quiet bound ` +
-      `(CAP_QUIET_MAX_LOAD_PER_CORE), so this is host contention, not a page verdict`;
+      `(CAP_QUIET_MAX_LOAD_PER_CORE), so this is host contention, not a page verdict (${evidenceSummary})`;
     const refusal = new BootStagingEnvironmentalRefusalError(runs, detail);
     return {
       ok: false,
       environmentalRefusal: true,
       refusalError: refusal,
       error: `ENVIRONMENT: ntp-boot-staging refusal — ${detail}`,
+      evidenceSummary,
       warnings,
       validRuns,
       contendedRuns,
@@ -1165,6 +1196,7 @@ export function evaluateBootStagingPolicy(
   return {
     ok: true,
     environmentalRefusal: false,
+    evidenceSummary,
     warnings,
     validRuns,
     contendedRuns,

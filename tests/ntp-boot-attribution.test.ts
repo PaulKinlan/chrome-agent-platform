@@ -2671,7 +2671,7 @@ Deno.test("u4zgv: a 1995ms stall at 11% steal (~1775ms of real work) still reds"
 
 Deno.test("u4zgv: a severe stall on a run ONLY JUST above the steal bound still reds (boundary)", () => {
   // 10.5% vs a 10% bound: invalidated, but 600ms * 0.895 = 537ms of real work > 500ms ceiling.
-  const policy = evaluateBootStagingPolicy([u4zgvStolenRun(10.5, 600), u4zgvQuietRun(2)]);
+  const policy = evaluateBootStagingPolicy([u4zgvStolenRun(10.5, 600), u4zgvQuietRun(2), u4zgvQuietRun(3)]);
   assertEquals(policy.ok, true, "valid quiet sibling decides; excluded run's breach is reported, not decisive");
   assertEquals(policy.environmentalRefusal, false);
   assert(
@@ -2685,14 +2685,14 @@ Deno.test("u4zgv: a severe stall on a run ONLY JUST above the steal bound still 
 Deno.test("u4zgv: the carve-out boundary is pinned from BOTH sides — at 20% steal (1.25x, max 625ms) a 625ms stall is excused and a 626ms stall counts as evidence", () => {
   // Stretch at 20% steal is exactly 1.25x, so a ceiling-level task can legitimately
   // read up to 500 * 1.25 = 625ms wall. Just under/at the threshold: skip permitted.
-  const excused = evaluateBootStagingPolicy([u4zgvStolenRun(20, 625), u4zgvQuietRun(2)]);
+  const excused = evaluateBootStagingPolicy([u4zgvStolenRun(20, 625), u4zgvQuietRun(2), u4zgvQuietRun(3)]);
   assertEquals(excused.ok, true, "625ms == 500ms * 1.25 stretch prediction: inside the carve-out");
   assert(
     excused.warnings.some((w) => w.includes("EXCLUDED run") && w.includes("reported, not decisive") && w.includes("fits inside the 625ms wall")),
     "the excused breach is warned about, not silently dropped, and the warning names the stretch",
   );
   // Just over the threshold: reported as not decisive under dn8ox.
-  const red = evaluateBootStagingPolicy([u4zgvStolenRun(20, 626), u4zgvQuietRun(2)]);
+  const red = evaluateBootStagingPolicy([u4zgvStolenRun(20, 626), u4zgvQuietRun(2), u4zgvQuietRun(3)]);
   assertEquals(red.ok, true, "626ms in excluded run does not red the quiet sibling (dn8ox)");
   assertEquals(red.environmentalRefusal, false);
   assert(
@@ -2711,7 +2711,7 @@ Deno.test("u4zgv: the steal-side boundary — at exactly the bound the run is va
   assert(!atBoundPolicy.warnings.some((w) => w.includes("steal-invalidated")), "no carve-out warning on a valid run");
   // steal just above the bound (10.5%): invalidated, and 1.117x predicts up to ~558.7ms,
   // so a 550ms stall fits inside the prediction and may skip.
-  const justAbove = evaluateBootStagingPolicy([u4zgvStolenRun(10.5, 550), u4zgvQuietRun(2)]);
+  const justAbove = evaluateBootStagingPolicy([u4zgvStolenRun(10.5, 550), u4zgvQuietRun(2), u4zgvQuietRun(3)]);
   assertEquals(justAbove.ok, true, "550ms <= 500 * 1.117 = 558.7ms: the measured stretch can account for it");
   assert(justAbove.warnings.some((w) => w.includes("EXCLUDED run") && w.includes("reported, not decisive") && w.includes("fits inside the")));
 });
@@ -2760,14 +2760,14 @@ Deno.test("pl6yz: the production harness resolves the steal bound ONCE from the 
 
 Deno.test("u4zgv: the carve-out is DETERMINISTIC — the same stall under the same steal classifies identically on consecutive runs, and unrelated samples or their order cannot flip it", () => {
   // (a) Two consecutive evaluations of identical inputs agree on every verdict field.
-  const once = evaluateBootStagingPolicy([u4zgvStolenRun(11, 600), u4zgvQuietRun(2)]);
-  const twice = evaluateBootStagingPolicy([u4zgvStolenRun(11, 600), u4zgvQuietRun(2)]);
+  const once = evaluateBootStagingPolicy([u4zgvStolenRun(11, 600), u4zgvQuietRun(2), u4zgvQuietRun(3)]);
+  const twice = evaluateBootStagingPolicy([u4zgvStolenRun(11, 600), u4zgvQuietRun(2), u4zgvQuietRun(3)]);
   assertEquals(once.ok, twice.ok);
   assertEquals(once.environmentalRefusal, twice.environmentalRefusal);
   assertEquals(once.error, twice.error);
   assertEquals(once.warnings.length, twice.warnings.length);
-  const excusedOnce = evaluateBootStagingPolicy([u4zgvStolenRun(89, 1995), u4zgvQuietRun(2)]);
-  const excusedTwice = evaluateBootStagingPolicy([u4zgvStolenRun(89, 1995), u4zgvQuietRun(2)]);
+  const excusedOnce = evaluateBootStagingPolicy([u4zgvStolenRun(89, 1995), u4zgvQuietRun(2), u4zgvQuietRun(3)]);
+  const excusedTwice = evaluateBootStagingPolicy([u4zgvStolenRun(89, 1995), u4zgvQuietRun(2), u4zgvQuietRun(3)]);
   assertEquals(excusedOnce.ok, excusedTwice.ok);
   assertEquals(excusedOnce.error, excusedTwice.error);
   // (b) An unrelated QUIETER sample inside the same interval cannot flip the
@@ -2775,12 +2775,12 @@ Deno.test("u4zgv: the carve-out is DETERMINISTIC — the same stall under the sa
   const metrics = { composerReadyEndMs: 120, threadListHydratedEndMs: 200, timeOrigin: U4ZGV_T0, longTasks: [{ name: "self", duration: 600, startTime: 100 }] };
   const quiet: any = { measurable: true, load1: 0.4, load5: 0.3, cores: 8, loadPerCore: 0.05, activeCompilers: 0, compilerNames: [], stealPct: 1, at: U4ZGV_T0 + 400 };
   const withExtraQuiet = attributeBootRun(1, metrics, [u4zgvStolenSample(11), quiet, u4zgvStolenSample(11, U4ZGV_T0 + 500)], { stealBoundPct: 10 });
-  const mixed = evaluateBootStagingPolicy([withExtraQuiet, u4zgvQuietRun(2)]);
+  const mixed = evaluateBootStagingPolicy([withExtraQuiet, u4zgvQuietRun(2), u4zgvQuietRun(3)]);
   assertEquals(mixed.ok, once.ok, "an added quiet sample does not dilute the worst-steal reading");
   assertEquals(mixed.environmentalRefusal, once.environmentalRefusal);
   // (c) Sample ORDER cannot flip the verdict either (worst-steal is a max, not a first-match).
   const reversed = attributeBootRun(1, metrics, [quiet, u4zgvStolenSample(11)], { stealBoundPct: 10 });
-  const reversedPolicy = evaluateBootStagingPolicy([reversed, u4zgvQuietRun(2)]);
+  const reversedPolicy = evaluateBootStagingPolicy([reversed, u4zgvQuietRun(2), u4zgvQuietRun(3)]);
   assertEquals(reversedPolicy.ok, once.ok);
   assertEquals(reversedPolicy.environmentalRefusal, once.environmentalRefusal);
   assertEquals(reversedPolicy.ok, true, "600ms at 11% steal in excluded run passes with quiet sibling regardless of sample order");
@@ -2826,7 +2826,7 @@ Deno.test("u4zgv: a MISSING or MALFORMED steal sample excuses nothing — 'we co
   const mixedRun = attributeBootRun(1, bigStall, [u4zgvStolenSample(89), nanSample], { stealBoundPct: 10 });
   assertEquals(mixedRun.invalidatedBySteal, true);
   assertEquals(mixedRun.hostWorstStealPct, 89, "the malformed NaN sample is excluded from the worst-steal reading");
-  const mixedPolicy = evaluateBootStagingPolicy([mixedRun, u4zgvQuietRun(2)]);
+  const mixedPolicy = evaluateBootStagingPolicy([mixedRun, u4zgvQuietRun(2), u4zgvQuietRun(3)]);
   assertEquals(mixedPolicy.ok, true, "89% stretch (9.09x, max 4545ms) still explains the 1995ms stall");
 });
 
@@ -2844,13 +2844,13 @@ Deno.test("h5wbd: a loud steal spike OUTSIDE the stall's window excuses nothing 
   const inWindow = u4zgvStolenSample(11, U4ZGV_T0 + 300); // task window is [T0+100, T0+700]
   for (const farSteal of [16.7, 20, 89, 99]) {
     const far = u4zgvStolenSample(farSteal, U4ZGV_T0 + 60_000); // a minute away: beyond any bracketing reach
-    const forward = evaluateBootStagingPolicy([u4zgvStolenRun(11, 600, 1, [inWindow, far]), u4zgvQuietRun(2)]);
+    const forward = evaluateBootStagingPolicy([u4zgvStolenRun(11, 600, 1, [inWindow, far]), u4zgvQuietRun(2), u4zgvQuietRun(3)]);
     assertEquals(forward.ok, true, `far ${farSteal}% sibling does not excuse, but excluded run is reported, not decisive (forward)`);
     assertEquals(forward.environmentalRefusal, false);
     assert(
       forward.warnings.some((w) => w.includes("EXCLUDED run") && w.includes("reported, not decisive") && w.includes("does NOT fit what the steal predicts")),
     );
-    const backward = evaluateBootStagingPolicy([u4zgvStolenRun(11, 600, 1, [far, inWindow]), u4zgvQuietRun(2)]);
+    const backward = evaluateBootStagingPolicy([u4zgvStolenRun(11, 600, 1, [far, inWindow]), u4zgvQuietRun(2), u4zgvQuietRun(3)]);
     assertEquals(backward.ok, true, `far ${farSteal}% sibling does not excuse, but excluded run is reported, not decisive (reverse)`);
     assertEquals(backward.environmentalRefusal, false);
     assert(
@@ -2864,12 +2864,14 @@ Deno.test("h5wbd: steal IN FORCE inside the window still excuses - the reviewer'
   const excuseSide = evaluateBootStagingPolicy([
     u4zgvStolenRun(11, 600, 1, [u4zgvStolenSample(11, U4ZGV_T0 + 200), u4zgvStolenSample(16.7, U4ZGV_T0 + 400)]),
     u4zgvQuietRun(2),
+    u4zgvQuietRun(3),
   ]);
   assertEquals(excuseSide.ok, true, "16.7% IN FORCE across the window legitimately explains 600ms (500 * 1.2005 = 600.2ms)");
   assert(excuseSide.warnings.some((w) => w.includes("EXCLUDED run") && w.includes("reported, not decisive") && w.includes("fits inside the")));
   const redSide = evaluateBootStagingPolicy([
     u4zgvStolenRun(11, 600, 1, [u4zgvStolenSample(11, U4ZGV_T0 + 200), u4zgvStolenSample(16.6, U4ZGV_T0 + 400)]),
     u4zgvQuietRun(2),
+    u4zgvQuietRun(3),
   ]);
   assertEquals(redSide.ok, true, "16.6% in-window stretch does not explain 600ms, but excluded run is reported, not decisive (dn8ox)");
   assertEquals(redSide.environmentalRefusal, false);
@@ -2880,6 +2882,7 @@ Deno.test("h5wbd: steal IN FORCE inside the window still excuses - the reviewer'
   const live = evaluateBootStagingPolicy([
     u4zgvStolenRun(11, 1995, 1, [u4zgvStolenSample(11, U4ZGV_T0 + 200), u4zgvStolenSample(89, U4ZGV_T0 + 900)]),
     u4zgvQuietRun(2),
+    u4zgvQuietRun(3),
   ]);
   assertEquals(live.ok, true, "89% in force across the 1995ms window: contention, not product");
   assert(live.warnings.some((w) => w.includes("EXCLUDED run") && w.includes("reported, not decisive") && w.includes("fits inside the")));
@@ -2891,12 +2894,14 @@ Deno.test("h5wbd/gl59n: the before-side fallback honours its reach - a sample ju
   const nearBefore = evaluateBootStagingPolicy([
     u4zgvStolenRun(89, 600, 1, [u4zgvStolenSample(89, U4ZGV_T0 + 50)]), // 50ms before the window, inside the 1000ms reach
     u4zgvQuietRun(2),
+    u4zgvQuietRun(3),
   ]);
   assertEquals(nearBefore.ok, true, "a before-side sample 50ms ahead of the stall measures the steal leading into it");
   assert(nearBefore.warnings.some((w) => w.includes("EXCLUDED run") && w.includes("reported, not decisive") && w.includes("fits inside the")));
   const farBefore = evaluateBootStagingPolicy([
     u4zgvStolenRun(11, 600, 1, [u4zgvStolenSample(89, U4ZGV_T0 - 5000), u4zgvStolenSample(11, U4ZGV_T0 + 300)]),
     u4zgvQuietRun(2),
+    u4zgvQuietRun(3),
   ]);
   // the 11% sample IS in-window, so the in-window set decides alone: does not fit steal, but excluded run is non-decisive
   assertEquals(farBefore.ok, true, "excluded run's breach is reported, not decisive (farBefore)");
@@ -2905,6 +2910,7 @@ Deno.test("h5wbd/gl59n: the before-side fallback honours its reach - a sample ju
   const onlyFar = evaluateBootStagingPolicy([
     u4zgvStolenRun(11, 600, 1, [u4zgvStolenSample(89, U4ZGV_T0 - 5000)]),
     u4zgvQuietRun(2),
+    u4zgvQuietRun(3),
   ]);
   assertEquals(onlyFar.ok, true, "a sample 5s before window is beyond reach: excluded run is reported, not decisive (onlyFar)");
   assertEquals(onlyFar.environmentalRefusal, false);
@@ -2918,6 +2924,7 @@ Deno.test("gl59n: an AFTER-side sample cannot causally excuse a stall that alrea
   const afterOnly = evaluateBootStagingPolicy([
     u4zgvStolenRun(11, 600, 1, [u4zgvStolenSample(89, U4ZGV_T0 + 1400)]), // t1+700, inside the old reach
     u4zgvQuietRun(2),
+    u4zgvQuietRun(3),
   ]);
   assertEquals(afterOnly.ok, true, "an after-side 89% sample does not excuse, but excluded run is reported, not decisive");
   assertEquals(afterOnly.environmentalRefusal, false);
@@ -2929,6 +2936,7 @@ Deno.test("gl59n: an AFTER-side sample cannot causally excuse a stall that alrea
       u4zgvStolenSample(89, U4ZGV_T0 + 1400),
     ]),
     u4zgvQuietRun(2),
+    u4zgvQuietRun(3),
   ]);
   assertEquals(quietBeforeLoudAfter.ok, true, "the before side (11%) decides: does not fit steal, but excluded run is reported, not decisive");
   assertEquals(quietBeforeLoudAfter.environmentalRefusal, false);
@@ -2941,6 +2949,7 @@ Deno.test("gl59n: an AFTER-side sample cannot causally excuse a stall that alrea
       u4zgvStolenSample(11, U4ZGV_T0 + 1400),
     ]),
     u4zgvQuietRun(2),
+    u4zgvQuietRun(3),
   ]);
   assertEquals(loudBeforeQuietAfter.ok, true, "89% in force leading into the window explains 600ms (9.09x -> 4545ms)");
   assert(
@@ -2954,6 +2963,7 @@ Deno.test("coord 2026-11-04: saturated steal (>= 99.9%) and the Infinity stretch
     const policy = evaluateBootStagingPolicy([
       u4zgvStolenRun(saturated, 30_000, 1, [u4zgvStolenSample(saturated, U4ZGV_T0 + 300)]),
       u4zgvQuietRun(2),
+      u4zgvQuietRun(3),
     ]);
     assertEquals(policy.ok, true, `${saturated}% steal in excluded run: quiet sibling decides (dn8ox)`);
     assertEquals(policy.environmentalRefusal, false);
@@ -2972,6 +2982,7 @@ Deno.test("coord 2026-11-04: saturated steal (>= 99.9%) and the Infinity stretch
   const knifeEdge = evaluateBootStagingPolicy([
     u4zgvStolenRun(99.8, 30_000, 1, [u4zgvStolenSample(99.8, U4ZGV_T0 + 300)]),
     u4zgvQuietRun(2),
+    u4zgvQuietRun(3),
   ]);
   assertEquals(knifeEdge.ok, true, "99.8% in excluded run: quiet sibling decides (dn8ox)");
   assertEquals(knifeEdge.environmentalRefusal, false);
@@ -2987,6 +2998,7 @@ Deno.test("coord 2026-11-04: saturated steal (>= 99.9%) and the Infinity stretch
   const underCap = evaluateBootStagingPolicy([
     u4zgvStolenRun(89.9, 4900, 1, [u4zgvStolenSample(89.9, U4ZGV_T0 + 300)]),
     u4zgvQuietRun(2),
+    u4zgvQuietRun(3),
   ]);
   assertEquals(underCap.ok, true, "89.9% -> 9.90x, max ~4950ms: a 4900ms stall fits inside the prediction");
   assert(
@@ -2996,6 +3008,7 @@ Deno.test("coord 2026-11-04: saturated steal (>= 99.9%) and the Infinity stretch
   const pastCap = evaluateBootStagingPolicy([
     u4zgvStolenRun(91, 4900, 1, [u4zgvStolenSample(91, U4ZGV_T0 + 300)]),
     u4zgvQuietRun(2),
+    u4zgvQuietRun(3),
   ]);
   assertEquals(pastCap.ok, true, "91% past cap in excluded run: quiet sibling decides (dn8ox)");
   assertEquals(pastCap.environmentalRefusal, false);
@@ -3006,6 +3019,7 @@ Deno.test("coord 2026-11-04: saturated steal (>= 99.9%) and the Infinity stretch
   const exceedsUnderCap = evaluateBootStagingPolicy([
     u4zgvStolenRun(80, 2600, 1, [u4zgvStolenSample(80, U4ZGV_T0 + 300)]),
     u4zgvQuietRun(2),
+    u4zgvQuietRun(3),
   ]);
   assertEquals(exceedsUnderCap.ok, true, "a 2600ms stall in excluded run: quiet sibling decides (dn8ox)");
   assertEquals(exceedsUnderCap.environmentalRefusal, false);
@@ -3016,6 +3030,7 @@ Deno.test("coord 2026-11-04: saturated steal (>= 99.9%) and the Infinity stretch
   const liveClass = evaluateBootStagingPolicy([
     u4zgvStolenRun(89, 1995, 1, [u4zgvStolenSample(89, U4ZGV_T0 + 300)]),
     u4zgvQuietRun(2),
+    u4zgvQuietRun(3),
   ]);
   assertEquals(liveClass.ok, true, "89% -> 9.09x (max 4545ms) still explains the 1995ms live-evidence stall");
   assert(
@@ -3034,7 +3049,7 @@ Deno.test("h5wbd: an unplaceable task window fails closed - missing timeOrigin o
   );
   assertEquals(noOrigin.invalidatedBySteal, true);
   assertEquals(noOrigin.severeBreaches[0].stealExcuse, null, "no timeOrigin -> no excuse object");
-  const noOriginPolicy = evaluateBootStagingPolicy([noOrigin, u4zgvQuietRun(2)]);
+  const noOriginPolicy = evaluateBootStagingPolicy([noOrigin, u4zgvQuietRun(2), u4zgvQuietRun(3)]);
   assertEquals(noOriginPolicy.ok, true, "excluded run's breach is reported, not decisive (noOrigin)");
   assertEquals(noOriginPolicy.environmentalRefusal, false);
   assert(
@@ -3049,7 +3064,7 @@ Deno.test("h5wbd: an unplaceable task window fails closed - missing timeOrigin o
     { stealBoundPct: 10 },
   );
   assertEquals(noTimestamps.severeBreaches[0].stealExcuse, null);
-  const untimedPolicy = evaluateBootStagingPolicy([noTimestamps, u4zgvQuietRun(2)]);
+  const untimedPolicy = evaluateBootStagingPolicy([noTimestamps, u4zgvQuietRun(2), u4zgvQuietRun(3)]);
   assertEquals(untimedPolicy.ok, true, "excluded run's breach is reported, not decisive (noTimestamps)");
   assertEquals(untimedPolicy.environmentalRefusal, false);
   assert(
@@ -3132,6 +3147,84 @@ Deno.test("dn8ox: valid runs below the minimum is UNKNOWN and the refusal names 
 
 Deno.test("dn8ox: the minimum is a majority of the requested runs", () => {
   assertEquals(minimumValidRuns(5), 3);
-  assertEquals(minimumValidRuns(4), 2);
+  assertEquals(minimumValidRuns(4), 3);
   assertEquals(minimumValidRuns(1), 1);
+  assertEquals(minimumValidRuns(2), 2);
+  assertEquals(minimumValidRuns(6), 4);
+});
+
+Deno.test("dn8ox: P3: even requested count (4 runs) with 2 valid runs must refuse environmentally (tie is not majority)", () => {
+  const stolenSample: any = {
+    measurable: true, load1: 1.1, load5: 1.0, cores: 8, loadPerCore: 0.14,
+    activeCompilers: 0, compilerNames: [], stealPct: 25, at: U4ZGV_T0 + 300,
+  };
+  const quietSample: any = {
+    measurable: true, load1: 0.4, load5: 0.3, cores: 8, loadPerCore: 0.05,
+    activeCompilers: 0, compilerNames: [], stealPct: 2, at: U4ZGV_T0 + 300,
+  };
+  const runs = [
+    attributeBootRun(1, { composerReadyEndMs: 120, threadListHydratedEndMs: 200, timeOrigin: U4ZGV_T0, longTasks: [{ name: "self", duration: 800, startTime: 100 }] }, [stolenSample], { stealBoundPct: 10 }),
+    attributeBootRun(2, { composerReadyEndMs: 120, threadListHydratedEndMs: 200, timeOrigin: U4ZGV_T0, longTasks: [{ name: "self", duration: 600, startTime: 100 }] }, [stolenSample], { stealBoundPct: 10 }),
+    attributeBootRun(3, { composerReadyEndMs: 120, threadListHydratedEndMs: 200, timeOrigin: U4ZGV_T0, longTasks: [] }, [quietSample], { stealBoundPct: 10 }),
+    attributeBootRun(4, { composerReadyEndMs: 120, threadListHydratedEndMs: 200, timeOrigin: U4ZGV_T0, longTasks: [] }, [quietSample], { stealBoundPct: 10 }),
+  ];
+  const policy = evaluateBootStagingPolicy(runs);
+  assertEquals(policy.ok, false, "4 requested with 2 valid must NOT pass — tie is not majority");
+  assertEquals(policy.environmentalRefusal, true, "valid runs below majority floor must refuse environmentally");
+  assertEquals(policy.validRuns.length, 2);
+  assertEquals(policy.contendedRuns.length, 2);
+  assertEquals(policy.evidenceSummary, "valid runs 2 of 4, excluded 2 (steal 25%)");
+  assert(
+    /valid runs 2 of 4, excluded 2/.test(policy.error!),
+    `expected message to match /valid runs 2 of 4, excluded 2/, got: ${policy.error}`,
+  );
+});
+
+Deno.test("dn8ox: P2: PASS and FAIL evaluations carry mandatory evidence summary, and excluded-run breaches never emit decisive red wording", () => {
+  const stolenSample: any = {
+    measurable: true, load1: 1.1, load5: 1.0, cores: 8, loadPerCore: 0.14,
+    activeCompilers: 0, compilerNames: [], stealPct: 25, at: U4ZGV_T0 + 300,
+  };
+  const quietSample: any = {
+    measurable: true, load1: 0.4, load5: 0.3, cores: 8, loadPerCore: 0.05,
+    activeCompilers: 0, compilerNames: [], stealPct: 2, at: U4ZGV_T0 + 300,
+  };
+
+  // Case 1: PASS evaluation (the reviewer's exact repro fixture)
+  const passRuns = [
+    attributeBootRun(1, { composerReadyEndMs: 120, threadListHydratedEndMs: 200, timeOrigin: U4ZGV_T0, longTasks: [{ name: "self", duration: 800, startTime: 100 }] }, [stolenSample], { stealBoundPct: 10 }),
+    attributeBootRun(2, { composerReadyEndMs: 120, threadListHydratedEndMs: 200, timeOrigin: U4ZGV_T0, longTasks: [{ name: "self", duration: 600, startTime: 100 }] }, [stolenSample], { stealBoundPct: 10 }),
+    attributeBootRun(3, { composerReadyEndMs: 120, threadListHydratedEndMs: 200, timeOrigin: U4ZGV_T0, longTasks: [] }, [quietSample], { stealBoundPct: 10 }),
+    attributeBootRun(4, { composerReadyEndMs: 120, threadListHydratedEndMs: 200, timeOrigin: U4ZGV_T0, longTasks: [] }, [quietSample], { stealBoundPct: 10 }),
+    attributeBootRun(5, { composerReadyEndMs: 120, threadListHydratedEndMs: 200, timeOrigin: U4ZGV_T0, longTasks: [] }, [quietSample], { stealBoundPct: 10 }),
+  ];
+  const passPolicy = evaluateBootStagingPolicy(passRuns);
+  assertEquals(passPolicy.ok, true);
+  assertEquals(passPolicy.environmentalRefusal, false);
+  assertEquals(passPolicy.evidenceSummary, "valid runs 3 of 5, excluded 2 (steal 25%)", "PASS evaluation must carry aggregate evidence summary");
+  // Pinning: ensure no warning uses the old decisive wording ("stays a severe red" or treats excluded breach as a decisive breach)
+  assert(!passPolicy.warnings.some((w) => w.includes("stays a severe red")), "no warning may claim an excluded run stays a severe red");
+  assert(!passPolicy.warnings.some((w) => w.includes("severe long task breach detected")), "no diagnostic may word an excluded breach as a decisive breach detected");
+  assert(
+    passPolicy.warnings.some((w) => w.includes("EXCLUDED run") && w.includes("reported, not decisive (dn8ox)")),
+    "excluded breaches must be explicitly marked reported, not decisive",
+  );
+  assertEquals(passPolicy.error, undefined);
+
+  // Case 2: FAIL evaluation (severe breach in a VALID run beside excluded runs)
+  const failRuns = [
+    attributeBootRun(1, { composerReadyEndMs: 120, threadListHydratedEndMs: 200, timeOrigin: U4ZGV_T0, longTasks: [{ name: "self", duration: 800, startTime: 100 }] }, [stolenSample], { stealBoundPct: 10 }),
+    attributeBootRun(2, { composerReadyEndMs: 120, threadListHydratedEndMs: 200, timeOrigin: U4ZGV_T0, longTasks: [{ name: "self", duration: 600, startTime: 100 }] }, [stolenSample], { stealBoundPct: 10 }),
+    attributeBootRun(3, { composerReadyEndMs: 120, threadListHydratedEndMs: 200, timeOrigin: U4ZGV_T0, longTasks: [{ name: "self", duration: 650, startTime: 100 }] }, [quietSample], { stealBoundPct: 10 }),
+    attributeBootRun(4, { composerReadyEndMs: 120, threadListHydratedEndMs: 200, timeOrigin: U4ZGV_T0, longTasks: [] }, [quietSample], { stealBoundPct: 10 }),
+    attributeBootRun(5, { composerReadyEndMs: 120, threadListHydratedEndMs: 200, timeOrigin: U4ZGV_T0, longTasks: [] }, [quietSample], { stealBoundPct: 10 }),
+  ];
+  const failPolicy = evaluateBootStagingPolicy(failRuns);
+  assertEquals(failPolicy.ok, false);
+  assertEquals(failPolicy.environmentalRefusal, false);
+  assertEquals(failPolicy.evidenceSummary, "valid runs 3 of 5, excluded 2 (steal 25%)", "FAIL evaluation must carry aggregate evidence summary");
+  assertStringIncludes(failPolicy.error!, "valid runs 3 of 5, excluded 2 (steal 25%)", "FAIL error must state the evidence base");
+  assertStringIncludes(failPolicy.error!, "Run 3", "FAIL error must identify the valid run that failed, not excluded runs");
+  assert(!failPolicy.error!.includes("Run 1"), "FAIL error must not treat excluded Run 1 as decisive");
+  assert(!failPolicy.error!.includes("Run 2"), "FAIL error must not treat excluded Run 2 as decisive");
 });

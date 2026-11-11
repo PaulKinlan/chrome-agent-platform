@@ -146,6 +146,7 @@ Deno.test("ntp-boot-staging: headless Chrome for Testing boots ntp.html with 0 l
 
     const policy = evaluateBootStagingPolicy(runResults);
     for (const w of policy.warnings) console.warn(w);
+    console.log(`[ntp-boot-staging] ${policy.evidenceSummary}`);
     if (!policy.ok) {
       if (policy.environmentalRefusal) {
         console.error(
