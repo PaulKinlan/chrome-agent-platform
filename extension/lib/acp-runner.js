@@ -9,6 +9,7 @@ import { AcpNativeTransport, classifyNativeFailure, DEFAULT_NATIVE_HOST } from "
 import { acpExecutionId } from "./acp-thread-journal.js";
 import { sha256Hex } from "./pure-hash.js";
 import {
+  mintUntrustedToken,
   wrapUntrustedContent,
   isWellFormedFenceWithToken,
   UNTRUSTED_TOKEN_PLACEHOLDER,
@@ -65,7 +66,16 @@ export async function resolveSkillContext(text, { runtimeSend = null } = {}) {
 }
 
 /** The harness turn payload: the skill context block, then the owner's own
- *  text. Unchanged when there is nothing to inject. Pure. */
+ *  text. Unchanged when there is nothing to inject. Pure.
+ *
+ *  nkf75: the boundary is the FENCE, not escaping. For an UNTRUSTED
+ *  (imported) skill, refId/name/description are attacker-controlled natural
+ *  language — escaping entity-ises markup but cannot turn instructions into
+ *  data (the consumer is a model, not an HTML parser), and it mangles
+ *  legitimate prose for everyone else. So imported metadata is wrapped as
+ *  DATA inside the run's fence (raw bytes, round-tripping <>&"), and trusted
+ *  builtin skills render raw with no escaping at all. The <cap-skills>
+ *  wrapper close stays the builder's own (el1zy). */
 export function buildPromptWithSkillContext(task, skills, runToken = null) {
   const list = Array.isArray(skills) ? skills.filter((s) => s && (s.prompt || s.description)) : [];
   if (!list.length) return String(task ?? "");
@@ -76,14 +86,35 @@ export function buildPromptWithSkillContext(task, skills, runToken = null) {
     const safePrompt = isImported && promptText && !isWellFormedFenceWithToken(promptText, token)
       ? wrapUntrustedContent(promptText, token)
       : promptText;
+    if (isImported) {
+      const meta = [`refId: ${String(s.refId ?? "")}`, `name: ${String(s.name ?? "")}`];
+      if (s.description) meta.push(`description: ${String(s.description)}`);
+      return (
+        `<cap-skill>\n${wrapUntrustedContent(meta.join("\n"), token)}\n` +
+        `<instructions>\n${safePrompt}\n</instructions>\n` +
+        `</cap-skill>`
+      );
+    }
     return (
-      `<cap-skill ref="${s.refId}" name="${s.name}">\n` +
-      (s.description ? `<description>${s.description}</description>\n` : "") +
+      `<cap-skill ref="${String(s.refId ?? "")}" name="${String(s.name ?? "")}">\n` +
+      (s.description ? `<description>${String(s.description)}</description>\n` : "") +
       `<instructions>\n${safePrompt}\n</instructions>\n` +
       `</cap-skill>`
     );
   }).join("\n");
-  return `<cap-skills>\n${block}\n\n${String(task ?? "")}`;
+  // el1zy: the wrapper is CLOSED here. Unclosed, the first hostile "</cap-skills>"
+  // in untrusted metadata became the only close in the payload — ending the
+  // skills block early and evicting the owner's task from it. Now the builder's
+  // own close is the only one, and the owner's text sits outside the block.
+  return `<cap-skills>\n${block}\n</cap-skills>\n\n${String(task ?? "")}`;
+}
+
+/** The live harness turn path (nkf75): every turn's fence uses a FRESH minted
+ *  token, so imported content authored before the turn cannot know the close
+ *  marker it would need to forge. (Direct callers may pass their own token;
+ *  the placeholder remains for static/test composition.) */
+export function buildHarnessPromptWithSkillContext(task, skills) {
+  return buildPromptWithSkillContext(task, skills, mintUntrustedToken());
 }
 
 /**
@@ -1202,7 +1233,7 @@ export async function runAcpTaskTurn(options) {
       const ctx = Array.isArray(skills) && skills.length
         ? skills
         : await resolveSkillContext(effectiveTask, { runtimeSend });
-      harnessPrompt = buildPromptWithSkillContext(effectiveTask, ctx);
+      harnessPrompt = buildHarnessPromptWithSkillContext(effectiveTask, ctx);
     } catch { /* a context failure never blocks the turn */ }
 
     // chrome-agent-platform-2amt: in-turn browser tool execution loop.
