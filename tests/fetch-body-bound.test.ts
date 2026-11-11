@@ -106,7 +106,16 @@ Deno.test("hvd4s source pins: BOTH brokers read through the helper; no unbounded
   assert(host.includes('import { readResponseTextBounded } from "./fetch-body-bound.js";'), "script-host imports the helper");
   const rfStart = host.indexOf("export async function runFetch");
   assert(rfStart >= 0, "runFetch exists");
-  const rfRegion = host.slice(rfStart, rfStart + 5000);
+  // z7i3m: delimit the region STRUCTURALLY (runFetch's own closing brace at column 0), not with a
+  // magic 5000-char window. The window silently stopped covering the statements it pins as soon as
+  // a lane added a comment block to this function — the pin then failed for a change that kept the
+  // bound intact ("the bounded read is gone") while a change that DELETED the bound further down
+  // could have satisfied it. A region that cannot be overtaken by comments is the honest shape.
+  const rfEnd = host.indexOf("\n}\n", rfStart);
+  assert(rfEnd > rfStart, "runFetch has a top-level closing brace");
+  const rfRegion = host.slice(rfStart, rfEnd);
+  assert(rfRegion.length > 500, "the runFetch region is a real function body, not a truncated slice");
+  assert(!rfRegion.includes("\\nexport "), "the runFetch region stops at runFetch, not the next export");
   assert(rfRegion.includes("const bounded = await readResponseTextBounded(res).catch(() => ({ text: \"\" }));"), "the runFetch fallback reads through the helper and degrades a read failure to empty text");
   assert(!rfRegion.includes("await res.text()"), "the fallback contains no unbounded full-body read");
   assert(rfRegion.includes("text: bounded.text"), "the fallback returns the bounded text");
