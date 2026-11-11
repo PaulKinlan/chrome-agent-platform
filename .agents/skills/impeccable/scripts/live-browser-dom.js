@@ -27,9 +27,14 @@
     // chrome-agent-platform-hheu4: pickable() forced layout on EVERY
     // pointermove — getBoundingClientRect per element per event, several
     // elements per event burst. Cache each element's rect and invalidate on
-    // scroll, resize, DOM mutation, and explicit apply-completion so the
-    // measurements are reused across the burst while never outliving a
-    // layout change.
+    // scroll, resize, DOM mutation (childList, attributes AND characterData —
+    // text-node data/nodeValue updates are the React text-update shape), and
+    // explicit apply-completion so the measurements are reused across the
+    // burst while never outliving a signalled layout change.
+    // chrome-agent-platform-1cs04: layout changes with NO scroll/resize/DOM-
+    // mutation signal — CSS animation/transition, hover-driven resize, webfont
+    // or image load — do NOT invalidate this cache. Callers that drive those
+    // must invalidate explicitly (dispose() also drops the cache).
     // chrome-agent-platform-ffp7s: hheu4 only routed pickable() through the
     // cache; the insert-mode path (live-browser.js layoutFlowChildren +
     // handleMouseMove's target read) kept calling getBoundingClientRect
@@ -57,9 +62,18 @@
     // Per-instance listeners: each instance's invalidator clears only its own
     // cache, so parallel instances stay correct (the cost is one listener set
     // per live session — created once per live-mode start).
-    const invalidate = () => invalidateElementRects();
-    root.addEventListener('scroll', invalidate, { capture: true, passive: true });
-    root.addEventListener('resize', invalidate, { passive: true });
+    // chrome-agent-platform-1rc3n: registration is guarded so non-window roots
+    // (Node harnesses, stub roots) degrade to explicit invalidation only,
+    // mirroring the MutationObserver typeof guard below; dispose() removes the
+    // listeners and disconnects the observer so repeated factory calls cannot
+    // accumulate observers on doc for the process lifetime.
+    const onScroll = () => invalidateElementRects();
+    const onResize = () => invalidateElementRects();
+    let rectObserver = null;
+    if (typeof root.addEventListener === 'function') {
+      root.addEventListener('scroll', onScroll, { capture: true, passive: true });
+      root.addEventListener('resize', onResize, { passive: true });
+    }
     if (typeof MutationObserver === 'function') {
       // chrome-agent-platform-m0uen: the observer used to fire on the overlay's OWN
       // chrome writes — setPageInteractionCursor rewrites the cursor <style>'s
@@ -77,11 +91,24 @@
         const el = node.nodeType === 1 ? node : node.parentElement;
         return !!own(el);
       };
-      new MutationObserver((records) => {
+      rectObserver = new MutationObserver((records) => {
         if (!Array.isArray(records) || records.some((r) => !isOwnChromeTarget(r && r.target))) {
           invalidateElementRects();
         }
-      }).observe(doc, { childList: true, subtree: true, attributes: true });
+      });
+      rectObserver.observe(doc, { childList: true, subtree: true, attributes: true, characterData: true });
+    }
+
+    function dispose() {
+      if (typeof root.removeEventListener === 'function') {
+        root.removeEventListener('scroll', onScroll, { capture: true });
+        root.removeEventListener('resize', onResize);
+      }
+      if (rectObserver) {
+        rectObserver.disconnect();
+        rectObserver = null;
+      }
+      invalidateElementRects();
     }
 
     function pickable(el) {
@@ -187,6 +214,7 @@
       pickable,
       cachedRect,
       invalidateElementRects,
+      dispose,
       desc,
       rectIsUsableAnchor,
       makeFrozenAnchor,
