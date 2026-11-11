@@ -148,29 +148,104 @@ Deno.test({
       await sleep(2000);
 
       await cdp.send("Page.navigate", { url: `chrome-extension://${EXPECTED_ID}/ntp/ntp.html` }, o.sessionId);
-      await sleep(3000);
 
+      // 8ijxu EVIDENCE KNOB: emulate the starved box deterministically instead of hoping for one.
+      // CAP_CENSUS_CPU_THROTTLE=20 makes Chrome throttle this page's main thread 20x through CDP, so
+      // hydration lands far past any fixed sleep — the condition that produced the original red. The
+      // gate below runs this file BOTH ways at that rate (see the bead): the retired stopwatch shape
+      // reds 'no thread row found in sidebar', the state-wait shape passes. Default 1 = no change
+      // for every other caller.
+      const throttle = Number(Deno.env.get("CAP_CENSUS_CPU_THROTTLE") ?? "1");
+      if (Number.isFinite(throttle) && throttle > 1) {
+        await cdp.send("Emulation.setCPUThrottlingRate", { rate: throttle }, o.sessionId);
+      }
+
+      // 8ijxu: this step used to be a STOPWATCH — reload, sleep(3000), then look for the row. On a
+      // starved box (50-87% steal) hydration had not finished at the 3 s mark, so the census redded
+      // with 'no thread row found in sidebar': a wall-clock assertion that cannot tell a slow box
+      // from a product defect. It is now a WAIT-ON-STATE with a named bound (never a raised sleep):
+      // wait for the row the seed guarantees, wait for the RPC log to go QUIET so the count that
+      // follows is the click's own (not whatever hydration still owed), then click and wait for the
+      // view to actually open. A row that never appears, or a view that never opens, still FAILS —
+      // with the state it saw — so starvation can neither pass vacuously nor red the wrong cause.
       const openResult = await cdp.eval(o.sessionId, `(async () => {
-        window.__rpc.log.length = 0;
-        const btn = document.querySelector('#thread-sidebar .thread-item .t-open');
-        if (!btn) return { err: 'no thread row found in sidebar' };
-        const tv = document.getElementById('thread-view');
-        btn.click();
-        let waited = 0;
-        while (waited < 5000) {
-          await new Promise(r => setTimeout(r, 16));
-          waited += 16;
-          if (!tv.hidden) break;
+        // BUDGET: row 15s + open 10s + stable 8s = 33s, inside openCdp's 60s timeout, so a
+        // pathological box reports a STATE diagnostic here instead of a CDP timeout from outside.
+        const ROW_BOUND_MS = 15000;    // state bound, not a performance assertion
+        const OPEN_BOUND_MS = 10000;
+        const STABLE_BOUND_MS = 8000;
+        const waitUntil = async (pred, boundMs, step = 50) => {
+          const t0 = Date.now();
+          while (Date.now() - t0 < boundMs) { if (pred()) return true; await new Promise(r => setTimeout(r, step)); }
+          return pred();
+        };
+
+        const rowAppeared = await waitUntil(() => !!document.querySelector('#thread-sidebar .thread-item .t-open'), ROW_BOUND_MS);
+        if (!rowAppeared) {
+          return {
+            err: 'no thread row appeared within ' + ROW_BOUND_MS + 'ms of the reload: the seeded run never produced a sidebar row' +
+              ' (threadItems=' + document.querySelectorAll('#thread-sidebar .thread-item').length +
+              ', sidebar=' + !!document.querySelector('#thread-sidebar') + ') — this is a product/seed failure, not a timing one',
+          };
         }
-        await new Promise(r => setTimeout(r, 300));
-        const rpcs = JSON.parse(JSON.stringify(window.__rpc.log));
-        return { rpcs: rpcs.length, list: rpcs.map(r => r.type) };
+
+        // ATTRIBUTION BY ISSUE TIME, not by clearing the log. The shim stamps every call with
+        // performance.now() as it is ISSUED, so a call issued before the click is never counted even
+        // if it SETTLES long afterwards — and under CPU throttle settling is exactly what lags (a
+        // 20x-throttled box still had 22 hydration calls pending after 5 s when this step relied on
+        // "everything settled", which is a wall clock in disguise and reported 5 > 4).
+        const tv = document.getElementById('thread-view');
+        const btn = document.querySelector('#thread-sidebar .thread-item .t-open');
+        const clickAt = performance.now();
+        btn.click();
+
+        const opened = await waitUntil(() => tv && !tv.hidden, OPEN_BOUND_MS);
+
+        // We must stop waiting for the click's own fan-out to be ISSUED. "Stable" = the log's length
+        // has not grown across 5 consecutive 100 ms checks; that only decides WHEN to stop looking,
+        // it cannot mis-attribute a call (the timestamp does that), so a straggler can only be missed
+        // by stopping too early — hence the conservative count and the honest red when it never
+        // stabilises.
+        const afterClick = () => window.__rpc.log.filter(r => r.at >= clickAt);
+        const waitStable = async (boundMs) => {
+          const t0 = Date.now();
+          let prev = afterClick().length, stable = 0;
+          while (Date.now() - t0 < boundMs) {
+            await new Promise(r => setTimeout(r, 100));
+            const now = afterClick().length;
+            stable = now === prev ? stable + 1 : 0;
+            prev = now;
+            if (stable >= 5) return true;
+          }
+          return false;
+        };
+        const stable = await waitStable(STABLE_BOUND_MS);
+
+        const rpcs = afterClick().map(r => ({ type: r.type, at: Math.round(r.at - clickAt) }));
+        return {
+          rpcs: rpcs.length,
+          list: rpcs.map(r => r.type + '@' + r.at + 'ms'),
+          opened,
+          stable,
+          warnings: [
+            ...(opened ? [] : ['thread view did not become visible within ' + OPEN_BOUND_MS + 'ms of the click']),
+            ...(stable ? [] : ['the click fan-out never stabilised within ' + STABLE_BOUND_MS + 'ms, so the <= 4 budget may be a partial count: ' + JSON.stringify(rpcs.map(r => r.type))]),
+          ],
+        };
       })()`);
 
       assert(!openResult.err, openResult.err);
+      // A census that could not be measured must SAY so instead of reading a low number as a product
+      // win: a view that never opened, or a fan-out that never stabilised, is not evidence of
+      // coalescing. (Call attribution is by issue time, so a slow-settling call is never miscounted.)
+      assert(
+        openResult.opened !== false && openResult.stable !== false,
+        `thread-open census could not be measured honestly: ${(openResult.warnings ?? []).join('; ')}`,
+      );
       assert(
         openResult.rpcs <= 4,
-        `Thread open RPC count ${openResult.rpcs} must be <= 4 (was 14–21 before coalescing)`
+        `Thread open RPC count ${openResult.rpcs} must be <= 4 (was 14–21 before coalescing); by type: ` +
+          JSON.stringify(openResult.list),
       );
     } finally {
       if (cdp) cdp.close();
