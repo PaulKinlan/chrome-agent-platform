@@ -28,10 +28,13 @@ async function mirror() {
   git(dir, "config", "user.email", "fixture@example.invalid");
   git(dir, "config", "user.name", "fixture");
   git(dir, "config", "commit.gpgsign", "false");
-  for (const rel of ["scripts/git-hooks", "extension/options", "extension/lib"]) {
+  for (const rel of ["scripts/git-hooks", "extension/options", "extension/lib", "scripts/lib"]) {
     await mkdir(path.join(dir, rel), { recursive: true });
   }
-  for (const rel of ["scripts/bump-version.mjs", "scripts/sync-changelog.mjs", "extension/options/changelog-filter.js"]) {
+  // scripts/lib/release-note.mjs: bump-version.mjs imports the shared trailer
+  // matcher + sanitiser from there (chrome-agent-platform-2h4j7); without it
+  // the mirror dies on module resolution before deciding anything.
+  for (const rel of ["scripts/bump-version.mjs", "scripts/sync-changelog.mjs", "scripts/lib/release-note.mjs", "extension/options/changelog-filter.js"]) {
     await copyFile(path.join(ROOT, rel), path.join(dir, rel));
   }
   for (const [rel, render] of Object.entries(surfaces)) await writeFile(path.join(dir, rel), render(VERSION));

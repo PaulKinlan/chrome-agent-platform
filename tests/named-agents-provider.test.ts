@@ -304,6 +304,13 @@ Deno.test("bump-version: unmodified script in a complete scratch mirror (--messa
     for (const f of ["bump-version.mjs", "sync-changelog.mjs"]) {
       await fsp.copyFile(path.join(repoScripts, f), path.join(dir, "scripts", f));
     }
+    // scripts/lib/release-note.mjs too: the trailer matcher + sanitiser live
+    // there since chrome-agent-platform-2h4j7 and bump-version.mjs imports them.
+    await fsp.mkdir(path.join(dir, "scripts", "lib"), { recursive: true });
+    await fsp.copyFile(
+      path.join(repoScripts, "lib", "release-note.mjs"),
+      path.join(dir, "scripts", "lib", "release-note.mjs"),
+    );
     // bump-version.mjs is no longer standalone — it imports the changelog
     // filter — so a "complete mirror" must carry that module or the run dies on
     // module resolution and reads as a bump failure.
@@ -353,6 +360,13 @@ Deno.test("bump-version: the changelog entry is sanitized (prefix, SHA and track
     for (const f of ["bump-version.mjs", "sync-changelog.mjs"]) {
       await fsp.copyFile(path.join(repoScripts, f), path.join(dir, "scripts", f));
     }
+    // scripts/lib/release-note.mjs too: the trailer matcher + sanitiser live
+    // there since chrome-agent-platform-2h4j7 and bump-version.mjs imports them.
+    await fsp.mkdir(path.join(dir, "scripts", "lib"), { recursive: true });
+    await fsp.copyFile(
+      path.join(repoScripts, "lib", "release-note.mjs"),
+      path.join(dir, "scripts", "lib", "release-note.mjs"),
+    );
     // bump-version.mjs is no longer standalone — it imports the changelog
     // filter — so a "complete mirror" must carry that module or the run dies on
     // module resolution and reads as a bump failure.
@@ -391,6 +405,13 @@ Deno.test("bump-version: controlled failure leaves NO partial write (atomicity)"
     for (const f of ["bump-version.mjs", "sync-changelog.mjs"]) {
       await fsp.copyFile(path.join(repoScripts, f), path.join(dir, "scripts", f));
     }
+    // scripts/lib/release-note.mjs too: the trailer matcher + sanitiser live
+    // there since chrome-agent-platform-2h4j7 and bump-version.mjs imports them.
+    await fsp.mkdir(path.join(dir, "scripts", "lib"), { recursive: true });
+    await fsp.copyFile(
+      path.join(repoScripts, "lib", "release-note.mjs"),
+      path.join(dir, "scripts", "lib", "release-note.mjs"),
+    );
     // bump-version.mjs is no longer standalone — it imports the changelog
     // filter — so a "complete mirror" must carry that module or the run dies on
     // module resolution and reads as a bump failure.
