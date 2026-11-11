@@ -77,7 +77,7 @@ Deno.test("weights bookkeeping (jw8a6): the committed table equals a fresh deriv
   assertEquals(
     table.weights,
     derived.weights,
-    "the committed weights are not the derivation of the committed source digest — the table has gone stale (or the digest and table were updated separately): re-run scripts/update-test-weights.mjs against the recorded log and re-commit both",
+    "the committed weights are not the derivation of the committed source digest — the table has gone stale (or the digest and table were updated separately): re-run scripts/update-test-weights.mjs against the recorded log — it rewrites BOTH scripts/lib/test-weights.json and scripts/lib/test-weights.source.json in one run (rs78b) — and re-commit both",
   );
 });
 
