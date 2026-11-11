@@ -25,7 +25,7 @@
 // in node:vm with the REAL owner-approval.js and named-agents.js modules.
 // @ts-nocheck — dynamic chrome/OPFS stubs (no types in Deno).
 
-import { assert, assertEquals } from "jsr:@std/assert@1";
+import { assert, assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
 import { parse } from "npm:acorn";
 import { runInNewContext } from "node:vm";
 import * as approvals from "../extension/lib/owner-approval.js";
@@ -334,6 +334,9 @@ Deno.test("awaom: boundStagedApprovalDetail accepts the provider kind with a bou
     kind: "named-agent.set-provider", name: "Probe",
     oldContent: "a", newContent: "b", added: 1, removed: 1,
     provenance: "model",
+    // Round-4: a set-provider detail also REQUIRES its resolved destination
+    // (tested exhaustively in the round-4 refusal test below).
+    resolvedDestination: "https://api.deepseek.com/v1",
   });
   assert(bounded);
   assertEquals(bounded.provenance, "model");
@@ -341,10 +344,12 @@ Deno.test("awaom: boundStagedApprovalDetail accepts the provider kind with a bou
   const long = approvals.boundStagedApprovalDetail({
     kind: "named-agent.set-provider", name: "Probe", oldContent: "", newContent: "",
     provenance: "x".repeat(200),
+    resolvedDestination: "https://api.deepseek.com/v1",
   });
   assertEquals(long.provenance.length, 64);
   const noProv = approvals.boundStagedApprovalDetail({
     kind: "named-agent.set-provider", name: "Probe", oldContent: "", newContent: "",
+    resolvedDestination: "inherit-global-default",
   });
   assertEquals(noProv.provenance, undefined);
   assertEquals(approvals.boundStagedApprovalDetail({
@@ -504,4 +509,85 @@ Deno.test("nat8y: set-provider refuses FAIL-CLOSED when its staged detail cannot
   assertEquals(approvalStore.approvals.size, 0, "the pending row is resolved, not left claimable");
   const after = await namedAgents.getNamedAgentProvider("probe");
   assertEquals(after?.baseURL, "https://api.deepseek.com/v1", "the refused change wrote nothing");
+});
+
+Deno.test("awaom round-4 (coord finding a): an UNRESOLVABLE destination is refused — no pending approval is ever staged", async () => {
+  // The round-3 fence returned null for an empty resolved endpoint and the
+  // staging rendered '(no endpoint could be resolved for this provider)' — a
+  // placeholder — and owner-approval validated only kind/name, so a
+  // model-authored openai-compatible override with NO baseURL still published
+  // an approval the owner could click without any destination ever existing.
+  // The fix: the approval MUST NOT be staged when the destination cannot be
+  // resolved; the producer returns null and the validator enforces the field
+  // structurally. RED on the pre-fix tree: the route stages and a pending
+  // row exists with the placeholder line.
+  reset();
+  const approvalStore = approvals.createApprovalStore();
+  const { bindCall } = await loadModelRoute(approvalStore);
+  let sawCard = false;
+  const res = await bindCall(async (event) => {
+    if (event.type === "approval-request") sawCard = true;
+  })("named-agent.set-provider", {
+    id: "probe",
+    config: { provider: "openai-compatible", baseURL: "", model: "some-byom" },
+  });
+  assertEquals(res.ok, false, "an unresolvable destination must refuse, not stage");
+  assertStringIncludes(String(res.error ?? ""), "could not be shown for approval");
+  assertEquals(sawCard, false, "no approval card is published for an undisclosed destination");
+  assertEquals(
+    approvals.listPendingApprovals(approvalStore).filter((row) => row.action === "named-agent.set-provider").length,
+    0,
+    "no pending approval row exists for the refused change",
+  );
+});
+
+Deno.test("awaom round-4: the demo provider still stages — its destination honesty is 'no network calls', never a placeholder", async () => {
+  // The demo provider has NO network destination by design, so there is no
+  // undisclosed host: the card says exactly that, and the staged detail
+  // carries the honest sentinel rather than an empty or placeholder endpoint.
+  reset();
+  const approvalStore = approvals.createApprovalStore();
+  const { bindCall } = await loadModelRoute(approvalStore);
+  let staged = null;
+  await bindCall(async (event) => {
+    if (event.type !== "approval-request") return;
+    staged = approvals.getStagedApprovalDetail(approvalStore, event.approvalId);
+    approvals.resolvePendingApproval(approvalStore, event.approvalId, false);
+  })("named-agent.set-provider", { id: "probe", config: { provider: "demo" } });
+  assert(staged, "the demo provider stages (there is no host to disclose)");
+  assertEquals(staged.resolvedDestination, "demo-no-network");
+  assert(staged.newContent.includes("demo"), "the card names the demo provider");
+  assert(
+    !staged.newContent.includes("no endpoint could be resolved"),
+    "a destination-less provider is never rendered as an unresolved placeholder",
+  );
+  assert(staged.newContent.includes("no network calls"), "the card states the demo provider makes no network calls");
+});
+
+Deno.test("awaom round-4: boundStagedApprovalDetail itself refuses a set-provider detail with no resolved destination", () => {
+  // The validator enforces the field structurally, not just the producer:
+  // defense in depth at the enforcement point (the fix coord asked for in
+  // owner-approval.js, so a future caller cannot stage a destination-less
+  // provider change by bypassing providerChangeStagedDetail).
+  const base = {
+    kind: "named-agent.set-provider",
+    name: "probe",
+    oldContent: "old",
+    newContent: "new",
+    added: 1,
+    removed: 1,
+  };
+  assertEquals(approvals.boundStagedApprovalDetail(base), null, "missing destination refuses");
+  assertEquals(approvals.boundStagedApprovalDetail({ ...base, resolvedDestination: "" }), null, "empty destination refuses");
+  assertEquals(approvals.boundStagedApprovalDetail({ ...base, resolvedDestination: "not-a-url" }), null, "unparseable destination refuses");
+  assertEquals(approvals.boundStagedApprovalDetail({ ...base, resolvedDestination: "file:///etc/passwd" }), null, "non-http(s) destination refuses");
+  for (const okDest of ["inherit-global-default", "demo-no-network", "https://api.openai.com/v1", "http://localhost:11434/v1"]) {
+    const bounded = approvals.boundStagedApprovalDetail({ ...base, resolvedDestination: okDest });
+    assert(bounded, `destination ${okDest} must stage`);
+    assertEquals(bounded.resolvedDestination, okDest);
+  }
+  // Other kinds stay uninvolved: no resolvedDestination requirement leaks out.
+  const edit = approvals.boundStagedApprovalDetail({ kind: "asset.update", name: "a", oldContent: "1", newContent: "2", added: 1, removed: 1 });
+  assert(edit, "asset.update needs no destination field");
+  assertEquals(edit.resolvedDestination, undefined);
 });

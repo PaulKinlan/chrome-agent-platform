@@ -6624,13 +6624,18 @@ function providerChangeDetailText(provider, keyLine) {
   if (!provider) return "provider: (inherit the global default)\n";
   // nat8y: the card names the endpoint the run will ACTUALLY reach — an empty
   // stored baseURL renders as the catalog-resolved default, not a sentence.
+  // Round-4: a provider with NO network destination by design (demo) says so
+  // honestly; the placeholder below is unreachable for a proposed change
+  // (staging refuses it) and remains only as honest old-side display.
   const storedBase = singleLineCardValue(provider.baseURL);
   const resolvedBase = singleLineCardValue(effectiveBaseURL(provider));
   const baseLine = storedBase
     ? storedBase
     : resolvedBase
       ? `${resolvedBase} (resolved — the ${singleLineCardValue(provider.provider)} preset's default endpoint)`
-      : "(no endpoint could be resolved for this provider)";
+      : provider.provider === "demo"
+        ? "none (the demo provider makes no network calls)"
+        : "(no endpoint could be resolved for this provider)";
   return [
     `provider: ${singleLineCardValue(provider.provider)}`,
     `baseURL: ${baseLine}`,
@@ -6699,6 +6704,27 @@ function providerChangeStagedDetail(existing, normalized, slug, principal) {
   );
   const summary = lineDiffSummary(oldText, newText);
   const name = typeof existing?.name === "string" && existing.name ? existing.name : String(slug || "agent");
+  // awaom round-4 (coord finding a): the approval must NEVER stage without a
+  // resolved destination the owner can see. Resolved per case:
+  //   - clearing the override (config null) reverts to the OWNER's global
+  //     provider — it cannot introduce a destination, so the sentinel
+  //     "inherit-global-default" is the whole disclosure;
+  //   - the demo provider makes NO network calls — there is no destination to
+  //     disclose, and the sentinel says exactly that;
+  //   - every network provider must resolve to a concrete endpoint
+  //     (effectiveBaseURL: stored baseURL, else the preset's catalogue
+  //     default). openai-compatible with no baseURL resolves to NOTHING, and a
+  //     card that cannot name its destination is REFUSED — producer side via
+  //     this null (requireOwnerApproval fails closed on it), validator side
+  //     via boundStagedApprovalDetail refusing a missing/empty field.
+  let resolvedDestination;
+  if (normalized == null) resolvedDestination = "inherit-global-default";
+  else if (normalized.provider === "demo") resolvedDestination = "demo-no-network";
+  else {
+    const resolved = effectiveBaseURL(normalized);
+    if (!resolved) return null;
+    resolvedDestination = resolved;
+  }
   return {
     kind: "named-agent.set-provider",
     name,
@@ -6708,6 +6734,7 @@ function providerChangeStagedDetail(existing, normalized, slug, principal) {
     removed: summary.removed,
     oldLabel: `${name} provider (current)`,
     newLabel: `${name} provider (proposed)`,
+    resolvedDestination,
     // WHO authored this change: the model principal (set_agent_provider) is the
     // case the card must name; owner surfaces never stage (owner-direct path).
     provenance: principal === "model" ? "model" : String(principal ?? ""),

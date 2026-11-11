@@ -2194,20 +2194,46 @@ export async function runConversationTurn(container, { text, attachments = [], h
       card?.focusRetry?.();
     }
   };
+  // awaom round-4 (coord finding b): whether an approval action's card may show
+  // its decision buttons BEFORE the staged detail resolves. For
+  // named-agent.set-provider the staged detail is the ONLY place the destination
+  // host exists — an opaque-but-clickable card is consent to an undisclosed host
+  // (the P1), so that card is detail-gated: non-interactive ("loading") until
+  // the detail resolves, disabled ("error", no approve path) when it fails.
+  // Edit approvals (asset.update / script.update / fs.write) keep their
+  // deliberate opaque fallback: the envelope names the artifact and the diff is
+  // auxiliary — the detail is not the consent basis there.
+  const approvalCardNeedsDetailGate = (action) => action === "named-agent.set-provider";
   // Fetch the staged edit detail (current + proposed body) for an edit
   // approval and render it as an <artifact-diff> slotted into the card, with a
   // title that names the artifact and its +n -m. The detail is the extension
-  // principal's to read (SW `approval.detail` gate); a failure or a missing
-  // record leaves the card in its opaque form — the decision still works.
+  // principal's to read (SW `approval.detail` gate); for NON-gated kinds a
+  // failure or a missing record leaves the card in its opaque form — the
+  // decision still works. For a detail-gated kind the card instead fails
+  // CLOSED: disabled with the honest reason, never actionable without the
+  // detail (the pending row expires on its own, 60 s SW-side TTL).
   const augmentApprovalCardWithDiff = async (card, approval) => {
+    const gated = approvalCardNeedsDetailGate(approval?.action);
     let detail = null;
     try {
       const res = await send("approval.detail", { approvalId: approval.approvalId });
       if (res?.ok && res.detail && typeof res.detail === "object") detail = res.detail;
     } catch { detail = null; }
-    if (!detail || !card || typeof document === "undefined") return;
-    // The card may already have been decided (granted/denied) or replaced.
-    if (card.getAttribute?.("state") && card.getAttribute("state") !== "pending") return;
+    if (!detail || !card || typeof document === "undefined") {
+      if (gated && card && typeof card.setAttribute === "function") {
+        const current = card.getAttribute?.("state");
+        if (!current || current === "pending" || current === "loading") {
+          card.setAttribute("detail", "The exact provider change could not be loaded, so this approval cannot be granted from here — the request expires on its own.");
+          card.setAttribute("state", "error");
+          card.focusStatus?.();
+        }
+      }
+      return false;
+    }
+    // The card may already have been decided (granted/denied) or replaced; a
+    // detail-gated card still in its "loading" state is waiting for exactly this.
+    const cardState = card.getAttribute?.("state");
+    if (cardState && cardState !== "pending" && cardState !== "loading") return false;
     const name = typeof detail.name === "string" && detail.name ? detail.name : "this artifact";
     const added = Number.isSafeInteger(detail.added) ? detail.added : 0;
     const removed = Number.isSafeInteger(detail.removed) ? detail.removed : 0;
@@ -2236,6 +2262,14 @@ export async function runConversationTurn(container, { text, attachments = [], h
     diff.before = typeof detail.oldContent === "string" ? detail.oldContent : "";
     diff.after = typeof detail.newContent === "string" ? detail.newContent : "";
     card.appendChild(diff);
+    // awaom round-4: the detail-gated card was rendered non-interactive
+    // ("loading"); now that the detail it waited on is rendered, it becomes
+    // actionable — the consent surface exists ONLY with the destination shown.
+    if (gated) {
+      card.removeAttribute("detail");
+      card.setAttribute("state", "pending");
+      card.focusApprove?.();
+    }
   };
   const maybeRenderApproval = (result, { blocking = false, requestId = null, toolCard = null, preRun = false, settle = null } = {}) => {
     const requirement = normalizePermissionRequirement(result);
@@ -2296,13 +2330,27 @@ export async function runConversationTurn(container, { text, attachments = [], h
         if (requirement.hostOrigins?.length) card.setAttribute("host-origins", JSON.stringify(requirement.hostOrigins));
         if (requirement.grantGlobal) card.setAttribute("global", "true");
       }
+      // awaom round-4: a detail-gated card (named-agent.set-provider) starts
+      // NON-INTERACTIVE — the staged detail it waits on is the only place the
+      // destination host exists, so the owner cannot click ahead of it. The
+      // state is set BEFORE the card is appended, so it never paints actionable.
+      if (actionApproval && approvalCardNeedsDetailGate(approval?.action)) {
+        card.setAttribute("state", "loading");
+      }
       card.addEventListener("approve", (ev) => handleApprovalDecision(requirement, card, ev?.detail?.sourceEvent, true));
-      card.addEventListener("deny", (ev) => handleApprovalDecision(requirement, card, ev?.detail?.sourceEvent, false));
-      card.addEventListener("retry", () => {
+      card.addEventListener("deny", (ev) => handleApprovalDecision(requirement, card, ev?.detail?.sourceEvent, false));      card.addEventListener("retry", () => {
         const entry = pendingApprovals.get(requirement.key);
         if (!entry || entry.status !== "pending") return;
-        card.setAttribute("state", "pending");
         card.removeAttribute("detail");
+        // awaom round-4: a detail-gated card retries the DETAIL, never the
+        // decision surface — it becomes actionable only WITH its detail.
+        const gatedApproval = requirement.approvals?.[0];
+        if (gatedApproval && approvalCardNeedsDetailGate(gatedApproval.action)) {
+          card.setAttribute("state", "loading");
+          void augmentApprovalCardWithDiff(card, gatedApproval);
+          return;
+        }
+        card.setAttribute("state", "pending");
         card.focusApprove?.();
       });
       // The approval card is the complete waiting state for a site tool. Hide
@@ -2342,7 +2390,7 @@ export async function runConversationTurn(container, { text, attachments = [], h
       // model-facing envelope), so they are fetched here, once, for this card.
       const editApproval = actionApproval ? requirement.approvals[0] : null;
       if (editApproval && (editApproval.action === "asset.update" || editApproval.action === "script.update" || editApproval.action === "fs.write" || editApproval.action === "named-agent.set-provider")) {
-        augmentApprovalCardWithDiff(card, editApproval);
+        void augmentApprovalCardWithDiff(card, editApproval);
       }
     }
     const entry = { requirement, status: "pending", card, blocking, requestId, requestIds: requestId ? [requestId] : [], ...(preRun ? { preRun: true } : {}), ...(typeof settle === "function" ? { settle } : {}) };

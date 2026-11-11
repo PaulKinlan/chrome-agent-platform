@@ -875,6 +875,11 @@ export function approvalCardDenial({ approvalId, action, targetRef, detail }) {
 // current body is not necessarily model-authored. The record is staged in the
 // approval store keyed by approvalId and evicted with the approval row.
 export const STAGED_APPROVAL_DETAIL_KINDS = new Set(["asset.update", "script.update", "fs.write", "named-agent.set-provider"]);
+
+/** awaom round-4: the destination-less cases a named-agent.set-provider card
+ * can honestly name without a URL — clearing an override reverts to the
+ * owner's own global provider; the demo provider makes no network calls. */
+export const PROVIDER_CHANGE_DESTINATION_SENTINELS = Object.freeze(["inherit-global-default", "demo-no-network"]);
 /** Validate a staged edit detail ({ kind, name, oldContent, newContent, added,
  * removed, oldLabel, newLabel, provenance? }). A malformed record (unknown kind,
  * no name) is dropped — the card then falls back to the opaque form. Content is
@@ -892,6 +897,26 @@ export function boundStagedApprovalDetail(detail) {
   const name = str(detail.name);
   if (!name) return null;
   const provenance = str(detail.provenance).slice(0, 64);
+  // awaom round-4 (coord finding a): a named-agent.set-provider detail must
+  // CARRY its resolved destination — an approval that cannot name the host is
+  // consent to an undisclosed host, the exact P1 this kind exists to close.
+  // The validator enforces it structurally, not just the producer: the field
+  // is a non-empty string that is either an honest destination-less sentinel
+  // or an absolute http(s) URL; anything else fails staging closed.
+  let resolvedDestination;
+  if (detail.kind === "named-agent.set-provider") {
+    resolvedDestination = str(detail.resolvedDestination).slice(0, 2048);
+    let destinationOk = PROVIDER_CHANGE_DESTINATION_SENTINELS.includes(resolvedDestination);
+    if (!destinationOk && resolvedDestination) {
+      try {
+        const u = new URL(resolvedDestination);
+        destinationOk = u.protocol === "http:" || u.protocol === "https:";
+      } catch {
+        destinationOk = false;
+      }
+    }
+    if (!destinationOk) return null;
+  }
   return {
     kind: detail.kind,
     name,
@@ -902,6 +927,7 @@ export function boundStagedApprovalDetail(detail) {
     oldLabel: str(detail.oldLabel) || `${name} (current)`,
     newLabel: str(detail.newLabel) || `${name} (proposed)`,
     ...(provenance ? { provenance } : {}),
+    ...(resolvedDestination ? { resolvedDestination } : {}),
   };
 }
 

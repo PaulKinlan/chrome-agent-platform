@@ -5994,11 +5994,18 @@ export class ApprovalCard extends Component {
     const body = this.getAttribute("body") || "";
     const approveLabel = this.getAttribute("approve-label") || "Approve";
     const denyLabel = this.getAttribute("deny-label") || "Deny";
-    const state = ["busy", "granted", "denied", "expired", "cancelled", "error"].includes(this.getAttribute("state")) ? this.getAttribute("state") : "pending";
+    const state = ["busy", "granted", "denied", "expired", "cancelled", "error", "loading"].includes(this.getAttribute("state")) ? this.getAttribute("state") : "pending";
     const detail = (this.getAttribute("detail") || "").slice(0, 240);
     const stateText = state === "busy"
       ? "Saving your decision…"
-      : state === "granted"
+      // awaom round-4 (coord finding b): "loading" is a NON-INTERACTIVE state
+      // for detail-gated approvals (named-agent.set-provider): the staged
+      // detail is the ONLY place the destination host exists, so the card
+      // renders no decision buttons until it resolves — consent cannot be
+      // given to an undisclosed host by clicking ahead of the detail.
+      : state === "loading"
+        ? "Loading the exact change to approve…"
+        : state === "granted"
         ? "Approved. The action resumed."
         : state === "denied"
           ? "Denied. The action was not performed."
@@ -6026,7 +6033,7 @@ export class ApprovalCard extends Component {
       .state { margin:0; font-size:12.5px; font-weight:600; color:var(--muted,#635e56); }
       .state.granted { color:var(--success,#1a7f37); }
       .state.error, .state.expired, .state.cancelled { color:var(--danger,#b3261e); }
-      :host([state="busy"]) .card, :host([state="granted"]) .card, :host([state="denied"]) .card, :host([state="expired"]) .card, :host([state="cancelled"]) .card, :host([state="error"]) .card { border-color:var(--border,#e3e0d9); }
+      :host([state="busy"]) .card, :host([state="granted"]) .card, :host([state="denied"]) .card, :host([state="expired"]) .card, :host([state="cancelled"]) .card, :host([state="error"]) .card, :host([state="loading"]) .card { border-color:var(--border,#e3e0d9); }
     `, `<div class="card" role="group" aria-label="Approval request">
         <p class="title">${escapeHtml(title)}</p>
         ${body ? `<p class="body">${escapeHtml(body)}</p>` : ""}
