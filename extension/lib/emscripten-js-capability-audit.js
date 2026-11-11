@@ -230,8 +230,8 @@ function memberChain(node) {
       continue;
     }
     const prop = cursor.property;
-    if (prop.type === "Identifier") names.unshift(prop.name);
-    else if (prop.type === "Literal" && typeof prop.value === "string") names.unshift(prop.value);
+    const name = staticPropertyName(prop);
+    if (name !== null) names.unshift(name);
     else opaque = true;
     cursor = cursor.object;
   }
@@ -242,13 +242,25 @@ function memberChain(node) {
 
 const calleeName = (callee) => {
   if (callee?.type === "Identifier") return callee.name;
-  if (callee?.type === "MemberExpression") {
-    const prop = callee.property;
-    if (prop.type === "Identifier") return prop.name;
-    if (prop.type === "Literal" && typeof prop.value === "string") return prop.value;
-  }
+  if (callee?.type === "MemberExpression") return staticPropertyName(callee.property);
   return null;
 };
+
+/** The static name of a property/key node (3z2st round-4 finding): an
+ * Identifier, a string Literal — or a TemplateLiteral with NO substitutions,
+ * whose single quasi is a STATIC string spelled differently. `self[\`fetch\`]`
+ * executes fetch exactly like self["fetch"]; a computed key carrying a
+ * static string is an occurrence, not an escape hatch. Substituted templates
+ * stay non-static (the computed residual). */
+function staticPropertyName(prop) {
+  if (!prop) return null;
+  if (prop.type === "Identifier") return prop.name;
+  if (prop.type === "Literal" && typeof prop.value === "string") return prop.value;
+  if (prop.type === "TemplateLiteral" && (!prop.expressions || prop.expressions.length === 0) && prop.quasis?.length === 1) {
+    return prop.quasis[0].value.cooked ?? null;
+  }
+  return null;
+}
 
 const containsConsecutive = (names, head, tail) => {
   for (let i = 0; i + 1 < names.length; i++) {
@@ -339,10 +351,12 @@ function judgeAst(ast) {
         if (cur.type === "Identifier") {
           const hits = CALL_NEW_NAME_INDEX.get(cur.name);
           if (hits) for (const listItem of hits) deny(listItem);
-        } else if (cur.type === "MemberExpression" || (cur.type === "Property" && !cur.computed)) {
+        } else if (cur.type === "MemberExpression" || cur.type === "Property") {
+          // A STATIC key is an occurrence whatever its spelling syntax —
+          // { fetch: x }, { "fetch": x } and { [`fetch`]: x } are the same
+          // name to the engine (3z2st round-4).
           const key = cur.type === "MemberExpression" ? cur.property : cur.key;
-          const keyName = key?.type === "Identifier" ? key.name
-            : (key?.type === "Literal" && typeof key.value === "string") ? key.value : null;
+          const keyName = staticPropertyName(key);
           if (keyName) {
             const hits = CALL_NEW_NAME_INDEX.get(keyName);
             if (hits) for (const listItem of hits) deny(listItem);
