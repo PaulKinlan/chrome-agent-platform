@@ -129,3 +129,54 @@ Deno.test("script host te1pu: runFetch refuses direct fetch fallback on register
 });
 
 
+
+Deno.test("script host ibdr4: the unscoped direct-fetch fallback refuses private/loopback/metadata destinations BEFORE issuing", async () => {
+  // The fallback is the ONE site INV-5 sanctions outside the broker (te1pu/oe4nz preconditions).
+  // Pre-fix it applied no destination predicate at all, so the sanctioned site could target
+  // http://127.0.0.1:*, http://169.254.169.254/ or any intranet host and the request WAS issued
+  // (nightly run-20261107; the store booked the row fixed without a fix). The deny list is the
+  // shared one — fetch-policy.js#isPrivateOrLoopbackHost, the same predicate every broker pays.
+  // MUTANT: delete the isPrivateOrLoopbackHost branch in validateUrl and this pin REDs — the
+  // loopback/metadata calls return ok:true with the recording fetch invoked.
+  const { runFetch } = await import("../extension/lib/script-host.js");
+  const origChrome = globalThis.chrome;
+  const origFetch = globalThis.fetch;
+  let fetchCalled = false;
+  try {
+    delete globalThis.chrome;
+    globalThis.fetch = async () => {
+      fetchCalled = true;
+      return new Response("ok", { status: 200 });
+    };
+
+    for (const url of [
+      "http://127.0.0.1:9/",
+      "http://169.254.169.254/latest/meta-data/",
+      "http://192.168.1.1/admin",
+      "http://10.0.0.5/internal",
+      "http://localhost:8080/x",
+    ]) {
+      fetchCalled = false;
+      const res = await runFetch({ url }, null);
+      assertEquals(res.ok, false, `${url} must be refused`);
+      assertEquals(res.error, "private_host_refused");
+      assertEquals(res.hint, "private, loopback and link-local destinations are not allowed");
+      assertEquals(fetchCalled, false, `no request may be ISSUED to ${url}`);
+    }
+
+    // An ordinary public URL still passes the unscoped fallback (te1pu precondition 2 unchanged).
+    const pub = await runFetch({ url: "https://example.com/api" }, null);
+    assertEquals(pub.ok, true);
+    assertEquals(fetchCalled, true, "public destinations keep working in unscoped contexts");
+
+    // The nv5lt run-scoped guard behaviour is unchanged: a registered run still fails closed
+    // before any fetch, private or public.
+    fetchCalled = false;
+    const scoped = await runFetch({ url: "https://example.com/api" }, "registered-run-123");
+    assertEquals(scoped.ok, false);
+    assertEquals(fetchCalled, false);
+  } finally {
+    globalThis.chrome = origChrome;
+    globalThis.fetch = origFetch;
+  }
+});

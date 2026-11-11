@@ -16,6 +16,7 @@ import {
 } from "./script-sandbox-modules.js";
 import { tagUntrusted } from "./untrusted-fence.js";
 import { isTrustedServiceWorkerSender } from "./pure-trust.js";
+import { isPrivateOrLoopbackHost } from "./fetch-policy.js";
 import { readResponseTextBounded } from "./fetch-body-bound.js";
 import { urlWithoutQuery } from "./url-echo.js";
 
@@ -37,6 +38,15 @@ function validateUrl(url) {
   }
   if (u.username || u.password) {
     return { ok: false, error: "invalid_url", hint: "URLs with credentials are not allowed" };
+  }
+  // ibdr4: the INV-5-sanctioned unscoped fallback shares the brokers' private-address deny
+  // list — the one site THREAT_MODEL allows to fetch outside the broker must not be the one
+  // unpolicied egress (loopback / RFC1918 / link-local incl. cloud metadata / localhost).
+  // The brokered route re-checks server-side (checkFetchTarget); refusing here means the
+  // fallback never ISSUES the request either. Fixed code + STATIC hint (7t2zv: interpolated
+  // parser-derived text in model-readable returns is the leak class).
+  if (isPrivateOrLoopbackHost(u.hostname)) {
+    return { ok: false, error: "private_host_refused", hint: "private, loopback and link-local destinations are not allowed" };
   }
   // The verdict url is DISPATCH-only (runFetch sends it to the broker and
   // fetches it); it never reaches a model-readable return — the echoes are
