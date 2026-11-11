@@ -954,9 +954,11 @@ const QUARANTINE_BEAD = "chrome-agent-platform-8tgnt";
 // ksnsa LIFTED the live quarantine on 2026-11-11: the exit-criterion run of the suite passed (0 long tasks
 // across 5 valid runs, quiet window at steal=1%, load/core=0.12, tree 451239537), so QUARANTINED_HEAVY_FILES in
 // the tree is now EMPTY and the suite is back in the CERT set. The two-directional enforcement pinned below is a
-// property of the MECHANISM, not of that one entry, so these tests keep pinning it against an INJECTED
-// declaration (the `quarantined` option of auditSuiteLedger / writeHeavyReceipt / checkHeavyReceipt) rather than
-// the live table.
+// property of the MECHANISM, not of that one entry, so the mechanism tests keep pinning it against an INJECTED
+// declaration — the `quarantined` option of auditSuiteLedger ALONE. 0e15f: that seam deliberately stops at the
+// mechanism; the shipped entry points (writeHeavyReceipt / checkHeavyReceipt) take no caller-supplied exclusion
+// set, because an argument to the thing that certifies trees must not be able to mint an exclusion the tree does
+// not declare. The check-level test below pins exactly that.
 const DECLARED_QUARANTINE = Object.freeze({
   [QUARANTINED]: Object.freeze({
     bead: QUARANTINE_BEAD,
@@ -1009,28 +1011,37 @@ Deno.test("8tgnt: a quarantine row without the declared bead, or without a reaso
   assertEquals(noReason.ok, false);
 });
 
-Deno.test("8tgnt: a receipt that simply OMITS the quarantined suite cannot certify (the exclusion must be named)", () => {
+Deno.test("8tgnt/0e15f: the shipped validator refuses a quarantine the live table does not declare — a caller-supplied map cannot confer it", () => {
   const TREE = "ffffffffffffffffffffffffffffffffffffffff";
   mkdirSync(dirname(receiptPath(TREE)), { recursive: true });
-  const suites = expectedHeavyFiles().filter((file) => file !== QUARANTINED).map((file) => ({ file, status: "passed" }));
   const fresh = { startedAt: Date.now() - 60_000, finishedAt: Date.now() };
+  const passed = expectedHeavyFiles().filter((file) => file !== QUARANTINED).map((file) => ({ file, status: "passed" }));
+  // A receipt claiming a quarantine for a file the live (empty) table does not declare.
   writeFileSync(receiptPath(TREE), JSON.stringify(certifyingBody(TREE, {
     ...fresh,
-    suites,
-    covered: suites.map((s) => s.file),
+    suites: [...passed, { file: QUARANTINED, status: "quarantined", bead: QUARANTINE_BEAD, reason: "unmeetable budget" }],
+    covered: passed.map((s) => s.file),
   })));
-  const verdict = checkHeavyReceipt(TREE, { now: Date.now(), quarantined: DECLARED_QUARANTINE });
-  assertEquals(verdict.ok, false);
-  assertEquals(verdict.reason, "coverage-mismatch");
-  assertStringIncludes(verdict.line, QUARANTINED);
-  // A pass receipt that DID name the quarantine certifies, and still shows it as uncovered.
+  const forged = checkHeavyReceipt(TREE, { now: Date.now() });
+  assertEquals(forged.ok, false);
+  assertEquals(forged.reason, "undeclared-quarantine");
+  assertStringIncludes(forged.line, QUARANTINED);
+  // 0e15f falsifier: handing the validator a declaration must NOT change the verdict. Pre-fix this
+  // returned ok=true (covered=20) — the exclusion set was a runtime argument of the enforcement point.
+  const withInjectedMap = checkHeavyReceipt(TREE, { now: Date.now(), quarantined: DECLARED_QUARANTINE } as any);
+  assertEquals(withInjectedMap.ok, false);
+  assertEquals(withInjectedMap.reason, "undeclared-quarantine");
+  // And a receipt that simply OMITS the suite still refuses as a coverage shortfall — with the live
+  // table empty there is no exclusion to name, so omission is never coverage.
   writeFileSync(receiptPath(TREE), JSON.stringify(certifyingBody(TREE, {
     ...fresh,
-    suites: [...suites, { file: QUARANTINED, status: "quarantined", bead: QUARANTINE_BEAD, reason: "unmeetable budget" }],
-    covered: suites.map((s) => s.file),
+    suites: passed,
+    covered: passed.map((s) => s.file),
   })));
-  const accepted = checkHeavyReceipt(TREE, { now: Date.now(), quarantined: DECLARED_QUARANTINE });
-  assertEquals(accepted.ok, true, accepted.line);
+  const omitted = checkHeavyReceipt(TREE, { now: Date.now(), quarantined: DECLARED_QUARANTINE } as any);
+  assertEquals(omitted.ok, false);
+  assertEquals(omitted.reason, "coverage-mismatch");
+  assertStringIncludes(omitted.line, QUARANTINED);
 });
 
 Deno.test("2udrl: the accounting-only line states covered/expected/quarantined and never claims full coverage", () => {
@@ -1066,58 +1077,59 @@ Deno.test("mv1jw: a receipt claiming a suite is BOTH covered and quarantined is 
   // Round-2 finding on the quarantine landing: a crafted receipt listed the quarantined file in both sets, passed
   // every structural gate, classified accounting-only, and printed "21/21 covered, 1 quarantined" — an internally
   // impossible claim that still certified. Coverage is now validated, not read back.
+  // 0e15f rework: the live table is EMPTY and the validator takes no injected declaration, so the impossible
+  // claim is built from the receipt's own CLAIMED fields against an honest all-passed ledger — the overlap
+  // branch fires on the claim, no quarantined ledger row needed.
   const TREE = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-  const passed = expectedHeavyFiles().filter((file) => file !== QUARANTINED).map((file) => ({ file, status: "passed" }));
-  const suites = [...passed, { file: QUARANTINED, status: "quarantined", bead: QUARANTINE_BEAD, reason: "excluded" }];
+  const suites = expectedHeavyFiles().map((file) => ({ file, status: "passed" }));
   const fresh = { startedAt: Date.now() - 60_000, finishedAt: Date.now() };
   mkdirSync(dirname(receiptPath(TREE)), { recursive: true });
   writeFileSync(receiptPath(TREE), JSON.stringify(certifyingBody(TREE, {
     ...fresh,
     suites,
-    covered: [...passed.map((s) => s.file), QUARANTINED], // the impossible claim: covered AND quarantined
-    quarantined: [{ file: QUARANTINED, bead: QUARANTINE_BEAD, reason: "excluded" }],
+    covered: [...suites.map((s) => s.file)], // claims the suite ran…
+    quarantined: [{ file: QUARANTINED, bead: QUARANTINE_BEAD, reason: "excluded" }], // …AND that it was excluded
   })));
-  const verdict = checkHeavyReceipt(TREE, { now: Date.now(), quarantined: DECLARED_QUARANTINE });
+  const verdict = checkHeavyReceipt(TREE, { now: Date.now() });
   assertEquals(verdict.ok, false);
   assertEquals(verdict.reason, "coverage-overlap");
   assertStringIncludes(verdict.line, QUARANTINED);
 });
 
 Deno.test("mv1jw: a receipt whose covered+quarantined do not account for the enumerated set is refused", () => {
+  // 0e15f rework: with the live table empty the contradiction is built purely from the receipt's CLAIMED
+  // covered set against the recomputed all-passed ledger — the claim drops a suite the ledger says ran.
   const TREE = "cccccccccccccccccccccccccccccccccccccccc";
-  const passed = expectedHeavyFiles().filter((file) => file !== QUARANTINED).map((file) => ({ file, status: "passed" }));
-  const suites = [...passed, { file: QUARANTINED, status: "quarantined", bead: QUARANTINE_BEAD, reason: "excluded" }];
+  const suites = expectedHeavyFiles().map((file) => ({ file, status: "passed" }));
   const fresh = { startedAt: Date.now() - 60_000, finishedAt: Date.now() };
   mkdirSync(dirname(receiptPath(TREE)), { recursive: true });
-  // Ledger is honest here, but the receipt's own coverage arrays drop a suite — the claim, not the run, is wrong.
   writeFileSync(receiptPath(TREE), JSON.stringify(certifyingBody(TREE, {
     ...fresh,
     suites,
-    covered: passed.slice(1).map((s) => s.file),
-    quarantined: [{ file: QUARANTINED, bead: QUARANTINE_BEAD, reason: "excluded" }],
+    covered: expectedHeavyFiles().slice(1), // the claim, not the run, is wrong
+    quarantined: [],
   })));
-  const verdict = checkHeavyReceipt(TREE, { now: Date.now(), quarantined: DECLARED_QUARANTINE });
+  const verdict = checkHeavyReceipt(TREE, { now: Date.now() });
   assertEquals(verdict.ok, false);
   assertEquals(verdict.reason, "contradictory-coverage");
 });
 
 Deno.test("mv1jw: the printed coverage comes from the validated ledger, so it cannot state a contradicting number", withReceipts(async (nextTree) => {
+  // 0e15f rework: with the live table empty no honest receipt can carry a quarantined suite any more, so the
+  // print-source property is pinned on the full-coverage shape: the summary and the acceptance line both state
+  // the RECOMPUTED ledger (21/21), never a receipt field — a contradicting claim is refused by the test above.
   const TREE = nextTree();
   writeHeavyReceipt({
     ...certifyingBody(TREE, {
       conditions: { steal: starvedSteal() },
-      suites: [
-        ...expectedHeavyFiles().filter((file) => file !== QUARANTINED).map((file) => ({ file, status: "passed" as const })),
-        { file: QUARANTINED, status: "quarantined" as const, bead: QUARANTINE_BEAD, reason: "excluded" },
-      ],
-      covered: expectedHeavyFiles().filter((file) => file !== QUARANTINED),
-      quarantined: [{ file: QUARANTINED, bead: QUARANTINE_BEAD, reason: "excluded" }],
+      suites: expectedHeavyFiles().map((file) => ({ file, status: "passed" as const })),
+      covered: expectedHeavyFiles(),
+      quarantined: [],
     }),
-    quarantined: DECLARED_QUARANTINE,
   } as any);
-  const verdict = checkHeavyReceipt(TREE, { now: NOW, quarantined: DECLARED_QUARANTINE });
+  const verdict = checkHeavyReceipt(TREE, { now: NOW });
   assertEquals(verdict.outcome, "accounting-only");
   const summary = describeReceiptCoverage((verdict as any).coverage ?? verdict.receipt);
-  assertEquals(summary, `20/21 covered, 1 quarantined: ${QUARANTINED} (${QUARANTINE_BEAD}), 0 skips`);
-  assertStringIncludes(verdict.line, "20/21 covered");
+  assertEquals(summary, `${expectedHeavyFiles().length}/${expectedHeavyFiles().length} covered, 0 skips`);
+  assertStringIncludes(verdict.line, `${expectedHeavyFiles().length}/${expectedHeavyFiles().length} covered`);
 }));
