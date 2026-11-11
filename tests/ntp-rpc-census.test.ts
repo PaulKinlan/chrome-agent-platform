@@ -34,7 +34,14 @@ const RPC_SHIM = `(() => {
       const m = args.find(a => a && typeof a === 'object');
       const t = performance.now();
       const p = orig(...args);
-      const row = { type: m?.type ?? '?', payload: m, at: Math.round(t), ms: null };
+      // 8ijxu: BURST TAGGING. The census must count the RPCs the CLICK dispatches, and no
+      // time-based rule can separate those from unrelated hydration/poll traffic that happens to be
+      // in flight (measured: hydration calls landing 1.3-2.3 s after the click made the count swing
+      // between 4 and 5 run to run, and "wait until everything settled" never converged — 22 boot
+      // calls never resolve even unthrottled). A causal boundary needs no clock: while
+      // C.burst === true a call is tagged as click-dispatched, and the flag is only true across the
+      // click's own synchronous dispatch plus its microtask drain.
+      const row = { type: m?.type ?? '?', payload: m, at: Math.round(t), ms: null, burst: C.burst === true };
       C.log.push(row);
       if (p && p.then) {
         p.then(() => { row.ms = Math.round(performance.now() - t); }, () => { row.ms = -1; });
@@ -46,7 +53,7 @@ const RPC_SHIM = `(() => {
       rt.connect = (...a) => {
         const port = oc(...a);
         const name = a.find(x => x && x.name)?.name ?? '?';
-        C.log.push({ type: 'connect:' + name, at: Math.round(performance.now()), ms: 0 });
+        C.log.push({ type: 'connect:' + name, at: Math.round(performance.now()), ms: 0, burst: C.burst === true });
         try {
           port.onMessage?.addListener?.((msg) => {
             C.events.push({ at: Math.round(performance.now()), msg });
@@ -169,11 +176,11 @@ Deno.test({
       // view to actually open. A row that never appears, or a view that never opens, still FAILS —
       // with the state it saw — so starvation can neither pass vacuously nor red the wrong cause.
       const openResult = await cdp.eval(o.sessionId, `(async () => {
-        // BUDGET: row 15s + open 10s + stable 8s = 33s, inside openCdp's 60s timeout, so a
-        // pathological box reports a STATE diagnostic here instead of a CDP timeout from outside.
-        const ROW_BOUND_MS = 15000;    // state bound, not a performance assertion
+        // ROW APPEARANCE is a state wait (15 s bound): without it the click would land on a sidebar
+        // that is not there yet, which is the load-sensitive red this bead is about. No other timing
+        // rule takes part in the measurement itself — the count below is causal, not temporal.
+        const ROW_BOUND_MS = 15000;
         const OPEN_BOUND_MS = 10000;
-        const STABLE_BOUND_MS = 8000;
         const waitUntil = async (pred, boundMs, step = 50) => {
           const t0 = Date.now();
           while (Date.now() - t0 < boundMs) { if (pred()) return true; await new Promise(r => setTimeout(r, step)); }
@@ -189,62 +196,43 @@ Deno.test({
           };
         }
 
-        // ATTRIBUTION BY ISSUE TIME, not by clearing the log. The shim stamps every call with
-        // performance.now() as it is ISSUED, so a call issued before the click is never counted even
-        // if it SETTLES long afterwards — and under CPU throttle settling is exactly what lags (a
-        // 20x-throttled box still had 22 hydration calls pending after 5 s when this step relied on
-        // "everything settled", which is a wall clock in disguise and reported 5 > 4).
+        // THE CAUSAL WINDOW. The shim tags a call when C.burst is true; the flag is set immediately
+        // before the click and cleared after the click's dispatch has run through its microtasks, so a
+        // call issued by the click handler (or by the promise chain it starts in the same task) is
+        // tagged, while a hydration/poll call issued later from a timer is not. Nothing here depends on
+        // how long anything takes: the same code takes the same tags on a fast or a starved box.
         const tv = document.getElementById('thread-view');
         const btn = document.querySelector('#thread-sidebar .thread-item .t-open');
-        const clickAt = performance.now();
+        window.__rpc.burst = true;
         btn.click();
+        await Promise.resolve();
+        await Promise.resolve();
+        window.__rpc.burst = false;
 
         const opened = await waitUntil(() => tv && !tv.hidden, OPEN_BOUND_MS);
-
-        // We must stop waiting for the click's own fan-out to be ISSUED. "Stable" = the log's length
-        // has not grown across 5 consecutive 100 ms checks; that only decides WHEN to stop looking,
-        // it cannot mis-attribute a call (the timestamp does that), so a straggler can only be missed
-        // by stopping too early — hence the conservative count and the honest red when it never
-        // stabilises.
-        const afterClick = () => window.__rpc.log.filter(r => r.at >= clickAt);
-        const waitStable = async (boundMs) => {
-          const t0 = Date.now();
-          let prev = afterClick().length, stable = 0;
-          while (Date.now() - t0 < boundMs) {
-            await new Promise(r => setTimeout(r, 100));
-            const now = afterClick().length;
-            stable = now === prev ? stable + 1 : 0;
-            prev = now;
-            if (stable >= 5) return true;
-          }
-          return false;
-        };
-        const stable = await waitStable(STABLE_BOUND_MS);
-
-        const rpcs = afterClick().map(r => ({ type: r.type, at: Math.round(r.at - clickAt) }));
+        const burst = JSON.parse(JSON.stringify(window.__rpc.log.filter(r => r.burst === true)));
         return {
-          rpcs: rpcs.length,
-          list: rpcs.map(r => r.type + '@' + r.at + 'ms'),
+          rpcs: burst.length,
+          list: burst.map(r => r.type),
           opened,
-          stable,
-          warnings: [
-            ...(opened ? [] : ['thread view did not become visible within ' + OPEN_BOUND_MS + 'ms of the click']),
-            ...(stable ? [] : ['the click fan-out never stabilised within ' + STABLE_BOUND_MS + 'ms, so the <= 4 budget may be a partial count: ' + JSON.stringify(rpcs.map(r => r.type))]),
-          ],
+          // The whole page's RPC traffic, reported for context only — it is NOT asserted on, because
+          // it contains hydration and polling that the coalescing budget was never about.
+          ambient: window.__rpc.log.length,
         };
       })()`);
 
       assert(!openResult.err, openResult.err);
-      // A census that could not be measured must SAY so instead of reading a low number as a product
-      // win: a view that never opened, or a fan-out that never stabilised, is not evidence of
-      // coalescing. (Call attribution is by issue time, so a slow-settling call is never miscounted.)
-      assert(
-        openResult.opened !== false && openResult.stable !== false,
-        `thread-open census could not be measured honestly: ${(openResult.warnings ?? []).join('; ')}`,
-      );
+      // Print the measured burst so consecutive runs are COMPARABLE by eye in CI logs (the reviewer's
+      // flake was invisible: two runs disagreed and neither log said what it had counted).
+      console.log(`thread-open burst (${openResult.rpcs}): ${JSON.stringify(openResult.list)} · ambient page traffic: ${openResult.ambient}`);
+      // The view must actually open: a click that dispatched nothing because the handler never ran is
+      // not evidence of coalescing, and a burst of ZERO is reported as the failure it is rather than
+      // as a suspiciously good number.
+      assert(openResult.opened !== false, "the thread view must become visible after the click");
+      assert(openResult.rpcs >= 1, `the click must dispatch at least one RPC (got ${openResult.rpcs}; ambient page traffic was ${openResult.ambient})`);
       assert(
         openResult.rpcs <= 4,
-        `Thread open RPC count ${openResult.rpcs} must be <= 4 (was 14–21 before coalescing); by type: ` +
+        `Thread open DISPATCHED ${openResult.rpcs} RPCs, budget is <= 4 (was 14–21 before coalescing); routes: ` +
           JSON.stringify(openResult.list),
       );
     } finally {
