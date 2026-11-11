@@ -317,7 +317,7 @@ export function auditSuiteLedger(suites, expected, { quarantined = QUARANTINED_H
  *
  * @param {{ tree: string, treeEnd?: string, commit?: string, result: "pass"|"fail"|"refusal"|"subset"|"drift", conditions?: any,
  *   command?: string, args?: string[], exitCode?: number | null, logPath?: string | null,
- *   suites?: { file: string, phase: string, status: string, bead?: string, reason?: string }[], expected?: string[], dirty?: string[], producer?: string,
+ *   suites?: { file: string, phase: string, status: string, bead?: string, reason?: string }[], dirty?: string[], producer?: string,
  *   startedAt?: number | null, finishedAt?: number }} args
  */
 export function writeHeavyReceipt({
@@ -449,8 +449,11 @@ export function writeHeavyReceipt({
  * Anything else — missing, corrupt, wrong version, different tree, subset, drift, non-pass, a
  * future or stale timestamp, a skipped/killed suite — is a named refusal, never a silent skip.
  *
+ * The enumerated set is NOT an option: the shipped entry points always derive it from this
+ * tree's expectedHeavyFiles() (bh4ei) — a caller-supplied `expected` is structurally impossible.
+ *
  * @param {string} tree
- * @param {{ now?: number, maxAgeMs?: number, expected?: string[] }} [options]
+ * @param {{ now?: number, maxAgeMs?: number }} [options]
  * @returns {HeavyReceiptVerdict}
  */
 /**
