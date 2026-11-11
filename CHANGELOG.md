@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.742] — 2026-11-11
+- Imported skills' names and descriptions can no longer pose as instructions to the agent, and built-in skills' descriptions render without mangling.
+
 ## [0.3.741] — 2026-11-11
 - owner approval cards for agent provider changes now show the exact provider, resolved base URL and model with a key-carry warning; models cannot point agent traffic at loopback, private or metadata hosts - including through a redirect - and a provider change that cannot be displayed is refused outright.
 - Provider-change approvals can no longer be staged or approved without a resolved destination, and the approval card stays non-interactive until the exact change (and its destination host) is loaded — an owner can never consent to an undisclosed host.
