@@ -29,10 +29,15 @@
 //     Every edge must resolve canonically to a hash-verified admitted asset;
 //     bare, absolute, network, malformed and missing targets are refused
 //     (js_capability_import_unresolved).
-//   - Denied capabilities are matched as finite AST shapes: member chains
-//     (receiver-qualified and optional-chaining included — comments between
-//     tokens do not exist in an AST, finding o0t1n), call/new callees, and
-//     identifier references. The only exemptions remain the four reviewed
+//   - Denied capabilities are matched structurally, not by shape list:
+//     member chains (receiver-qualified and optional-chaining included —
+//     comments between tokens do not exist in an AST, finding o0t1n),
+//     identifier/property references, and for the call/new capabilities
+//     (fetch, Worker, SharedWorker) ANY occurrence of the capability name
+//     anywhere inside a call/new expression — through any wrapper, at any
+//     depth (3z2st, impl-b design via coord 2026-11-11; no shape list, no
+//     hop bound). Alias extraction without a call (<capability>.call as a
+//     bare member) is denied by the member rule. The only exemptions remain the four reviewed
 //     Emscripten glue preamble digests for their dead fetch/XHR URL-loading
 //     paths; byte-exact and glue-only.
 //   - Node/edge budgets are REFUSALS (js_capability_limit), never a pass.
@@ -84,6 +89,16 @@ const REVIEWED_EMSCRIPTEN_GLUE_PREAMBLE = Object.freeze(new Set([
  *   splitting invisible in an AST (o0t1n).
  * kind "new": denied when a NewExpression callee's terminal name matches.
  * kind "call": denied when a CallExpression callee's terminal name matches.
+ *
+ * Indirect-invocation spellings are the SAME named shapes, not new entries
+ * (chrome-agent-platform-zwhbv): one static hop must not defeat a terminal
+ * match. Refused wherever they appear:
+ *   - `<capability>.call` / `.apply` / `.bind` — the method extracts an alias
+ *     of the capability, called or not;
+ *   - a SequenceExpression callee — `(0, self.fetch)(x)` invokes self.fetch;
+ *   - first-argument invocation through `f.call(...)` / `f.apply(...)` /
+ *     `f.bind(...)` / `Reflect.construct(...)` — `Reflect.construct(Worker, …)`
+ *     builds a Worker the scan never sees.
  */
 const method = (name) => Object.freeze({ name });
 export const EMSCRIPTEN_JS_CAPABILITY_DENY_LIST = Object.freeze([
@@ -109,11 +124,68 @@ const DENY_SINGLE_NAMES = new Map(); // name -> entry (for kind "name")
 for (const listItem of EMSCRIPTEN_JS_CAPABILITY_DENY_LIST) {
   if (listItem.kind === "name") for (const m of listItem.names) DENY_SINGLE_NAMES.set(m.name, listItem);
 }
+const CALL_NEW_NAME_INDEX = new Map(); // name -> entries (kind "call"/"new"; structural subtree match)
+for (const listItem of EMSCRIPTEN_JS_CAPABILITY_DENY_LIST) {
+  if (listItem.kind === "call" || listItem.kind === "new") {
+    for (const m of listItem.names) {
+      const list = CALL_NEW_NAME_INDEX.get(m.name) ?? [];
+      list.push(listItem);
+      CALL_NEW_NAME_INDEX.set(m.name, list);
+    }
+  }
+}
 const CACHES_METHODS = ["open", "match", "has", "delete", "keys"];
 // ES modules are valid UTF-8 by construction; anything else is a refusal.
 const decoder = new TextDecoder("utf-8", { fatal: true });
 
-const PARSER_POLICY = "cap-js-capability-admission-ast-v1";
+const PARSER_POLICY = "cap-js-capability-admission-ast-v3";
+
+// zwhbv shape family, narrowed structurally (2lx02, 3z2st, impl-b design via
+// coord 2026-11-11): INDIRECT_METHOD_NAMES covers alias-extracting member
+// methods over a capability receiver (`self.fetch.call`, `Worker.bind`) —
+// denied where they appear, called or not. Every CALL-side occurrence of the
+// capability name is denied by the structural walk in judgeAst: no shape
+// list, no hop bound, any wrapper at any depth.
+const INDIRECT_METHOD_NAMES = new Set(["call", "apply", "bind"]);
+
+/** Terminal candidate nodes of a composed receiver (2lx02): a sequence
+ * resolves to its last expression, and a logical/conditional spelling is
+ * judged on EVERY branch — a scan cannot know which branch fires, so
+ * fail-closed judges all of them. Iterative: untrusted AST depth must never
+ * become host recursion depth. */
+function targetCandidates(node) {
+  const out = [];
+  const stack = [node];
+  while (stack.length) {
+    const cur = stack.pop();
+    if (!cur || typeof cur !== "object") continue;
+    if (cur.type === "SequenceExpression" && Array.isArray(cur.expressions) && cur.expressions.length) {
+      stack.push(cur.expressions[cur.expressions.length - 1]);
+    } else if (cur.type === "LogicalExpression") {
+      stack.push(cur.left, cur.right);
+    } else if (cur.type === "ConditionalExpression") {
+      stack.push(cur.consequent, cur.alternate);
+    } else {
+      out.push(cur);
+    }
+  }
+  return out;
+}
+
+/** The call/new deny entries whose capability names include `name`. */
+function callNewEntriesFor(name) {
+  const hits = [];
+  for (const listItem of EMSCRIPTEN_JS_CAPABILITY_DENY_LIST) {
+    if (listItem.kind !== "call" && listItem.kind !== "new") continue;
+    for (const m of listItem.names) {
+      if (m.name === name) {
+        hits.push(listItem);
+        break;
+      }
+    }
+  }
+  return hits;
+}
 const NODE_BUDGET = 100_000; // per asset; exceeded -> js_capability_limit
 const EDGE_BUDGET = 256; // per package; exceeded -> js_capability_limit
 
@@ -148,7 +220,15 @@ function memberChain(node) {
   const names = [];
   let opaque = false;
   let cursor = node;
-  while (cursor?.type === "MemberExpression") {
+  while (cursor?.type === "MemberExpression" || cursor?.type === "SequenceExpression") {
+    // 2lx02: a sequence-parenthesised receiver is not opaque — (0, self.fetch).call
+    // resolves to the chain of its last expression, exactly like an argument.
+    if (cursor.type === "SequenceExpression") {
+      cursor = Array.isArray(cursor.expressions) && cursor.expressions.length
+        ? cursor.expressions[cursor.expressions.length - 1]
+        : null;
+      continue;
+    }
     const prop = cursor.property;
     if (prop.type === "Identifier") names.unshift(prop.name);
     else if (prop.type === "Literal" && typeof prop.value === "string") names.unshift(prop.value);
@@ -207,28 +287,79 @@ function judgeAst(ast) {
       // Property spellings of single-name capabilities (obj.fetch, self.XMLHttpRequest).
       const last = names[names.length - 1];
       if (last && DENY_SINGLE_NAMES.has(last)) deny(DENY_SINGLE_NAMES.get(last));
+      // Alias-extracting spellings of call/new capabilities (zwhbv):
+      // <capability>.call / .apply / .bind — denied where it appears, called
+      // or not, because the extracted method IS the capability alias.
+      // 2lx02: the RECEIVER may itself be wrapped — (0, self.fetch).call,
+      // (cond ? self.fetch : other).bind — so the capability name is looked
+      // for in EVERY terminal receiver candidate, not just one chain.
+      if (INDIRECT_METHOD_NAMES.has(last)) {
+        // The capability is the TERMINAL of the receiver chain; this node's own
+        // property is the alias method. A plain receiver yields the full chain
+        // (method included → capability at [length-2]); a composed receiver
+        // yields one receiver-only chain per candidate → capability at
+        // [length-1].
+        const composed = node.object?.type === "LogicalExpression" || node.object?.type === "ConditionalExpression";
+        const receiverChains = [];
+        if (composed) {
+          for (const cand of targetCandidates(node.object)) {
+            if (cand?.type === "Identifier") receiverChains.push([cand.name]);
+            else if (cand?.type === "MemberExpression") receiverChains.push(memberChain(cand).names);
+          }
+        } else {
+          receiverChains.push(names);
+        }
+        for (const chain of receiverChains) {
+          const capability = composed
+            ? chain[chain.length - 1]
+            : chain[chain.length - 2];
+          if (capability) {
+            for (const listItem of callNewEntriesFor(capability)) deny(listItem);
+          }
+        }
+      }
     } else if (node.type === "Identifier") {
       const hit = DENY_SINGLE_NAMES.get(node.name);
       if (hit) deny(hit);
     } else if (node.type === "NewExpression" || node.type === "CallExpression") {
-      const name = calleeName(node.callee);
-      if (name) {
-        for (const listItem of EMSCRIPTEN_JS_CAPABILITY_DENY_LIST) {
-          if (listItem.kind !== "new" && listItem.kind !== "call") continue;
-          if (listItem.kind === "new" && node.type !== "NewExpression") continue;
-          if (listItem.kind === "call" && node.type !== "CallExpression") continue;
-          for (const m of listItem.names) {
-            if (m.name === name) deny(listItem);
+      // STRUCTURAL (3z2st; impl-b design via coord 2026-11-11): ANY occurrence
+      // of a denied call/new capability name anywhere in this call's subtree
+      // denies the entry — through any wrapper, at any depth. A wrapper of a
+      // wrapper of `fetch` IS a fetch reference; there is no second hop to
+      // reason about and no shape list to out-run. The walk is iterative and
+      // feeds the SAME node budget (an adversarial nesting bomb is a
+      // js_capability_limit refusal, fail-closed, never a pass).
+      const sub = [node];
+      const seenInCall = new Set();
+      while (sub.length) {
+        const cur = sub.pop();
+        if (!cur || typeof cur !== "object" || seenInCall.has(cur)) continue;
+        seenInCall.add(cur);
+        if (++nodes > NODE_BUDGET) fail("js_capability_limit", "nodes");
+        if (cur.type === "Identifier") {
+          const hits = CALL_NEW_NAME_INDEX.get(cur.name);
+          if (hits) for (const listItem of hits) deny(listItem);
+        } else if (cur.type === "MemberExpression" || (cur.type === "Property" && !cur.computed)) {
+          const key = cur.type === "MemberExpression" ? cur.property : cur.key;
+          const keyName = key?.type === "Identifier" ? key.name
+            : (key?.type === "Literal" && typeof key.value === "string") ? key.value : null;
+          if (keyName) {
+            const hits = CALL_NEW_NAME_INDEX.get(keyName);
+            if (hits) for (const listItem of hits) deny(listItem);
           }
         }
-        // caches.<method>() via callee chain (the member walk above also
-        // covers the bare chain; the callee check catches call-position
-        // chains whose object side is opaque).
-        if (node.type === "CallExpression" && CACHES_METHODS.includes(name) && node.callee.type === "MemberExpression") {
-          const { names } = memberChain(node.callee);
-          if (containsConsecutive(names, "caches", CACHES_METHODS)) {
-            deny(EMSCRIPTEN_JS_CAPABILITY_DENY_LIST.find((e) => e.id === "caches"));
-          }
+        for (const child of Object.values(cur)) {
+          if (child && typeof child === "object") sub.push(child);
+        }
+      }
+      // caches.<method>() via callee chain (the member walk above also
+      // covers the bare chain; the callee check catches call-position
+      // chains whose object side is opaque).
+      const topName = calleeName(node.callee);
+      if (node.type === "CallExpression" && topName && CACHES_METHODS.includes(topName) && node.callee.type === "MemberExpression") {
+        const { names } = memberChain(node.callee);
+        if (containsConsecutive(names, "caches", CACHES_METHODS)) {
+          deny(EMSCRIPTEN_JS_CAPABILITY_DENY_LIST.find((e) => e.id === "caches"));
         }
       }
     } else if (node.type === "ImportExpression") {
@@ -399,7 +530,7 @@ export function auditEmscriptenJsCapabilities(rootAssets, allAssets, files) {
     scanned: Object.freeze(scanned),
     screened: Object.freeze(screened),
     unproven: Object.freeze(
-      "This verdict does NOT prove C2 / no-writers: capability acquisition via computed, aliased or global references, and any OPFS write the package may perform, remain unproven. It states only that the parsed module grammar has a complete closed import-edge set over the verified bytes and that the named static denied AST forms were not found.",
+      "This verdict does NOT prove C2 / no-writers: capability acquisition via computed, aliased or global references, and any OPFS write the package may perform, remain unproven. It states that the parsed module grammar has a complete closed import-edge set over the verified bytes and that no denied call/new capability name occurs anywhere inside a call or new expression in the verified bytes — structurally, through any wrapper, at any depth (no shape list, no hop bound) — alongside the member-chain and alias-extraction rules. Value-level acquisition WITHOUT the capability name (computed or string-built references, factory calls) stays unproven.",
     ),
   });
 }

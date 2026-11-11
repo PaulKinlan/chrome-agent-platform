@@ -18,6 +18,10 @@
 //     skipped; parse failure and unsupported syntax are refusals.
 //   - Capability matching survives receiver-qualified spellings (e840g) and
 //     comment-split member access (o0t1n) — comments do not exist in an AST.
+//   - One static indirection hop does not defeat a call/new entry (zwhbv):
+//     <capability>.call/.apply/.bind aliases, sequence-expression callees and
+//     first-argument invocation through f.call/f.apply/f.bind/Reflect.construct
+//     are refused; benign helper use over non-capability receivers passes.
 //   - Every JS asset is parsed and screened even when no worker root reaches
 //     it (a data-role .mjs is screened; 1o3uv); the import graph is seeded
 //     from the worker roots (glue+adapter; bootstrap is screened, not a root).
@@ -208,7 +212,7 @@ Deno.test("js-capability admission: each fixture is refused with its typed code;
   assertEquals(clean.audit.denyList, EMSCRIPTEN_JS_CAPABILITY_DENY_LIST.map((e) => e.id));
   assertEquals(clean.audit.roots, ["glue"]);
   assertEquals(clean.audit.edges, []);
-  assertEquals(clean.audit.policy, "cap-js-capability-admission-ast-v1");
+  assertEquals(clean.audit.policy, "cap-js-capability-admission-ast-v3");
 });
 
 Deno.test("js-capability admission: the receipt says what a PASS does NOT prove (no C2 claim, never writer-free)", async () => {
@@ -418,6 +422,102 @@ Deno.test("js-capability admission: receiver-qualified and comment-split capabil
     const { ok } = scanSource(src);
     assertEquals(ok, false, `optional-chained capability must refuse: ${src}`);
   }
+});
+
+Deno.test("js-capability admission: one static indirection hop does not defeat a call/new entry (zwhbv)", () => {
+  // The six recorded bypasses: the terminal-callee matcher admitted these
+  // because it matched only the CallExpression/NewExpression callee's own
+  // terminal name. Every one must refuse with the typed entry code.
+  for (const [src, code] of [
+    [`self.fetch.call(null, "https://x.invalid/a");`, "fetch_call"],
+    [`globalThis.fetch.apply(null, ["/x"]);`, "fetch_call"],
+    [`self.fetch.bind(null);`, "fetch_call"],
+    [`(0, self.fetch)("/x");`, "fetch_call"],
+    [`Reflect.construct(self.Worker, ["blob:null/x"]);`, "worker_construction"],
+    [`Reflect.apply(self.fetch, null, ["/x"]);`, "fetch_call"],
+  ]) {
+    const { ok, error } = scanSource(`export const q = () => ${src}`);
+    assertEquals(ok, false, `indirect spelling must refuse: ${src}`);
+    assertEquals(error.code, "js_capability_denied");
+    assertEquals(error.detail, `glue:${code}`, `typed code must name the entry, not the hop: ${src}`);
+  }
+  // Same-class static spellings: optional-chained alias hop, functional call
+  // through any receiver, bare-global capability inside Reflect.construct,
+  // nested sequence parens, and the alias extracted without ever being called.
+  for (const src of [
+    `self?.fetch.call(null, "/x");`,
+    `Function.prototype.call.call(self.fetch, null, "/x");`,
+    `helper.bind(self.Worker);`,
+    `Reflect.construct(Worker, ["blob:null/x"]);`,
+    `(0, (0, self.fetch))("/x");`,
+    `((0, Reflect).construct)(self.Worker, ["x"]);`,
+    `export const alias = self.fetch.call;`,
+  ]) {
+    const { ok, error } = scanSource(src);
+    assertEquals(ok, false, `same-class indirection must refuse: ${src}`);
+    assertEquals(error.code, "js_capability_denied");
+  }
+  // COMPOSED spellings (2lx02 review): the zwhbv shapes composed with each
+  // other — a sequence-wrapped capability re-aliased through .call/.bind, the
+  // helper itself invoked through .call (capability shifted to arguments[1]),
+  // and logical/conditional callee spellings.
+  for (const [src, code] of [
+    [`(0, self.fetch).call(null, "/x");`, "fetch_call"],
+    [`(0, self.fetch).bind(null)("/x");`, "fetch_call"],
+    [`Reflect.construct.call(null, self.Worker, ["blob:null/x"]);`, "worker_construction"],
+    [`Reflect.apply.call(null, self.fetch, null, ["/x"]);`, "fetch_call"],
+    [`(true && self.fetch)("/x");`, "fetch_call"],
+    [`(cond ? self.fetch : other).call(null, "/x");`, "fetch_call"],
+    // 3z2st: receiver-side wrappers the composed list missed — the structural
+    // rule closes the whole class (any occurrence of the name inside a call).
+    [`(self?.fetch).call(null, "/x");`, "fetch_call"],
+    [`(0, true && self.fetch).call(null, "/x");`, "fetch_call"],
+    [`(0, cond ? self.fetch : other).bind(null)("/x");`, "fetch_call"],
+    [`(x = self.fetch).call(null, "/x");`, "fetch_call"],
+    [`({ m: self.fetch }.m).call(null, "/x");`, "fetch_call"],
+    // coord acceptance: a wrapper-of-a-wrapper of the capability refuses.
+    [`w2(w1(self.fetch))("/x");`, "fetch_call"],
+    [`wrap(Reflect.construct)(self.Worker, ["blob:null/x"]);`, "worker_construction"],
+  ]) {
+    const { ok, error } = scanSource(`export const q = () => ${src}`);
+    assertEquals(ok, false, `composed indirection must refuse: ${src}`);
+    assertEquals(error.code, "js_capability_denied");
+    assertEquals(error.detail, `glue:${code}`, `typed code must name the entry: ${src}`);
+  }
+  // The receipt states the STRUCTURAL guarantee, not a shape enumeration.
+  const structuralReceipt = scanSource(CLEAN_SOURCE).audit;
+  assert(structuralReceipt.unproven.includes("no shape list, no hop bound"), "unproven must state the structural guarantee");
+  assertEquals(structuralReceipt.policy, "cap-js-capability-admission-ast-v3");
+  // No overreach: the same helpers over NON-capability receivers/values stay
+  // clean, identifier suffixes are still not capabilities — including the
+  // composed helpers over benign receivers.
+  for (const clean of [
+    `export const q = () => arr.map.call(arr, f);`,
+    `export const q = () => Reflect.construct(Map, []);`,
+    `export const q = () => cb.apply(null, args);`,
+    `export const q = () => fn.bind(null);`,
+    `export const q = () => utils.applyDefaults(opts);`,
+    `export const q = () => obj.callCap(ctx, v);`,
+    `export const q = () => new Workerish("w.mjs");`,
+    `export const q = () => Reflect.construct.call(null, Map, []);`,
+    `export const q = () => (true && cb)("/x");`,
+    `export const q = () => helper.bind(null, payload);`,
+  ]) {
+    const { ok } = scanSource(clean);
+    assertEquals(ok, true, `benign helper use must not refuse: ${clean}`);
+  }
+  // Regression anchors: the direct spellings keep refusing.
+  for (const direct of [`fetch("/x");`, `new self.Worker("w.mjs");`]) {
+    const { ok } = scanSource(`export const q = () => ${direct}`);
+    assertEquals(ok, false, `direct anchor must still refuse: ${direct}`);
+  }
+  // The receipt names the newly covered spellings AND keeps the honest
+  // residual: the receipt states the STRUCTURAL guarantee and keeps the
+  // no-name residual (computed/string-built, factories) explicit.
+  const receipt = scanSource(CLEAN_SOURCE).audit;
+  assert(receipt.unproven.includes("no shape list, no hop bound"), "unproven must state the structural guarantee, not an enumeration");
+  assert(receipt.unproven.includes("WITHOUT the capability name"), "unproven must keep the no-name acquisition residual explicit");
+  assertEquals(receipt.policy, "cap-js-capability-admission-ast-v3");
 });
 
 Deno.test("js-capability admission: the parser closes the import graph (u3vfd + 0065v + 3awbd class)", () => {
@@ -660,7 +760,7 @@ Deno.test("js-capability admission: admitBundled records the verdict on the rece
   const audit = current.jsCapabilityAudit;
   assertEquals(audit?.verdict, "pass");
   assertEquals(audit.parser, { name: "acorn", version: VENDORED_ACORN_VERSION });
-  assertEquals(audit.policy, "cap-js-capability-admission-ast-v1");
+  assertEquals(audit.policy, "cap-js-capability-admission-ast-v3");
   assertEquals(audit.denyList, EMSCRIPTEN_JS_CAPABILITY_DENY_LIST.map((e) => e.id));
   assertEquals(audit.scanned.map((row) => row.asset), ["adapter", "glue"]);
   assertEquals(audit.scanned[1].exemptions, ["fetch", "xhr"]);
