@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.744] — 2026-11-11
+- Emscripten package glue that reaches fetch, Worker or SharedWorker - including through wrappers, value aliases or static template-literal keys - is now refused at admission with a typed code instead of being silently admitted
+
 ## [0.3.743] — 2026-11-11
 - A tool's web request is now refused instead of followed when a site tries to redirect it to your own network or to a cloud metadata address.
 
