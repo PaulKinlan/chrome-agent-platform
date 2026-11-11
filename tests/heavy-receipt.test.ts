@@ -951,12 +951,26 @@ Deno.test("gutt3 (b3): the environmental path still demands the canonical no-arg
 const QUARANTINED = "tests/ntp-boot-staging-timing.test.ts";
 const QUARANTINE_BEAD = "chrome-agent-platform-8tgnt";
 
+// ksnsa LIFTED the live quarantine on 2026-11-11: the exit-criterion run of the suite passed (0 long tasks
+// across 5 valid runs, quiet window at steal=1%, load/core=0.12, tree 451239537), so QUARANTINED_HEAVY_FILES in
+// the tree is now EMPTY and the suite is back in the CERT set. The two-directional enforcement pinned below is a
+// property of the MECHANISM, not of that one entry, so these tests keep pinning it against an INJECTED
+// declaration (the `quarantined` option of auditSuiteLedger / writeHeavyReceipt / checkHeavyReceipt) rather than
+// the live table.
+const DECLARED_QUARANTINE = Object.freeze({
+  [QUARANTINED]: Object.freeze({
+    bead: QUARANTINE_BEAD,
+    reason: "zero-long-task budget unmeetable",
+    expiresWith: "chrome-agent-platform-ksnsa",
+  }),
+});
+
 Deno.test("8tgnt: a named quarantine is not coverage, and the rest of the set still has to pass", () => {
   const suites = [
     ...expectedHeavyFiles().filter((file) => file !== QUARANTINED).map((file) => ({ file, status: "passed" })),
     { file: QUARANTINED, status: "quarantined", bead: QUARANTINE_BEAD, reason: "zero-long-task budget unmeetable" },
   ];
-  const ledger = auditSuiteLedger(suites, expectedHeavyFiles());
+  const ledger = auditSuiteLedger(suites, expectedHeavyFiles(), { quarantined: DECLARED_QUARANTINE });
   assertEquals(ledger.ok, true);
   // The quarantined file must NOT be counted as covered: that is the whole distinction.
   assertEquals(ledger.covered.includes(QUARANTINED), false);
@@ -970,7 +984,7 @@ Deno.test("8tgnt: a receipt cannot relieve itself of a suite the tree does not q
     { file: "tests/not-in-the-heavy-set.test.ts", status: "quarantined", bead: "made-up", reason: "inconvenient" },
     { file: QUARANTINED, status: "quarantined", bead: QUARANTINE_BEAD, reason: "zero-long-task budget unmeetable" },
   ];
-  const ledger = auditSuiteLedger(suites, expectedHeavyFiles());
+  const ledger = auditSuiteLedger(suites, expectedHeavyFiles(), { quarantined: DECLARED_QUARANTINE });
   assertEquals(ledger.ok, false);
   assertEquals(ledger.undeclaredQuarantine, ["tests/not-in-the-heavy-set.test.ts"]);
   // It is also not part of this tree's enumerated set, so the ledger carries an extra row too.
@@ -982,6 +996,7 @@ Deno.test("8tgnt: a quarantine row without the declared bead, or without a reaso
   const wrongBead = auditSuiteLedger(
     [...base, { file: QUARANTINED, status: "quarantined", bead: "someone-else", reason: "because" }],
     expectedHeavyFiles(),
+    { quarantined: DECLARED_QUARANTINE },
   );
   assertEquals(wrongBead.ok, false);
   assertEquals(wrongBead.bad, [{ file: QUARANTINED, status: "quarantined" }]);
@@ -989,6 +1004,7 @@ Deno.test("8tgnt: a quarantine row without the declared bead, or without a reaso
   const noReason = auditSuiteLedger(
     [...base, { file: QUARANTINED, status: "quarantined", bead: QUARANTINE_BEAD, reason: "   " }],
     expectedHeavyFiles(),
+    { quarantined: DECLARED_QUARANTINE },
   );
   assertEquals(noReason.ok, false);
 });
@@ -1003,7 +1019,7 @@ Deno.test("8tgnt: a receipt that simply OMITS the quarantined suite cannot certi
     suites,
     covered: suites.map((s) => s.file),
   })));
-  const verdict = checkHeavyReceipt(TREE, { now: Date.now() });
+  const verdict = checkHeavyReceipt(TREE, { now: Date.now(), quarantined: DECLARED_QUARANTINE });
   assertEquals(verdict.ok, false);
   assertEquals(verdict.reason, "coverage-mismatch");
   assertStringIncludes(verdict.line, QUARANTINED);
@@ -1013,7 +1029,7 @@ Deno.test("8tgnt: a receipt that simply OMITS the quarantined suite cannot certi
     suites: [...suites, { file: QUARANTINED, status: "quarantined", bead: QUARANTINE_BEAD, reason: "unmeetable budget" }],
     covered: suites.map((s) => s.file),
   })));
-  const accepted = checkHeavyReceipt(TREE, { now: Date.now() });
+  const accepted = checkHeavyReceipt(TREE, { now: Date.now(), quarantined: DECLARED_QUARANTINE });
   assertEquals(accepted.ok, true, accepted.line);
 });
 
@@ -1061,7 +1077,7 @@ Deno.test("mv1jw: a receipt claiming a suite is BOTH covered and quarantined is 
     covered: [...passed.map((s) => s.file), QUARANTINED], // the impossible claim: covered AND quarantined
     quarantined: [{ file: QUARANTINED, bead: QUARANTINE_BEAD, reason: "excluded" }],
   })));
-  const verdict = checkHeavyReceipt(TREE, { now: Date.now() });
+  const verdict = checkHeavyReceipt(TREE, { now: Date.now(), quarantined: DECLARED_QUARANTINE });
   assertEquals(verdict.ok, false);
   assertEquals(verdict.reason, "coverage-overlap");
   assertStringIncludes(verdict.line, QUARANTINED);
@@ -1080,7 +1096,7 @@ Deno.test("mv1jw: a receipt whose covered+quarantined do not account for the enu
     covered: passed.slice(1).map((s) => s.file),
     quarantined: [{ file: QUARANTINED, bead: QUARANTINE_BEAD, reason: "excluded" }],
   })));
-  const verdict = checkHeavyReceipt(TREE, { now: Date.now() });
+  const verdict = checkHeavyReceipt(TREE, { now: Date.now(), quarantined: DECLARED_QUARANTINE });
   assertEquals(verdict.ok, false);
   assertEquals(verdict.reason, "contradictory-coverage");
 });
@@ -1097,8 +1113,9 @@ Deno.test("mv1jw: the printed coverage comes from the validated ledger, so it ca
       covered: expectedHeavyFiles().filter((file) => file !== QUARANTINED),
       quarantined: [{ file: QUARANTINED, bead: QUARANTINE_BEAD, reason: "excluded" }],
     }),
+    quarantined: DECLARED_QUARANTINE,
   } as any);
-  const verdict = checkHeavyReceipt(TREE, { now: NOW });
+  const verdict = checkHeavyReceipt(TREE, { now: NOW, quarantined: DECLARED_QUARANTINE });
   assertEquals(verdict.outcome, "accounting-only");
   const summary = describeReceiptCoverage((verdict as any).coverage ?? verdict.receipt);
   assertEquals(summary, `20/21 covered, 1 quarantined: ${QUARANTINED} (${QUARANTINE_BEAD}), 0 skips`);

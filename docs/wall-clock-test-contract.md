@@ -115,8 +115,9 @@ product evidence run BEFORE any gate is consulted (I1 applied to program order).
 
 - No new mechanism families. The refusal shape (`CAP_ENVIRONMENTAL_REFUSAL`, plain Error, exit 75
   via the aggregator) and the registry stay as built on the parked stack tips.
-- The quarantine of `ntp-boot-staging-timing` (8tgnt/ksnsa) is untouched; this design is what lets
-  it rejoin honestly.
+- The quarantine of `ntp-boot-staging-timing` (8tgnt/ksnsa) has been LIFTED (2026-11-11): ksnsa's exit-criterion
+  run passed on a quiet window (steal 1%, 0 long tasks across 5 valid runs), exactly the honest rejoin this design
+  existed to enable; the quarantine mechanism itself stays declared in `scripts/test-partition.mjs` (now empty).
 - The allowlisted re-tuning inventory (`tests/wall-clock-budget-registry.test.ts`, introduced by
   the 63o3v/38czq stack) stays an inventory; converting those suites is follow-on work (8dqfg),
   not this bead.
