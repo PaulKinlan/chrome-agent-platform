@@ -783,11 +783,19 @@ Deno.test("upqhp/juubk wiring: the receipt stays out of npm test, and the produc
   assertStringIncludes(stage, "checkHeavyReceipt(tree");
   assertStringIncludes(stage, "HEAVY_RECEIPT_REFUSAL");
   assertStringIncludes(stage, "process.exit(2)");
-  assertStringIncludes(stage, "expectedHeavyFiles()");
+  // bh4ei: the stage no longer passes an expected set — the validator enumerates the tree's own
+  // set internally, so no caller of the shipped entry points can relax what counts as complete.
+  assertEquals(stage.includes("expectedHeavyFiles()"), false, "the stage must not pass an expected set (bh4ei)");
   // The named refusal contract lives in the library the stage consumes.
   const receiptLib = readFileSync(join(ROOT, "scripts", "lib", "heavy-receipt.mjs"), "utf8");
   assertStringIncludes(receiptLib, "HEAVY_RECEIPT_REFUSAL");
   assertStringIncludes(receiptLib, "renameSync", "the receipt write must be atomic (juubk)");
+  // bh4ei: BOTH shipped entry points hardcode the tree's enumerated set (writer + validator).
+  assertEquals(
+    receiptLib.split("const expected = expectedHeavyFiles();").length - 1,
+    2,
+    "writeHeavyReceipt and checkHeavyReceipt must each hardcode expectedHeavyFiles() (bh4ei)",
+  );
   // The tier run is the producer: every outcome is recorded, the tree is captured at BOTH ends,
   // and the per-suite ledger comes from the phases that actually ran.
   const heavyGate = readFileSync(join(ROOT, "scripts", "heavy-gate.ts"), "utf8");
@@ -1072,6 +1080,36 @@ Deno.test("2udrl: the accounting-only line states covered/expected/quarantined a
   const legacy = describeReceiptCoverage({ ...receipt, quarantined: undefined } as any);
   assertStringIncludes(legacy, `1 quarantined: ${QUARANTINED} (${QUARANTINE_BEAD})`);
 });
+
+Deno.test("bh4ei: a caller-supplied 'expected' set cannot relax the shipped writer/validator either", withReceipts(async (nextTree) => {
+  // Same class as 0e15f: `expected: []` lets the ledger audit see an empty enumerated set, so a
+  // ZERO-SUITE receipt certifies. Pre-fix both shipped entry points accepted the argument (the
+  // reviewer's repro: expected:[] certifies a zero-suite receipt as 'full'); post-fix they
+  // enumerate the tree's own set and the empty receipt is refused as coverage-mismatch.
+  const TREE = nextTree();
+  mkdirSync(dirname(receiptPath(TREE)), { recursive: true });
+  writeFileSync(receiptPath(TREE), JSON.stringify(certifyingBody(TREE, {
+    suites: [],
+    covered: [],
+    expected: [],
+    missing: [],
+  })));
+  const injected = checkHeavyReceipt(TREE, { now: NOW, expected: [] } as any);
+  assertEquals(injected.ok, false, "an injected empty expected set must not certify a zero-suite receipt");
+  assertEquals(injected.reason, "coverage-mismatch");
+  const plain = checkHeavyReceipt(TREE, { now: NOW });
+  assertEquals(plain.ok, false);
+  assertEquals(plain.reason, "coverage-mismatch");
+
+  // The writer cannot mint a 'complete' zero-suite receipt via expected:[] either: with the tree's
+  // own enumerated set, the empty ledger downgrades the pass claim to a coverage shortfall.
+  const TREE2 = nextTree();
+  const { receipt } = writeHeavyReceipt({
+    ...certifyingBody(TREE2, { suites: [], covered: [], expected: [] }),
+  } as any);
+  assertEquals(receipt.complete, false);
+  assertEquals(receipt.result, "subset");
+}));
 
 Deno.test("mv1jw: a receipt claiming a suite is BOTH covered and quarantined is refused, not labelled", () => {
   // Round-2 finding on the quarantine landing: a crafted receipt listed the quarantined file in both sets, passed
