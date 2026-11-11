@@ -114,10 +114,27 @@ export async function runFetch(payload, runId = null) {
   }
   let res;
   try {
-    res = await fetch(v.url, { method, headers: payload?.opts?.headers && typeof payload.opts.headers === "object" ? payload.opts.headers : undefined });
+    // z7i3m: redirects are NOT followed on this path either. The brokered route fetches with
+    // `redirect: "manual"` (service-worker.js cap:fetch) and refuses a 30x explicitly, because a
+    // redirect could land on a host (loopback / RFC1918 / metadata) that the private-address deny
+    // list above refuses as written. Following redirects here would make the ONE path without the
+    // broker's checks the weaker of the two, on the argument that CORS happens to gate it — the
+    // request would still be issued from the user's network position, which is the thing the
+    // predicate exists to prevent. So: same policy as the broker, same fixed code (7t2zv contract).
+    res = await fetch(v.url, {
+      method,
+      headers: payload?.opts?.headers && typeof payload.opts.headers === "object" ? payload.opts.headers : undefined,
+      redirect: "manual",
+    });
   } catch (e) {
     // 7t2zv: same code contract on the fallback route.
     return { ok: false, error: "fetch_failed", hint: "the direct fetch threw" };
+  }
+  // z7i3m: a refused redirect is a REFUSAL, not a response to read. `manual` surfaces the 30x
+  // itself (Deno/node return status+type; a browser may hand back an opaque redirect instead), so
+  // the hop is never issued and the caller learns why with the broker's own code.
+  if (res.type === "opaqueredirect" || (res.status >= 300 && res.status < 400)) {
+    return { ok: false, error: "redirect_refused", hint: "the response redirected elsewhere; this path does not follow redirects" };
   }
   // chrome-agent-platform-hvd4s: bound the READ itself. Pre-fix this fallback
   // buffered the whole body — and, unlike the SW broker, returned it with NO
