@@ -19,6 +19,7 @@ import { spawnSync } from "node:child_process";
 import {
   commitOwesProductChange,
   deriveLedger,
+  firstParentIntroducer,
   isProductPath,
   parseNewestEntry,
   stripFencedCode,
@@ -246,6 +247,61 @@ Deno.test("ledger: merge commits are out of the ledger by construction (--no-mer
   assert(ledger.notOwed >= 2, `the non-merge commits under the merge are classified: ${ledger.notOwed}`);
   const cli = repo.runCli();
   assertEquals(cli.code, 0, `merge-only landings do not owe entries (stderr: ${cli.err})`);
+  await cleanupFixtures();
+});
+
+Deno.test("ledger: a heading introduced by a MERGE commit resolves to that merge (merge-aware anchor)", async () => {
+  // chrome-agent-platform-4smxg: the awaom landing (2026-11-11) folded its release stamp INTO the
+  // merge commit, and the ledger fail-closed reded main because `git log -S` never searches a merge
+  // diff. This fixture is that shape: neither parent carries `## [1.1.0]`; only the merge tree does.
+  const repo = await mkLedgerRepo("merge-stamp");
+  Deno.mkdirSync(`${repo.dir}/extension/lib`, { recursive: true });
+  Deno.writeTextFileSync(`${repo.dir}/extension/lib/tool.js`, "export const x = 4;\n");
+  repo.commit("feat: product work before the release"); // owed against [1.0.0], covered by [1.1.0]
+  repo.git(["checkout", "-q", "-b", "side"]);
+  Deno.writeTextFileSync(`${repo.dir}/notes.txt`, "side\n");
+  repo.commit("side note");
+  repo.git(["checkout", "-q", "main"]);
+  Deno.writeTextFileSync(`${repo.dir}/notes.txt`, "main\n");
+  repo.commit("main note");
+  repo.git(["merge", "-q", "--no-ff", "--no-commit", "side"], { allowConflict: true });
+  Deno.writeTextFileSync(`${repo.dir}/notes.txt`, "resolved\n");
+  Deno.writeTextFileSync(
+    `${repo.dir}/CHANGELOG.md`,
+    "# Changelog\n\n## [1.1.0] — 2026-10-06\n- what the user gets\n\n## [1.0.0] — 2026-10-05\n- first\n",
+  );
+  repo.writeSurfaces("1.1.0");
+  repo.git(["add", "."]);
+  repo.git(["commit", "-q", "-m", "Merge branch 'side' with the 1.1.0 stamp folded in"]);
+  const mergeSha = repo.git(["rev-parse", "HEAD"]).trim();
+  // Bookkeeping AFTER the merge: the anchor is still the merge, not HEAD — a resolver that just
+  // returned "the newest commit containing the heading" would anchor here and hide owed product work.
+  Deno.writeTextFileSync(`${repo.dir}/tests/later.test.ts`, "not owed\n");
+  repo.commit("tests: later bookkeeping");
+
+  // The mechanism under test, asserted so this fixture can never drift into a case the pickaxe
+  // already handles (which would make the regression invisible).
+  assertEquals(
+    gitOut(repo.dir, ["log", "-S## [1.1.0]", "--format=%H", "-n", "1", "--", "CHANGELOG.md"]).trim(),
+    "",
+    "the pickaxe alone cannot find a merge-introduced heading — that IS the defect",
+  );
+
+  const ledger = deriveLedger({ repo: repo.dir });
+  assertEquals(ledger.newest.version, "1.1.0");
+  assertEquals(ledger.anchor, mergeSha, "the anchor is the merge that introduced the heading");
+  assertEquals(ledger.owed, [], "nothing after the merge owes an entry");
+  assertEquals(ledger.notOwed, 1, "only the post-merge bookkeeping commit is classified after the anchor");
+  const cli = repo.runCli();
+  assertEquals(cli.code, 0, `a merge-introduced release must pass (stderr: ${cli.err})`);
+
+  // The same resolver must still find a NON-merge introducer (the root commit here), so a mutant
+  // that simply returns HEAD's chain position passes the case above and reds this one.
+  assertEquals(
+    firstParentIntroducer(repo.dir, "1.0.0"),
+    repo.git(["rev-list", "--max-parents=0", "HEAD"]).trim(),
+    "a linear introducer still resolves to its own commit",
+  );
   await cleanupFixtures();
 });
 
