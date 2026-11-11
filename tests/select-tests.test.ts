@@ -23,6 +23,7 @@ import {
   selectTestFiles,
   selectionFanInNotice,
 } from "../scripts/select-tests.mjs";
+import { explainChangedFileMapping } from "../scripts/lib/gate-manifest.mjs";
 
 // A real seam with a known importer: schedule-parser.js is imported by
 // tests/schedule-parser.test.ts. If the graph walk stops resolving, the subset
@@ -286,4 +287,62 @@ Deno.test("h346c: guardGapFor is the merger's stop signal — it counts changed 
     "a zero is a pass",
   );
   assertEquals(guardGapFor([], []), []);
+});
+
+// chrome-agent-platform-xpmke: the selector must SAY which kind of refusal it is making, because
+// the manifest can only render what it is told. A policy refusal (the selector's own machinery,
+// an uncertifiable lockfile delta) and a genuine unmapped gap both withhold a subset, but only
+// the second is a coverage GAP — and the fleet raises its COVERAGE WARNING from the gap list.
+Deno.test("xpmke: a selector-infrastructure refusal is marked as POLICY, not left to be re-derived", () => {
+  const plan = planSelection({ changedFiles: () => ["scripts/select-tests.mjs"] });
+  assertEquals(plan.kind, "full");
+  assertEquals(plan.unmappable.length, 1);
+  assertEquals(plan.unmappable[0].file, "scripts/select-tests.mjs");
+  assertEquals(
+    plan.unmappable[0].kind,
+    "policy",
+    "the manifest renders 'fail-closed' from this kind; without it the file is reported as an unmapped gap",
+  );
+});
+
+Deno.test("xpmke: an uncertifiable lockfile delta is POLICY too, not a coverage gap", () => {
+  const plan = planSelection({
+    changedFiles: () => ["package-lock.json"],
+    lockfileOptions: {
+      readText: () => {
+        throw new Error("unreadable lockfile (test seam)");
+      },
+    },
+  });
+  // Whether this particular seam refuses or certifies, the invariant is: anything the plan
+  // reports as unmappable carries an explicit kind, so no entry is silently reclassified.
+  for (const entry of plan.unmappable) {
+    assert(
+      entry.kind === "policy" || entry.kind === "unmapped",
+      `${entry.file} must declare a kind, got ${String(entry.kind)}`,
+    );
+  }
+});
+
+// chrome-agent-platform-1lvay/xpmke INTEGRATION — this is the case coord flagged as "where 'it merged
+// clean' is weakest": h346c and xpmke merged without a textual conflict in scripts/select-tests.mjs and
+// still contradicted each other, because h346c's guard-registry refusal carried no `kind`, so xpmke's
+// manifest rendered a deliberate policy refusal as a coverage GAP. A test per bead would not have caught
+// it — this one asserts the two behaviours TOGETHER.
+Deno.test("xpmke+h346c: a guard-registry refusal is POLICY, so the manifest does not call it an unmapped gap", () => {
+  const plan = planSelection({
+    changedFiles: () => ["extension/lib/script-host.js"],
+    dedicatedGuards: { "extension/lib/script-host.js": ["tests/no-such-guard-suite.test.ts"] },
+  });
+  assertEquals(plan.kind, "full", "an unhonourable registry entry must fail closed, not subset");
+  assertEquals(plan.unmappable.length, 1);
+  assertEquals(plan.unmappable[0].file, "extension/lib/script-host.js");
+  assertEquals(
+    plan.unmappable[0].kind,
+    "policy",
+    "h346c's refusal is by design; without kind the ledger reports it as a gap and the warning is unfixable noise",
+  );
+  // And the declaration reaches the wire: the manifest renders fail-closed, never unmapped.
+  const rows = explainChangedFileMapping({ changed: ["extension/lib/script-host.js"], executedSuites: [], unmappable: plan.unmappable });
+  assertEquals(rows[0].status, "fail-closed");
 });
