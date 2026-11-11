@@ -55,7 +55,7 @@ for a in "$@"; do [ "$a" = "--path" ] && { echo "Error: unknown flag: --path" >&
 printf '%s' "$FAKE_BD_OUT"
 `;
 
-type Opts = { fail?: boolean; empty?: boolean; out?: string; checkManual?: boolean; missingGuardScript?: boolean; onDiskExtra?: boolean; diskMissing?: boolean; diskEmpty?: boolean; approved?: string; decision?: string; requireAll?: boolean; commitIn?: "worktree" | "primary"; sequencer?: "rebase-merge" | "rebase-apply" | "MERGE_HEAD" | "CHERRY_PICK_HEAD"; diskMarked?: boolean };
+type Opts = { fail?: boolean; empty?: boolean; out?: string; checkManual?: boolean; missingGuardScript?: boolean; onDiskExtra?: boolean; diskMissing?: boolean; diskEmpty?: boolean; approved?: string; decision?: string; requireAll?: boolean; commitIn?: "worktree" | "primary"; sequencer?: "rebase-merge" | "rebase-apply" | "MERGE_HEAD" | "CHERRY_PICK_HEAD"; diskMarked?: boolean; indexMarked?: boolean };
 
 async function scenario(hookText: string, opts: Opts = {}) {
   const root = await mkdtemp(path.join(tmpdir(), "cap-ufrr-"));
@@ -114,6 +114,14 @@ async function scenario(hookText: string, opts: Opts = {}) {
     if (opts.diskMissing) await rm(path.join(where, ".beads", "issues.jsonl"));
     if (opts.diskEmpty) await writeFile(path.join(where, ".beads", "issues.jsonl"), "");
     if (opts.diskMarked) await writeFile(path.join(where, ".beads", "issues.jsonl"), MARKED);
+    if (opts.indexMarked) {
+      // g1a09: the INDEX is what a commit carries. Stage a marked export, then regenerate the
+      // working-tree copy only — exactly what a rebase resolver does when it follows the hook's
+      // "regenerate it" remedy without re-staging.
+      await writeFile(path.join(where, ".beads", "issues.jsonl"), MARKED);
+      ok(git(where, "add", "-f", ".beads/issues.jsonl"), "stage the marked export");
+      await writeFile(path.join(where, ".beads", "issues.jsonl"), BASE);
+    }
     const manualCheck = opts.checkManual
       ? spawnSync("node", [path.join(where, "scripts", "check-beads-export-divergence.mjs")], { cwd: where, env, encoding: "utf8" })
       : null;
@@ -173,6 +181,23 @@ Deno.test("xcffx: a conflict marker already on disk is refused BEFORE the export
   assert(s.commit.status !== 0, "a conflicted on-disk export must block the commit");
   assert(/on disk/.test(s.commit.stderr), `name where the markers are: ${s.commit.stderr}`);
   assertEquals(s.bdCwd, [], "refused before bd ran — nothing can overwrite the evidence first");
+});
+
+Deno.test("g1a09: a conflict-marked export STAGED in the index is refused even when the working tree reads clean", async () => {
+  const s = await scenario(await referenceHook(), { indexMarked: true });
+  assert(s.commit.status !== 0, "the commit carries the INDEX, so a clean working tree must not bless a marked stage");
+  assert(/STAGED copy/.test(s.commit.stderr), `name the index as the offender: ${s.commit.stderr}`);
+  assertEquals(s.worktreeHead, BASE, "no marker reached the committed export");
+});
+
+Deno.test("g1a09: the replay path checks the index too — a marked stage cannot ride a replayed commit silently", async () => {
+  const s = await scenario(await referenceHook(), { indexMarked: true, sequencer: "rebase-merge" });
+  assert(
+    s.commit.status !== 0,
+    "the replay branch exits before re-staging, so the index check is the only thing standing between a marked stage and history",
+  );
+  assert(/STAGED copy/.test(s.commit.stderr), `the refusal names the index, and is not silent: ${s.commit.stderr}`);
+  assertEquals(s.worktreeHead, BASE, "no marker reached the committed export");
 });
 
 Deno.test("xcffx: a REPLAYED commit (rebase/merge/cherry-pick in progress) does not refresh or stage the export", async () => {

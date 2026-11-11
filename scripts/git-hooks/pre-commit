@@ -39,10 +39,25 @@ refuse_markers() {
   echo "[pre-commit] REFUSED: $1 contains GIT CONFLICT MARKERS (<<<<<<< / ======= / >>>>>>>)." >&2
   echo "[pre-commit] A conflict-marked tracker export is not a merge resolution: it is a corrupt file that" >&2
   echo "[pre-commit] every other lane's bd will read. Regenerate it (bd export --all > .beads/issues.jsonl)," >&2
-  echo "[pre-commit] resolve any real tracker conflict in bd, then commit again." >&2
+  echo "[pre-commit] then STAGE the regenerated file (git add .beads/issues.jsonl) — the commit carries the" >&2
+  echo "[pre-commit] INDEX, not the working tree, and a resolved copy that is only on disk is not the one committed." >&2
   exit 1
 }
 [ -f .beads/issues.jsonl ] && has_markers .beads/issues.jsonl && refuse_markers ".beads/issues.jsonl on disk"
+
+# g1a09: the commit carries the INDEX copy, not the working-tree copy, so checking the
+# file on disk is not enough. The bypass this closes was mine: the replay branch below
+# exits before re-staging, so a conflict-marked export staged during a rebase resolution
+# (git requires the resolved path to be staged) rode into the replayed commit while the
+# regenerated on-disk file read clean — and this hook's own remedy message told the
+# resolver to regenerate, never to stage. Checked BEFORE the replay exit and
+# unconditionally, because the pre-replay hook only healed this by accident (its
+# `git add` overwrote the marked index copy, which is the churn this bead removes).
+index_has_markers() {
+  git cat-file -e ":.beads/issues.jsonl" 2>/dev/null || return 1
+  git show ":.beads/issues.jsonl" 2>/dev/null | has_markers -
+}
+index_has_markers && refuse_markers "the STAGED copy of .beads/issues.jsonl (the git index — what this commit would carry)"
 
 # xcffx: during a REPLAY git owns the commit's content, so the hook must not rewrite it.
 # The export describes the DB as it is NOW; staging it while git replays an old commit
