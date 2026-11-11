@@ -250,6 +250,9 @@ function certifies(receipt) {
  * caller-supplied exclusion set, so an exclusion can only ever be conferred by the tree's own
  * QUARANTINED_HEAVY_FILES declaration — 8tgnt's "a declaration in the tree, never a flag or
  * argument" holds at the enforcement point, not just in the mechanism.
+ * bh4ei: the same rule applies to the ENUMERATED set — `expected` is this mechanism's positional
+ * input, but the shipped entry points always pass the tree's own expectedHeavyFiles(); an
+ * injected `expected: []` must never be able to certify a zero-suite receipt.
  *
  * @param {{ file?: string, status?: string, bead?: string, reason?: string }[]} suites
  * @param {string[]} expected
@@ -327,7 +330,6 @@ export function writeHeavyReceipt({
   exitCode = null,
   logPath = null,
   suites = [],
-  expected = expectedHeavyFiles(),
   dirty = [],
   conditions = null,
   producer = process.env.FLEET_LANE ?? "unknown",
@@ -338,6 +340,9 @@ export function writeHeavyReceipt({
     throw new Error(`heavy-receipt: invalid result "${result}" (${RECEIPT_RESULTS.join("|")})`);
   }
   if (!tree) throw new Error("heavy-receipt: a receipt must name the tree it ran on");
+  // bh4ei: the enumerated set is the TREE's own — never a caller argument (same rule as 0e15f's
+  // quarantine removal): an argument to the thing that certifies trees must not relax coverage.
+  const expected = expectedHeavyFiles();
 
   // 0e15f: no caller-supplied exclusion set — the writer audits against the TREE's declaration only.
   const ledger = auditSuiteLedger(suites, expected);
@@ -504,7 +509,9 @@ export function evaluateStealConditions(receipt) {
 /**
  * @returns {Record<string, any>} verdict: {ok, outcome: "full"|"accounting-only"|"refused", reason, line?, marker?, payload, receipt?, path?, steal?}
  */
-export function checkHeavyReceipt(tree, { now = Date.now(), maxAgeMs = DEFAULT_RECEIPT_MAX_AGE_MS, expected = expectedHeavyFiles() } = {}) {
+export function checkHeavyReceipt(tree, { now = Date.now(), maxAgeMs = DEFAULT_RECEIPT_MAX_AGE_MS } = {}) {
+  // bh4ei: no caller-supplied expected set — `expected: []` would certify a zero-suite receipt as full.
+  const expected = expectedHeavyFiles();
   const path = receiptPath(tree);
   const refuse = (reason, line, payload = {}) => ({
     ok: false,

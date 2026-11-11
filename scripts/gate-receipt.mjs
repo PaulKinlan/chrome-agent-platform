@@ -35,7 +35,7 @@
 //   exit 2  structurally refused: missing / mismatched / stale / not a pass / incomplete (get a receipt)
 //   exit 3  accounting-only and NOT accepted: starved, unmeasured, or no steal evidence (fix the box)
 
-import { checkHeavyReceipt, currentTreeHash, describeReceiptCoverage, expectedHeavyFiles } from "./lib/heavy-receipt.mjs";
+import { checkHeavyReceipt, currentTreeHash, describeReceiptCoverage } from "./lib/heavy-receipt.mjs";
 
 const args = process.argv.slice(2);
 const known = new Set(["--accept-accounting-only", "--help"]);
@@ -58,7 +58,9 @@ try {
   console.error(`gate-receipt: cannot resolve the current git tree (${error.message})`);
   process.exit(2);
 }
-const verdict = checkHeavyReceipt(tree, { expected: expectedHeavyFiles() });
+// bh4ei: checkHeavyReceipt enumerates the tree's own heavy set; a caller-supplied expected set
+// could relax what the validator treats as complete coverage.
+const verdict = checkHeavyReceipt(tree);
 if (!verdict.ok) {
   console.error(`\n${verdict.line}\n`);
   const accountingOnly = verdict.outcome === "accounting-only";
