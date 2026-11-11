@@ -55,7 +55,7 @@ for a in "$@"; do [ "$a" = "--path" ] && { echo "Error: unknown flag: --path" >&
 printf '%s' "$FAKE_BD_OUT"
 `;
 
-type Opts = { fail?: boolean; empty?: boolean; out?: string; checkManual?: boolean; missingGuardScript?: boolean; onDiskExtra?: boolean; diskMissing?: boolean; diskEmpty?: boolean; approved?: string; decision?: string; requireAll?: boolean; commitIn?: "worktree" | "primary" };
+type Opts = { fail?: boolean; empty?: boolean; out?: string; checkManual?: boolean; missingGuardScript?: boolean; onDiskExtra?: boolean; diskMissing?: boolean; diskEmpty?: boolean; approved?: string; decision?: string; requireAll?: boolean; commitIn?: "worktree" | "primary"; sequencer?: "rebase-merge" | "rebase-apply" | "MERGE_HEAD" | "CHERRY_PICK_HEAD"; diskMarked?: boolean };
 
 async function scenario(hookText: string, opts: Opts = {}) {
   const root = await mkdtemp(path.join(tmpdir(), "cap-ufrr-"));
@@ -113,11 +113,19 @@ async function scenario(hookText: string, opts: Opts = {}) {
     if (opts.onDiskExtra) await writeFile(path.join(where, ".beads", "issues.jsonl"), BASE + '{"_type":"issue","id":"disk-only"}\n');
     if (opts.diskMissing) await rm(path.join(where, ".beads", "issues.jsonl"));
     if (opts.diskEmpty) await writeFile(path.join(where, ".beads", "issues.jsonl"), "");
+    if (opts.diskMarked) await writeFile(path.join(where, ".beads", "issues.jsonl"), MARKED);
     const manualCheck = opts.checkManual
       ? spawnSync("node", [path.join(where, "scripts", "check-beads-export-divergence.mjs")], { cwd: where, env, encoding: "utf8" })
       : null;
     await writeFile(path.join(where, "change.txt"), "change\n");
     ok(git(where, "add", "change.txt"), "stage the change");
+    // xcffx: git's sequencer state lives in the committing checkout's OWN git dir
+    // (a linked worktree's gitdir, never the primary's), which is exactly where the
+    // hook has to look — so the fixture creates it there.
+    if (opts.sequencer) {
+      const gitDir = ok(git(where, "rev-parse", "--absolute-git-dir"), "git dir").trim();
+      await mkdir(path.join(gitDir, opts.sequencer), { recursive: true });
+    }
     const commit = git(where, "commit", "-q", "-m", "a change");
 
     const read = async (p: string) => {
@@ -146,6 +154,37 @@ async function scenario(hookText: string, opts: Opts = {}) {
 }
 
 const referenceHook = () => readFile(path.join(HOOKS_DIR, "pre-commit"), "utf8");
+
+// A conflicted export, in the exact shape git writes it.
+const MARKED = `${BASE}<<<<<<< HEAD\n{"_type":"issue","id":"mine-1"}\n=======\n{"_type":"issue","id":"theirs-1"}\n>>>>>>> other\n`;
+
+Deno.test("xcffx: a conflict-marked export can never be committed, and the refusal says so", async () => {
+  const s = await scenario(await referenceHook(), { out: MARKED });
+  assert(s.commit.status !== 0, "a conflicted export must BLOCK the commit, not ride in it");
+  assert(/GIT CONFLICT MARKERS/.test(s.commit.stderr), `name the marker refusal: ${s.commit.stderr}`);
+  assertEquals(s.worktreeHead, BASE, "the committed export stays the last good one");
+  assertEquals(s.worktreeDisk, BASE, "the on-disk export stays intact too");
+  assertEquals(s.primaryStatus, "", "the shared primary checkout stays clean");
+  assertEquals(s.litter, [], "no temp file survives the refusal");
+});
+
+Deno.test("xcffx: a conflict marker already on disk is refused BEFORE the export runs", async () => {
+  const s = await scenario(await referenceHook(), { diskMarked: true });
+  assert(s.commit.status !== 0, "a conflicted on-disk export must block the commit");
+  assert(/on disk/.test(s.commit.stderr), `name where the markers are: ${s.commit.stderr}`);
+  assertEquals(s.bdCwd, [], "refused before bd ran — nothing can overwrite the evidence first");
+});
+
+Deno.test("xcffx: a REPLAYED commit (rebase/merge/cherry-pick in progress) does not refresh or stage the export", async () => {
+  const s = await scenario(await referenceHook(), { sequencer: "rebase-merge" });
+  assertEquals(s.commit.status, 0, s.commit.stderr);
+  assertEquals(s.bdCwd, [], "bd never ran: live tracker state must not be stamped into a replayed commit");
+  assertEquals(s.worktreeHead, BASE, "the replayed commit keeps the export it replayed, so it cannot conflict here");
+  assertEquals(s.worktreeStatus, "", "the hook staged nothing and left nothing dirty");
+  assertEquals(s.primaryHead, BASE, "the primary's history is untouched");
+  assertEquals(s.primaryStatus, "", "the shared primary checkout stays clean");
+  assertEquals(s.litter, [], "no temp file left behind");
+});
 
 Deno.test("ufrr: a commit from a LINKED WORKTREE exports in that worktree, stages it there, and leaves the primary checkout untouched", async () => {
   const s = await scenario(await referenceHook());
