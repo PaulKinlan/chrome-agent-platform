@@ -347,7 +347,8 @@ consequences are carried by the matching register entry where one exists.
   unscoped `runId == null` calls); SW routes at
   `extension/background/service-worker.js#cap:fetch` (`cap:fetch`),
   `extension/background/service-worker.js#python.fetch` (`python.fetch`), and
-  `extension/background/service-worker.js#skill.import` (`skill.import` / `skill.discover` / `skill.importBatch`).
+  `extension/background/routes/skills.js#skill.import` (`skill.import` / `skill.discover` / `skill.importBatch`;
+  chrome-agent-platform-zln9d moved the skill routes to the routes module — the citation follows the live anchor).
   All skill-import remote fetches enforce `redirect: "manual"` via `fetchWithSafeRedirects`: uninspectable
   `opaqueredirect` responses are refused fail-closed (the live enforcement in browser environments), while
   inspectable 3xx responses re-validate each `Location` hop against `checkFetchTarget` up to a bounded hop count

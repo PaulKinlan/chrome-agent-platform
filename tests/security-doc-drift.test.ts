@@ -202,6 +202,7 @@ function assertLiveRouteCitations(model: string, pure: string, worker: string,
     ["extension/lib/pure-redact.js", read("extension/lib/pure-redact.js")],
     ["extension/background/service-worker.js", worker],
     ["extension/background/routes/hooks.js", hooks],
+    ["extension/background/routes/skills.js", read("extension/background/routes/skills.js")],
     ["extension/lib/fetch-policy.js", read("extension/lib/fetch-policy.js")],
     ["extension/lib/python-network.js", read("extension/lib/python-network.js")],
     ["extension/background/routes/enclave-proxy.js", read("extension/background/routes/enclave-proxy.js")],
@@ -254,6 +255,9 @@ function assertLiveRouteCitations(model: string, pure: string, worker: string,
   // chrome-agent-platform-atxc6: hooks.* moved to extension/background/routes/hooks.js, so its anchor is
   // resolved in THAT module — the citation still points at the executable member, just in its new home.
   const hooksSubscribe = ["extension/background/routes/hooks.js", "hooks.subscribe"];
+  // chrome-agent-platform-zln9d (s2b re-cut): the skill family moved to extension/background/routes/skills.js,
+  // so the skill.import anchor resolves in THAT module — same rule as hooks.
+  const skillImportRoute = ["extension/background/routes/skills.js", "skill.import"];
   const backgroundSet = swRoute("background-agent.set");
   // of68a: the remaining documented control anchors — each pair must appear in the named
   // section as a full backticked `path#symbol` citation AND resolve to exactly one live
@@ -303,7 +307,7 @@ function assertLiveRouteCitations(model: string, pure: string, worker: string,
     [section(model, "### T4.", "### T5."), [allowlist, namedTools, exportFolder]],
     [section(model, "### T6.", "### T7."), [fetchRoute, pythonFetch, fetchPolicyPrivate, fetchPolicyCheck,
       fetchPolicyExtract, pythonNetwork, enclaveProxyRoutes, skillUrl, skillRedirects, skillGitHub,
-      skillDiscover, skillBatch, scriptHostFetch, swRoute("skill.import")]],
+      skillDiscover, skillBatch, scriptHostFetch, skillImportRoute]],
     [section(model, "### T13.", "### T14."), [hooksSubscribe, backgroundSet, swRoute("dispatchHook")]],
     [section(model, "### T14.", "### T15."), [mcpNormalize, mcpMount, mcpGuardedFetch, mcpGuardedBinding]],
     [section(model, "### T19.", "## 6."), [swRoute("browser.destructive-action"), destructiveActions]],
