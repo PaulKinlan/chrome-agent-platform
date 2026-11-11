@@ -326,13 +326,14 @@ export function writeHeavyReceipt({
   producer = process.env.FLEET_LANE ?? "unknown",
   startedAt = null,
   finishedAt = Date.now(),
+  quarantined = QUARANTINED_HEAVY_FILES,
 }) {
   if (!RECEIPT_RESULTS.includes(result)) {
     throw new Error(`heavy-receipt: invalid result "${result}" (${RECEIPT_RESULTS.join("|")})`);
   }
   if (!tree) throw new Error("heavy-receipt: a receipt must name the tree it ran on");
 
-  const ledger = auditSuiteLedger(suites, expected);
+  const ledger = auditSuiteLedger(suites, expected, { quarantined });
   const missing = ledger.missing;
   // 8tgnt: `covered` is what the receipt CLAIMS ran. A quarantined row is not coverage, so it is excluded here by
   // construction (auditSuiteLedger returns covered without them), and the quarantine rows are recorded separately so
@@ -340,9 +341,9 @@ export function writeHeavyReceipt({
   const covered = ledger.covered ?? suites.map((s) => s.file);
   const quarantinedRows = (ledger.quarantined ?? []).map((file) => ({
     file,
-    reason: QUARANTINED_HEAVY_FILES[file]?.reason ?? null,
-    bead: QUARANTINED_HEAVY_FILES[file]?.bead ?? null,
-    expiresWith: QUARANTINED_HEAVY_FILES[file]?.expiresWith ?? null,
+    reason: quarantined[file]?.reason ?? null,
+    bead: quarantined[file]?.bead ?? null,
+    expiresWith: quarantined[file]?.expiresWith ?? null,
   }));
   const skipped = ledger.bad.map((entry) => entry.file);
   const complete =
@@ -496,7 +497,7 @@ export function evaluateStealConditions(receipt) {
 /**
  * @returns {Record<string, any>} verdict: {ok, outcome: "full"|"accounting-only"|"refused", reason, line?, marker?, payload, receipt?, path?, steal?}
  */
-export function checkHeavyReceipt(tree, { now = Date.now(), maxAgeMs = DEFAULT_RECEIPT_MAX_AGE_MS, expected = expectedHeavyFiles() } = {}) {
+export function checkHeavyReceipt(tree, { now = Date.now(), maxAgeMs = DEFAULT_RECEIPT_MAX_AGE_MS, expected = expectedHeavyFiles(), quarantined = QUARANTINED_HEAVY_FILES } = {}) {
   const path = receiptPath(tree);
   const refuse = (reason, line, payload = {}) => ({
     ok: false,
@@ -594,7 +595,7 @@ export function checkHeavyReceipt(tree, { now = Date.now(), maxAgeMs = DEFAULT_R
   }
   // The ledger must match THIS tree's enumerated set exactly, suite by suite — not a count, and not
   // the `covered` list beside it.
-  const ledger = auditSuiteLedger(receipt.suites, expected);
+  const ledger = auditSuiteLedger(receipt.suites, expected, { quarantined });
   if (ledger.missing.length > 0 || ledger.extra.length > 0) {
     return refuse(
       "coverage-mismatch",
@@ -681,7 +682,7 @@ export function checkHeavyReceipt(tree, { now = Date.now(), maxAgeMs = DEFAULT_R
   // The numbers every human-facing message prints come from HERE, never from the receipt's own fields.
   const coverage = {
     covered: [...ledger.covered],
-    quarantined: ledger.quarantined.map((file) => ({ file, bead: QUARANTINED_HEAVY_FILES[file]?.bead ?? "unstated-bead" })),
+    quarantined: ledger.quarantined.map((file) => ({ file, bead: quarantined[file]?.bead ?? "unstated-bead" })),
     expected: [...expected],
     skipped: ledger.bad.map((entry) => entry.file),
   };

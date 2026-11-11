@@ -18,13 +18,16 @@ const ROOT = fileURLToPath(new URL("..", import.meta.url));
 Deno.test("heavy-gate static: exports main and filesFor, matching HEAVY_GATE_FILES exactly", () => {
   assertEquals(typeof main, "function");
   assertEquals(typeof filesFor, "function");
-  // 8tgnt: the enumerated run drives the CERT set — the enumerated suites minus the declared quarantines. The
-  // quarantined file stays in HEAVY_GATE_FILES (the tier still owes it, and a receipt must account for it) but it
-  // must not run, or its unmeetable zero-long-task budget fails every producer run and refuses every tree.
+  // 8tgnt/ksnsa: the enumerated run drives the CERT set — the enumerated suites minus the declared quarantines.
+  // The quarantine table is EMPTY since ksnsa's exit-criterion run passed (0 long tasks across 5 valid runs in a
+  // steal=1% quiet window on tree 451239537), so the cert set is the full enumerated set again and the timing
+  // suite RUNS in every producer run — the lifted state is pinned here so a re-quarantine is a deliberate,
+  // reviewed edit rather than a silent exclusion.
   assertEquals(filesFor([]), [...CERT_HEAVY_FILES]);
-  assertEquals(filesFor([]).includes("tests/ntp-boot-staging-timing.test.ts"), false);
+  assertEquals(filesFor([]).includes("tests/ntp-boot-staging-timing.test.ts"), true, "ksnsa lifted the quarantine: the timing suite is back in the cert set");
   assertEquals(filesFor(["tests/foo.test.ts", "--flag"]), ["tests/foo.test.ts"]);
   assertEquals(HEAVY_GATE_FILES.length, 21);
+  assertEquals(Object.keys(QUARANTINED_HEAVY_FILES).length, 0, "the live quarantine table is empty (ksnsa)");
   assertEquals(CERT_HEAVY_FILES.length, HEAVY_GATE_FILES.length - Object.keys(QUARANTINED_HEAVY_FILES).length);
   assertEquals(DEFAULT_HEAVY_GATE_TIMEOUT_MS, 3_600_000);
 });

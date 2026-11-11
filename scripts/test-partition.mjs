@@ -235,13 +235,13 @@ export const HEAVY_GATE_REASONS = {
 export const WALL_CLOCK_HEAVY_FILES = Object.freeze(["tests/ntp-boot-staging-timing.test.ts"]);
 
 /**
- * Suites temporarily QUARANTINED out of the heavy CERT set (chrome-agent-platform-8tgnt, coord 2026-10-25).
+ * Suites temporarily QUARANTINED out of the heavy CERT set (mechanism: chrome-agent-platform-8tgnt, coord 2026-10-25).
  *
  * WHY THIS EXISTS AT ALL, and why it is a declaration in CODE rather than a flag: on 2026-10-24 the zero-long-task
  * budget in tests/ntp-boot-staging-timing.test.ts could not be met on a box the test's own quiet-window guard
  * called quiet (median 3 long tasks at load/core 0.14, wall-clock tasks 77-208ms, sampled steal 24.5%), so EVERY
  * producer run recorded `result: fail` and `scripts/gate-receipt.mjs` refused every tree — which stopped landings
- * for the whole fleet, not just for one bead. Quarantining the file restores shipping WITHOUT weakening a budget:
+ * for the whole fleet, not just for one bead. Quarantining a file restores shipping WITHOUT weakening a budget:
  * nothing here certifies the quarantined suite, it is removed from `covered` and must be NAMED as quarantined with
  * its reason and bead, so nobody can read a receipt as evidence that it ran.
  *
@@ -249,24 +249,23 @@ export const WALL_CLOCK_HEAVY_FILES = Object.freeze(["tests/ntp-boot-staging-tim
  * declares, and `checkHeavyReceipt()` refuses a receipt that omits a declared quarantine row (the exclusion must be
  * named) as well as one that invents a row for a file this table does not name.
  *
- * EXPIRY IS A CONDITION, NOT A DATE: each entry names the bead whose result ends the quarantine. The measurement
- * that lifts it is chrome-agent-platform-ksnsa (per-task CPU time over the same boot phases, discriminating real
- * jank from tenant steal). If CPU time is SMALL, the wall-clock budget is the thing that is wrong and the
- * remediation is chrome-agent-platform-63o3v (budget/steal model) before the suite rejoins the cert set; if CPU
- * time is GENUINELY large in stage1-composer, fbg7i reopens as P1 with that evidence. Either way the entry is
- * deleted in the same commit that records ksnsa's result on 8tgnt.
+ * EXPIRY IS A CONDITION, NOT A DATE: each entry names the bead whose result ends the quarantine, and the entry is
+ * deleted in the same commit that records that result.
+ *
+ * THE TABLE IS CURRENTLY EMPTY. Its one entry (tests/ntp-boot-staging-timing.test.ts, 8tgnt, expiresWith ksnsa)
+ * was LIFTED on 2026-11-11 by chrome-agent-platform-ksnsa's exit criterion: after the steal dimension landed
+ * (r2l8n: the quiet-window governor refuses a stolen box, severe stalls inside steal-invalidated runs are excused,
+ * and the steal bound is injected — et2oh/pl6yz), a deliberate low-steal run of the suite on tree 451239537
+ * PASSED with 0 long tasks across 5 valid runs (quiet window acquired at load1=0.96, load/core=0.12, steal=1%;
+ * composerReadyMs 27.2/13.4/11.2/10.6/10.4; fleet-gate 'ksnsa-exit-run', exit 0). The per-task CPU-time
+ * discriminator behind that verdict is recorded on ksnsa (merger probe-cpu + perf-ntp probe v2): the earlier
+ * wall-clock jank was majority tenant steal, and at steal<6% the tree meets the zero-long-task budget — so the
+ * suite rejoins the CERT set and 63o3v's 'budget unmeetable' premise stays falsified for quiet hosts.
  */
-export const QUARANTINED_HEAVY_FILES = Object.freeze({
-  "tests/ntp-boot-staging-timing.test.ts": Object.freeze({
-    bead: "chrome-agent-platform-8tgnt",
-    reason:
-      "quarantined from the heavy CERT set: its zero-long-task budget failed on a guard-certified quiet window " +
-      "(median 3 long tasks, 77-208ms, load/core 0.14) while the same tree also REFUSED environmentally at ~49% steal, " +
-      "so neither classification is evidence about the product until per-task CPU time is measured (ksnsa); " +
-      "if CPU time proves small, the budget model is fixed by 63o3v before this suite rejoins the cert set",
-    expiresWith: "chrome-agent-platform-ksnsa",
-  }),
-});
+// The JSDoc shape is load-bearing: heavy-gate.ts consumes the entries under Deno's type check, and an
+// unannotated empty literal would infer `unknown` values (TS18046) the moment the last entry is lifted.
+/** @type {Readonly<Record<string, { bead: string, reason: string, expiresWith?: string }>>} */
+export const QUARANTINED_HEAVY_FILES = Object.freeze({});
 
 /** Files that must appear in a certifying receipt as `passed`. Everything else the tier owns is quarantined. */
 export const CERT_HEAVY_FILES = Object.freeze(
