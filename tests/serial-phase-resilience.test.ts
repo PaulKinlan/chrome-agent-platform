@@ -547,6 +547,7 @@ Deno.test("passes after late marker", () => {});
       readyFile,
       readyTimeoutMs: softMs,
       readyLoadPerCpu: 4, // deterministic injected reading, never manufacture system load
+      readySteal: 0, // cqxo3: pin the quiet box too, or ambient steal manufactures grace
       stdio: "pipe",
       cwd: ROOT,
     } as Parameters<typeof runSerialFile>[1]);
@@ -592,6 +593,7 @@ Deno.test("xy6n2 falsifier: the DERIVED late-marker window is still a BOUND — 
       readyFile,
       readyTimeoutMs: softMs,
       readyLoadPerCpu: 1, // idle: the derived number gets NO grace, so the derivation itself is the bound
+      readySteal: 0, // cqxo3: and no steal contention — an ambient stolen box would manufacture grace and rename the refusal
       stdio: ["ignore", "ignore", "pipe"],
       cwd: ROOT,
     } as Parameters<typeof runSerialFile>[1]);
@@ -611,6 +613,43 @@ Deno.test("xy6n2 falsifier: the DERIVED late-marker window is still a BOUND — 
       false,
       "the unmarked child never produces the marker",
     );
+  } finally {
+    await Deno.remove(tempDir, { recursive: true }).catch(() => {});
+  }
+});
+
+Deno.test("cqxo3: injected STEAL (quiet loadavg) drives the grace end-to-end through the real runner, and the receipt names it", async () => {
+  // The cqxo3 defect shape, driven for real: the box reads idle on loadavg
+  // (injected load 1) while steal deschedules the child's cold boot (injected
+  // 0.8, x4-capped). Pre-fix this child redded
+  // READY_MARKER_TIMEOUT_IDLE_NEVER_SETTLED — a strictly-product classification
+  // for environmental noise; post-fix the runner grants the named, bounded
+  // grace and the late marker survives.
+  const tempDir = await Deno.makeTempDir({ dir: durableDir("scratch"), prefix: "cap-steal-grace-" });
+  const readyFile = `${tempDir}/late.marker`;
+  const tempTest = `${tempDir}/late-ready.test.ts`;
+  const bootMs = await measureChildBootMs(tempDir);
+  const softMs = bootMs + 500;
+  const lateMarginMs = 1_500;
+  await Deno.writeTextFile(tempTest, `${selfReapWatchdog(`${tempTest}.runner`)}await new Promise((resolve) => setTimeout(resolve, ${softMs + lateMarginMs}));
+await Deno.writeTextFile(${JSON.stringify(readyFile)}, "ready");
+Deno.test("passes after late marker", () => {});
+`);
+  try {
+    const res = runSerialFile(tempTest, {
+      timeoutMs: 2_000,
+      readyFile,
+      readyTimeoutMs: softMs,
+      readyLoadPerCpu: 1, // idle on loadavg...
+      readySteal: 0.8, // ...but 80% stolen — grace must come from the STEAL signal (x4-capped, so the late margin always fits)
+      stdio: "pipe",
+      cwd: ROOT,
+    } as Parameters<typeof runSerialFile>[1]);
+    assertEquals(res.code, 0, `the stolen-box late marker must survive: ${res.stderr?.toString()}`);
+    assertEquals(res.timedOut, false);
+    const err = res.stderr?.toString() ?? "";
+    assert(err.includes("READY_MARKER_LOADED_GRACE"), `the grace is named: ${err}`);
+    assert(err.includes("steal=0.8"), `the receipt names the steal that earned it: ${err}`);
   } finally {
     await Deno.remove(tempDir, { recursive: true }).catch(() => {});
   }
