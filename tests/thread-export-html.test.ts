@@ -170,12 +170,58 @@ Deno.test("redactExportValue: canonical key-shape rule redacts nested credential
   assertEquals(out.servers[0].name, "ok");
 });
 
+// chrome-agent-platform-5b9mp: the export surface must never emit raw a key
+// whose value the SAME module harvests. collectProfileSecrets() gathers by the
+// WIDER CREDENTIAL_KEY_RE (cookie|pwd|passphrase|auth|vault|session|private
+// beyond the canonical SECRET_KEY_RE), but the export mask checked only the
+// canonical rule — so a tool result echoing {"set-cookie": "sid=abc123"}
+// shipped the value raw whenever it matched no bare-secret SHAPE. The export
+// mask now runs a differential rule with the canonical BOTH-side boundary
+// discipline (so author, mytoken, sessionTimeout, secretary still survive).
+Deno.test("redactExportValue: the export mask covers the keys its own harvest rule collects (5b9mp)", () => {
+  const payload = {
+    echoed: { "set-cookie": "sid=abc123" },
+    keys: {
+      cookie: "RAW-VALUE-1",
+      pwd: "RAW-VALUE-2",
+      passphrase: "RAW-VALUE-3",
+      auth: "RAW-VALUE-4",
+      vault: "RAW-VALUE-5",
+      private: "RAW-VALUE-6",
+      session: "RAW-VALUE-7",
+      client_secret: "RAW-VALUE-8",
+      refresh_token: "RAW-VALUE-9",
+    },
+    boundaries: {
+      author: "kinlan",          // auth+o: survives — canonical boundary discipline
+      mytoken: "abc",            // y+token: survives (qfu7k case)
+      sessionTimeout: 30,        // session+T: survives
+      secretary: "person",       // secret+r: survives
+      notasecret: "xyz",         // survives
+    },
+  };
+  const out = redactExportValue(payload, { knownSecrets: [] });
+  assertEquals(out.echoed["set-cookie"], "[REDACTED]", "a tool-echoed set-cookie key must be masked, not shipped raw");
+  for (const k of ["cookie", "pwd", "passphrase", "auth", "vault", "private", "session", "client_secret", "refresh_token"]) {
+    assertEquals(out.keys[k], "[REDACTED]", `harvest-rule key must be masked: ${k}`);
+  }
+  assertEquals(out.boundaries.author, "kinlan");
+  assertEquals(out.boundaries.mytoken, "abc");
+  assertEquals(out.boundaries.sessionTimeout, 30);
+  assertEquals(out.boundaries.secretary, "person");
+  assertEquals(out.boundaries.notasecret, "xyz");
+});
+
 Deno.test("redactExportValue: key-shape decisions match the canonical redactSecrets locator (qfu7k parity)", async () => {
   const { redactSecrets } = await import("../extension/lib/pure.js");
   // Drop-listed internal fields are excluded: the export sanitizer DROPS them
   // (stronger than redaction), so they legitimately differ in mechanism.
+  // chrome-agent-platform-5b9mp: equality is asserted ONLY for the CANONICAL
+  // key population — the export mask is deliberately WIDER (harvest-aligned:
+  // cookie/pwd/passphrase/auth/vault/session/private mask in exports while the
+  // canonical locator stays narrow), which the 5b9mp acceptance test pins.
   const keys = ["api_key", "apiKey", "token", "access_key", "accessKey", "bearer", "credential",
-    "secret", "password", "authorization", "mytoken", "notasecret", "session", "label", "apiKeyId"];
+    "secret", "password", "authorization", "mytoken", "notasecret", "label", "apiKeyId"];
   for (const key of keys) {
     const exportOut = redactExportValue({ [key]: "v" }, { knownSecrets: [] })[key];
     const canonicalOut = redactSecrets({ [key]: "v" })[key];
