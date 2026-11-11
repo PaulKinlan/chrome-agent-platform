@@ -39,15 +39,16 @@ function validateUrl(url) {
   if (u.username || u.password) {
     return { ok: false, error: "invalid_url", hint: "URLs with credentials are not allowed" };
   }
-  // ibdr4: the INV-5-sanctioned unscoped fallback shares the brokers' private-address deny
-  // list — the one site THREAT_MODEL allows to fetch outside the broker must not be the one
-  // unpolicied egress (loopback / RFC1918 / link-local incl. cloud metadata / localhost).
-  // The brokered route re-checks server-side (checkFetchTarget); refusing here means the
-  // fallback never ISSUES the request either. Fixed code + STATIC hint (7t2zv: interpolated
-  // parser-derived text in model-readable returns is the leak class).
-  if (isPrivateOrLoopbackHost(u.hostname)) {
-    return { ok: false, error: "private_host_refused", hint: "private, loopback and link-local destinations are not allowed" };
-  }
+  // sab0g: the private-address deny list belongs to the DIRECT-FALLBACK route ONLY (see
+  // runFetch below), not here. validateUrl gates BOTH routes, and the brokered route's
+  // authority is the service worker: cap:fetch applies checkFetchPolicy -> checkFetchTarget
+  // (fetch-policy.js), which refuses a private/loopback target with the code
+  // `forbidden_host` — the vocabulary pinned by tests/cap-fetch-deny.test.ts and by the
+  // sandbox-egress journey (tests/sandbox-egress-confinement.test.ts), whose whole point is
+  // that the sandbox's refusal ARRIVES FROM the host bridge round-trip. Pre-fixing here
+  // short-circuited that round-trip and answered `private_host_refused` instead, so the two
+  // routes disagreed on the code for the same destination. Nothing is loosened: the broker
+  // still refuses server-side, before it issues anything.
   // The verdict url is DISPATCH-only (runFetch sends it to the broker and
   // fetches it); it never reaches a model-readable return — the echoes are
   // stripped separately below.
@@ -100,6 +101,16 @@ export async function runFetch(payload, runId = null) {
   // the brokered route. Direct fetch is allowed strictly in unscoped contexts (runId == null).
   if (runId != null) {
     return { ok: false, error: "fetch failed: brokered service worker route unavailable for run" };
+  }
+  // ibdr4 (scoped by sab0g): the INV-5-sanctioned unscoped fallback shares the brokers'
+  // private-address deny list — the one site THREAT_MODEL allows to fetch outside the broker
+  // must not be the one unpolicied egress (loopback / RFC1918 / link-local incl. cloud
+  // metadata / localhost). This is the FALLBACK's predicate: the brokered route above never
+  // reaches it, because the service worker already pays the same shared predicate
+  // (checkFetchTarget) and owns that route's refusal vocabulary. Fixed code + STATIC hint
+  // (7t2zv: interpolated parser-derived text in model-readable returns is the leak class).
+  if (isPrivateOrLoopbackHost(new URL(v.url).hostname)) {
+    return { ok: false, error: "private_host_refused", hint: "private, loopback and link-local destinations are not allowed" };
   }
   let res;
   try {

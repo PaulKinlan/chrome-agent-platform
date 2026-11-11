@@ -136,8 +136,11 @@ Deno.test("script host ibdr4: the unscoped direct-fetch fallback refuses private
   // http://127.0.0.1:*, http://169.254.169.254/ or any intranet host and the request WAS issued
   // (nightly run-20261107; the store booked the row fixed without a fix). The deny list is the
   // shared one — fetch-policy.js#isPrivateOrLoopbackHost, the same predicate every broker pays.
-  // MUTANT: delete the isPrivateOrLoopbackHost branch in validateUrl and this pin REDs — the
-  // loopback/metadata calls return ok:true with the recording fetch invoked.
+  // MUTANT: delete the isPrivateOrLoopbackHost refusal in runFetch's DIRECT-FALLBACK branch and
+  // this pin REDs — the loopback/metadata calls return ok:true with the recording fetch invoked.
+  // (sab0g: the predicate lives on the fallback branch, NOT in validateUrl; validateUrl gates
+  // both routes, so refusing there short-circuited the BROKERED route's own refusal vocabulary
+  // — see the sab0g pin below.)
   const { runFetch } = await import("../extension/lib/script-host.js");
   const origChrome = globalThis.chrome;
   const origFetch = globalThis.fetch;
@@ -175,6 +178,51 @@ Deno.test("script host ibdr4: the unscoped direct-fetch fallback refuses private
     const scoped = await runFetch({ url: "https://example.com/api" }, "registered-run-123");
     assertEquals(scoped.ok, false);
     assertEquals(fetchCalled, false);
+  } finally {
+    globalThis.chrome = origChrome;
+    globalThis.fetch = origFetch;
+  }
+});
+
+Deno.test("script host sab0g: the BROKERED route keeps the service worker as the private-address authority", async () => {
+  // The sandbox-egress journey (tests/sandbox-egress-confinement.test.ts) proves the sandbox's
+  // fetch refusal ARRIVES FROM the host-bridge round-trip by pinning the code the service worker
+  // returns: `forbidden_host` (cap:fetch -> checkFetchPolicy -> checkFetchTarget, the vocabulary
+  // tests/cap-fetch-deny.test.ts:180 pins too). ibdr4's fallback predicate first landed in
+  // validateUrl, which gates BOTH routes, so the brokered route was pre-refused as
+  // `private_host_refused` and never reached the broker — a contract divergence the sandbox
+  // journey caught as MAIN RED (chrome-agent-platform-sab0g).
+  // MUTANT: move the isPrivateOrLoopbackHost check back into validateUrl and this pin REDs — the
+  // broker never sees the URL, so the surfaced code is `private_host_refused`, not the broker's.
+  const { runFetch } = await import("../extension/lib/script-host.js");
+  const origChrome = globalThis.chrome;
+  const origFetch = globalThis.fetch;
+  const brokerCalls = [];
+  let fetchedDirectly = false;
+  try {
+    globalThis.chrome = {
+      runtime: {
+        sendMessage: async (msg) => {
+          brokerCalls.push(msg);
+          // What the real cap:fetch handler answers for a loopback target (service-worker.js:
+          // SCRIPT_FETCH_ERROR_HINTS.forbidden_host), i.e. the broker's own refusal.
+          return { ok: false, error: "forbidden_host", hint: "That host is private, loopback or link-local; script fetches may only reach public approved hosts." };
+        },
+      },
+    };
+    globalThis.fetch = async () => {
+      fetchedDirectly = true;
+      return new Response("ok", { status: 200 });
+    };
+
+    const res = await runFetch({ url: "http://127.0.0.1:9/secret" }, "run-sab0g");
+    assertEquals(brokerCalls.length, 1, "the brokered route must DISPATCH to the service worker broker");
+    assertEquals(brokerCalls[0].type, "cap:fetch");
+    assertEquals(brokerCalls[0].url, "http://127.0.0.1:9/secret");
+    assertEquals(brokerCalls[0].runId, "run-sab0g");
+    assertEquals(res.ok, false);
+    assertEquals(res.error, "forbidden_host", "the service worker's code contract is what surfaces, not a host-side one");
+    assertEquals(fetchedDirectly, false, "the host must never fetch on its own for a brokered, run-scoped call");
   } finally {
     globalThis.chrome = origChrome;
     globalThis.fetch = origFetch;
