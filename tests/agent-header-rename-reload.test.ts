@@ -19,7 +19,7 @@ import { fileURLToPath } from "node:url";
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { launchChrome, waitForServiceWorker, resolveChromiumBinaryReport, teardownChrome } from "../scripts/lib/chrome-launch.ts";
 import { chromeProfileDir } from "../scripts/lib/chrome-profile-dir.ts";
-import { currentLoadPerCpu, serialFileTimeoutMs } from "../scripts/lib/serial-phase.mjs";
+import { currentLoadPerCpu, currentStealFractionSync, serialFileTimeoutMs } from "../scripts/lib/serial-phase.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url)).replace(/\/$/, "");
 const EXT = `${ROOT}/extension`;
@@ -84,7 +84,9 @@ async function waitForObservable(
 
 // The bound for one observable above. The base is the delay these polls
 // replaced, so an idle box waits exactly as long as before.
-const settleBoundMs = () => serialFileTimeoutMs({ base: 15000, loadPerCpu: currentLoadPerCpu() });
+// cqxo3: loadavg alone is blind to hypervisor steal, so the bound keys on
+// the measured steal fraction too (same max-not-product scale, same ceiling).
+const settleBoundMs = () => serialFileTimeoutMs({ base: 15000, loadPerCpu: currentLoadPerCpu(), steal: currentStealFractionSync() });
 
 // Page.navigate resolves before the new document exists, so a poll started right
 // after it can still read the OLD document (ntp.html is up in both). A
