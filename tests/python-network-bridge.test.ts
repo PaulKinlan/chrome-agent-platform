@@ -690,9 +690,12 @@ Deno.test("lrhyl SW source pin: the python.fetch echo strips, the failure return
 import { PYTHON_FETCH_ERROR_CODES } from "../extension/lib/python-network.js";
 
 /** The round-7 contract scan: EVERY string in a record (including inside
- * arrays) is either a fixed enum member or a validated http(s) origin /
- * origin+path in normal form - so the NEXT field someone adds cannot be
- * arbitrary text by accident. */
+ * arrays and nested plain objects — 00ryq) is either a fixed enum member or a
+ * validated http(s) origin / origin+path in normal form - so the NEXT field
+ * someone adds cannot be arbitrary text by accident. Nesting is bounded by the
+ * marshal's own depth cap (8, python-network.js marshalModelReadable); cyclic
+ * and non-plain-object values are refused loudly, never skipped unscanned —
+ * a check that cannot fail is a false green. */
 function assertRecordStringsBounded(rec: Record<string, any>, where: string) {
   const enums = new Set<string>(["GET", "HEAD", "POST", "INVALID", "aborted", ...PYTHON_FETCH_ERROR_CODES]);
   const check = (v: string, path: string) => {
@@ -709,16 +712,43 @@ function assertRecordStringsBounded(rec: Record<string, any>, where: string) {
     if (u.search || u.hash || u.username || u.password) {
       throw new Error(`${where}${path}: credential location survived in a record string: ${JSON.stringify(v)}`);
     }
-    const isOriginField = path === ".origin";
+    // 00ryq: an origin field means the same thing at ANY nesting depth — the
+    // normal-form exception follows the field name, not just the top level.
+    const isOriginField = path === ".origin" || path.endsWith(".origin");
     const normal = isOriginField ? u.origin : `${u.origin}${u.pathname}`;
     if (v !== normal) {
       throw new Error(`${where}${path}: string is not in normal ${isOriginField ? "origin" : "origin+path"} form: ${JSON.stringify(v)}`);
     }
   };
-  for (const [k, v] of Object.entries(rec)) {
-    if (typeof v === "string") check(v, `.${k}`);
-    else if (Array.isArray(v)) v.forEach((item, i) => { if (typeof item === "string") check(item, `.${k}[${i}]`); });
-  }
+  const scanValue = (v: unknown, path: string, depth: number, seen: Set<unknown>): void => {
+    if (typeof v === "string") {
+      check(v, path);
+      return;
+    }
+    if (v === null || typeof v === "number" || typeof v === "boolean") return;
+    if (depth > 8) {
+      throw new Error(`${where}${path}: record nesting exceeds the marshal's depth cap — not part of the closed record shape`);
+    }
+    if (seen.has(v)) {
+      throw new Error(`${where}${path}: cyclic record value — not part of the closed record shape`);
+    }
+    if (Array.isArray(v)) {
+      seen.add(v);
+      v.forEach((item, i) => scanValue(item, `${path}[${i}]`, depth + 1, seen));
+      seen.delete(v);
+      return;
+    }
+    if (typeof v === "object" && Object.getPrototypeOf(v) === Object.prototype) {
+      seen.add(v);
+      for (const [k2, v2] of Object.entries(v as Record<string, unknown>)) {
+        scanValue(v2, `${path}.${k2}`, depth + 1, seen);
+      }
+      seen.delete(v);
+      return;
+    }
+    throw new Error(`${where}${path}: non-plain-object record value is not part of the closed record shape`);
+  };
+  for (const [k, v] of Object.entries(rec)) scanValue(v, `.${k}`, 0, new Set());
 }
 
 Deno.test("lrhyl r7: a secret-shaped token in vaultKeyId or refusedHeaders survives NOTHING - not take(), not any model-facing surface", () => {
@@ -905,4 +935,72 @@ Deno.test("6cwaa: the worker error path classifies by CODE and composes the mess
   // the r6 structured fields reach the program: refusals stay teachable
   assert(worker.includes('payload.get("hint")'), "the STATIC hint reaches the Python program (how to grant, what to change)");
   assert(worker.includes('payload.get("origin")'), "the sanitised origin reaches the Python program (which origin was refused)");
+});
+
+Deno.test("00ryq: the r7 contract scan sees NESTED record values — a future object-typed field cannot carry free text past it", () => {
+  // The r7 closed-shape argument holds only while every record string is
+  // enum-or-normalised-URL. Today every RECORD_FIELD is scalar, so the gap is
+  // the NEXT field: projectRecord copies contract fields verbatim before
+  // type-bounding, so a nested free-text field would ride the marshal's
+  // verbatim branch with the top-level-only scan green (a check that cannot
+  // fail is a false green). The scan now recurses plain objects and arrays
+  // (mirroring marshalModelReadable's depth cap) and refuses anything outside
+  // the closed shape's type vocabulary, so the failure mode is a loud one.
+  const assertThrowsWith = (fn: () => void, needle: string) => {
+    let error: Error | null = null;
+    try {
+      fn();
+    } catch (e) {
+      error = e as Error;
+    }
+    assert(error, "the scan must refuse — it passed a record it cannot see into");
+    assert(
+      error.message.includes(needle),
+      `refusal must name the nested path (${needle}); got: ${error.message}`,
+    );
+  };
+
+  // Nested free text: the bead's exact future-field shape.
+  assertThrowsWith(
+    () => assertRecordStringsBounded({ label: { note: "secret XYZ" } } as Record<string, any>, "rec"),
+    "rec.label.note",
+  );
+  // Arrays of objects: the second shape the top-level loop dropped silently.
+  assertThrowsWith(
+    () => assertRecordStringsBounded({ attempts: [{ u: "not a url" }] } as Record<string, any>, "rec"),
+    "rec.attempts[0].u",
+  );
+  // Exotic (non-plain-object) values are not part of the closed shape's
+  // vocabulary — refused loudly, never skipped unscanned.
+  assertThrowsWith(
+    () => assertRecordStringsBounded({ when: new Date(0) } as Record<string, any>, "rec"),
+    "not part of the closed record shape",
+  );
+  // Nesting beyond the marshal's own depth cap is refused, not walked.
+  const deep: Record<string, any> = { v: "https://h/p" };
+  for (let i = 0; i < 10; i++) deepWrap();
+  function deepWrap() {
+    const inner: Record<string, any> = { wrap: structuredClone(deep) };
+    Object.assign(deep, inner);
+  }
+  assertThrowsWith(() => assertRecordStringsBounded(deep, "rec"), "depth");
+  // A cyclic value is refused, not walked to death.
+  const cyclic: Record<string, any> = { ok: true };
+  cyclic.self = cyclic;
+  assertThrowsWith(() => assertRecordStringsBounded(cyclic as Record<string, any>, "rec"), "cyclic");
+  // Benign constrained nesting still passes: bounded strings are checked and
+  // clean; scalars stay scalars.
+  assertRecordStringsBounded({
+    method: "GET",
+    origin: "https://h",
+    url: "https://h/p",
+    ms: 3,
+    ok: false,
+    meta: { origin: "https://h", flags: [true, 2], urls: ["https://h/a", "https://h/b"] },
+  } as Record<string, any>, "rec");
+  // Regression anchor: the scalar shapes the scan already refused keep refusing.
+  assertThrowsWith(
+    () => assertRecordStringsBounded({ label: "secret XYZ" } as Record<string, any>, "rec"),
+    "rec.label",
+  );
 });
