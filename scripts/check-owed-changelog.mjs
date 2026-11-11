@@ -212,6 +212,38 @@ function isShallowRepo(repo, run = git) {
   }
 }
 
+/** The parent SHAs recorded in a commit OBJECT's own metadata.
+ *
+ *  WHY IT IS NEEDED (chrome-agent-platform-n9z5n, 2026-11-11): a shallow clone diffs
+ *  its boundary commit as a ROOT, so `git log -S` reports that boundary as the
+ *  introducer of any heading its tree contains — even one an unfetched ancestor
+ *  added — and the ledger then prints "clean (0 owed)" about a history it cannot
+ *  see. The commit object keeps its `parent` header even when the parent OBJECT was
+ *  not fetched, so "names parents it cannot resolve" is exactly "this commit is the
+ *  truncation boundary", while a genuine history root names no parent at all and
+ *  stays a legitimate anchor (fixture repos, a repo whose first commit is its
+ *  release). */
+export function commitParents(repo, sha, run = git) {
+  const header = run(repo, ["cat-file", "-p", sha]).split("\n\n", 1)[0];
+  return header
+    .split("\n")
+    .filter((line) => line.startsWith("parent "))
+    .map((line) => line.slice("parent ".length).trim())
+    .filter((line) => line !== "");
+}
+
+/** Is this commit object present in the clone? (`cat-file -e` exits non-zero when
+ *  the object was never fetched — no output to parse, so the exit code IS the
+ *  answer.) */
+function commitObjectExists(repo, sha, run = git) {
+  try {
+    run(repo, ["cat-file", "-e", `${sha}^{commit}`]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // Every surface where this repo declares its version — the release-identity
 // rule: a release carries the version in every file it appears in, and
 // bump-version.mjs keeps all of these in lockstep. extension/manifest.json is
@@ -304,6 +336,25 @@ export function deriveLedger({ repo, run = git }) {
         ? `; this is a SHALLOW clone, so the commit may simply not be fetched (git fetch --unshallow)`
         : ``) +
       `; the ledger fails closed rather than guess`,
+    );
+  }
+
+  // chrome-agent-platform-n9z5n: an anchor whose OWN parent is missing from this clone
+  // is a truncation boundary, not an introducer. The ledger's whole contract is that it
+  // fails closed rather than guess, and "0 owed" is the most expensive thing it can
+  // guess wrong — it is the false pass that hides an owed release. A true history root
+  // names no parent and is still accepted; only "names a parent it cannot resolve" is
+  // refused, which is precisely the boundary a shallow clone diffs as a root.
+  const missingParent = commitParents(repo, anchor, run).find((p) => !commitObjectExists(repo, p, run));
+  if (missingParent) {
+    throw new Error(
+      `the newest heading "## [${newest.version}]" resolves to ${anchor.slice(0, 12)}, whose ` +
+      `parent ${missingParent.slice(0, 12)} is not in this clone — a truncated history is ` +
+      `diffed as a ROOT at its boundary, so the boundary commit is reported as the ` +
+      `introducer of a heading that may be far older` +
+      (isShallowRepo(repo, run) ? ` (this is a SHALLOW clone)` : ``) +
+      `; the ledger fails closed rather than print a clean ledger for history it cannot see — ` +
+      `fetch the full history (git fetch --unshallow) and re-run`,
     );
   }
 

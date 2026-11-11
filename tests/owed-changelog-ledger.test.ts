@@ -376,6 +376,69 @@ Deno.test("ledger: a version heading inside a fenced code block does not satisfy
   await cleanupFixtures();
 });
 
+function runCliIn(dir: string) {
+  const p = new Deno.Command("node", {
+    args: [script, "--repo", dir],
+    stdout: "piped" as const,
+    stderr: "piped" as const,
+  }).outputSync();
+  return { code: p.code, out: new TextDecoder().decode(p.stdout), err: new TextDecoder().decode(p.stderr) };
+}
+
+Deno.test("ledger: a SHALLOW clone fails closed instead of passing a history it never fetched", async () => {
+  const repo = await mkLedgerRepo("shallow");
+  // The newest heading arrives in history the shallow clone below will NOT fetch...
+  Deno.writeTextFileSync(
+    `${repo.dir}/CHANGELOG.md`,
+    "# Changelog\n\n## [1.1.0] — 2026-10-06\n- next\n\n## [1.0.0] — 2026-10-05\n- first\n",
+  );
+  repo.writeSurfaces("1.1.0");
+  repo.commit("release 1.1.0");
+  // ...and a product change that IS owed lands on top of it.
+  Deno.writeTextFileSync(`${repo.dir}/extension/lib/product.js`, "export const shipped = 1;\n");
+  repo.commit("feat: ships product code with no release entry");
+
+  // Control, full history: one owed commit, gate red.
+  assertEquals(deriveLedger({ repo: repo.dir }).owed.length, 1, "full history owes the product commit");
+  assertEquals(repo.runCli().code, 1, "and the full-history gate reds on it");
+
+  // The depth-1 clone contains BOTH the heading and the product commit, and git
+  // diffs its boundary commit as a ROOT — so the pickaxe names that boundary as the
+  // heading's introducer and the pre-n9z5n ledger anchored there and printed
+  // "clean (0 owed)": a clean ledger for history it never fetched. It must fail
+  // closed instead, and say which clone shape it refuses.
+  const clone = await Deno.makeTempDir({ prefix: "ledger-shallow-clone-" });
+  fixtures.push(clone);
+  const cloned = spawnSync("git", ["clone", "-q", "--depth", "1", `file://${repo.dir}`, clone], { encoding: "utf8" });
+  assertEquals(cloned.status, 0, `shallow clone failed: ${cloned.stderr}`);
+  assertEquals(
+    gitOut(clone, ["rev-parse", "--is-shallow-repository"]).trim(),
+    "true",
+    "the fixture clone really is shallow — otherwise this case proves nothing",
+  );
+
+  let threw: Error | null = null;
+  try {
+    deriveLedger({ repo: clone });
+  } catch (err) {
+    threw = err as Error;
+  }
+  assert(threw !== null, "a shallow clone must fail closed, never report a clean ledger");
+  assert(
+    threw!.message.includes("parent") && threw!.message.includes("SHALLOW clone"),
+    `the refusal must name the truncation and the clone shape, got: ${threw!.message}`,
+  );
+
+  const cli = runCliIn(clone);
+  assertEquals(cli.code, 1, `the gate must exit 1 on a shallow clone (stderr: ${cli.err})`);
+  assert(cli.err.includes("OWED-CHANGELOG FAIL"), `the failure is the ledger leg, got: ${cli.err}`);
+  assert(
+    !cli.err.includes("changelog ledger: clean"),
+    "the shallow clone must never print the clean tally",
+  );
+  await cleanupFixtures();
+});
+
 function isLandedHead(repo: string) {
   const main = spawnSync("git", ["rev-parse", "--verify", "origin/main"], { cwd: repo, encoding: "utf8" });
   assertEquals(main.status, 0, main.stderr);
