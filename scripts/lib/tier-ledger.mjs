@@ -127,7 +127,18 @@ export function tierEntry({ id, files = [], record = null, sha = null, now = Dat
     return { ...base, status: "failed", last_sha: lastSha, last_result: result, age_h: ageH, line: `${id}: ran at this sha (${result}${ageH === null ? "" : `, ${ageH}h ago`}) — this is a RED, not a gap` };
   }
   if (!record) {
-    return { ...base, status: "never-run", last_sha: null, last_result: null, age_h: null, line: `${id}: NOT RUN at this sha (never run — no run has ever recorded a result for these ${files.length} ${label})` };
+    // "no sweep has reported HERE" is the true statement: the record lives in the VM's durable evidence
+    // dir (cap-evidence), which every worktree on this VM shares and no other VM sees. Saying a flat
+    // "never run" would be a claim about the project's whole history that this store cannot support —
+    // the same class of over-claim as reading an absent changelog ledger as a pass.
+    return {
+      ...base,
+      status: "never-run",
+      last_sha: null,
+      last_result: null,
+      age_h: null,
+      line: `${id}: NOT RUN at this sha (never run on this VM — no sweep has reported a result for these ${files.length} ${label}; the record lives in cap-evidence/heavy-receipts/tiers)`,
+    };
   }
   const when = ageH === null ? "at an unrecorded time" : `${ageH}h ago`;
   const stale = result === "PASS" ? `last green ${shortSha} ${when}` : `last run ${shortSha} ${String(result ?? "UNKNOWN")} ${when}`;

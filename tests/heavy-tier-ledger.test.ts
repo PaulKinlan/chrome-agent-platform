@@ -184,7 +184,8 @@ Deno.test("1lvay (d): a never-run population is STATED as never-run, never silen
   const kat = ledger.entries.find((e: {id: string}) => e.id === "kat-harnesses")!;
   assertEquals(kat.status, "never-run");
   assertStringIncludes(kat.line, "NOT RUN at this sha");
-  assertStringIncludes(kat.line, "never run");
+  assertStringIncludes(kat.line, "never run on this VM");
+  assertStringIncludes(kat.line, "cap-evidence/heavy-receipts/tiers", "the line must say WHERE the record lives, or a reader cannot tell a fresh VM from a fresh project");
   assertStringIncludes(kat.line, "2 kat/named browser harnesses");
   // The defect was SILENCE: every population must have a line even when it has no record at all.
   assertEquals(ledger.lines.length, TIER_IDS.length);
