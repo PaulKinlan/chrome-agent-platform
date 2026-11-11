@@ -423,6 +423,10 @@ const ALLOWED_FILES = new Set([
   "tests/owed-changelog-ledger.test.ts",
   "tests/provider-gate.test.ts",
   "tests/quiet-window.test.ts",
+  // 2h4j7: throwaway git fixture repos for the release-note pre-flight CLI
+  // drill, created under mkdtemp and removed in the same test — fixtures, not
+  // evidence (same class as the owed-changelog ledger's fixtures).
+  "tests/release-note-preflight.test.ts",
   "tests/scan-shipped.test.ts",
   "tests/security-suite-custody.test.ts",
   "tests/store-target-policy.test.ts",
