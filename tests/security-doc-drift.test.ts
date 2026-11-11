@@ -200,6 +200,9 @@ function assertLiveRouteCitations(model: string, pure: string, worker: string,
     ["extension/lib/pure-webmcp.js", read("extension/lib/pure-webmcp.js")],
     ["extension/lib/pure-trust.js", read("extension/lib/pure-trust.js")],
     ["extension/lib/pure-redact.js", read("extension/lib/pure-redact.js")],
+    // gzkmx: SECRET_KEY_RE/BARE_SECRET_SHAPES moved to the shapes module; the
+    // citation follows the move and the new file is registered fail-closed.
+    ["extension/lib/pure-secret-shapes.js", read("extension/lib/pure-secret-shapes.js")],
     ["extension/background/service-worker.js", worker],
     ["extension/background/routes/hooks.js", hooks],
     ["extension/lib/fetch-policy.js", read("extension/lib/fetch-policy.js")],
@@ -286,7 +289,7 @@ function assertLiveRouteCitations(model: string, pure: string, worker: string,
   const authSession = ["extension/background/routes/auth.js", "requireSettingsSession"];
   const authSurface = ["extension/background/routes/auth.js", "requireSettingsSurface"];
   const destructiveActions = ["extension/lib/owner-approval.js", "DESTRUCTIVE_ACTIONS"];
-  const secretKeyRe = ["extension/lib/pure-redact.js", "SECRET_KEY_RE"];
+  const secretKeyRe = ["extension/lib/pure-secret-shapes.js", "SECRET_KEY_RE"]; // gzkmx: moved to the shapes module
   const redactSecrets = ["extension/lib/pure-redact.js", "redactSecrets"];
   const mintToken = ["extension/lib/untrusted-fence.js", "mintUntrustedToken"];
   const wrapUntrusted = ["extension/lib/untrusted-fence.js", "wrapUntrustedContent"];

@@ -1,7 +1,25 @@
 // lib/pure-text.js — the text seam (UTF-8 byte maths, surrogate safety, truncation,
 // escaping, ids, sleep, relative time). Extracted from lib/pure.js by
 // chrome-agent-platform-ux4ud; pure.js re-exports all of it.
-import { sha256Hex } from "./pure-hash.js";
+
+// Re-exported unchanged: the id mint lives in pure-id-hash.js
+// (chrome-agent-platform-gzkmx hash half) so a fat importer (memory) depends
+// on the narrow module, not this text seam. Barrel surface unchanged.
+/** A unique id: `${prefix}_${hex}` (or the bare hex with no prefix), where
+ * hex is a v4 UUID with its hyphens stripped — 32 lowercase `[0-9a-f]`. Every
+ * store-facing id (threads, tasks, screenshots, assets, scripts, board jobs,
+ * grants, lock tokens) mints here, and the charset is the STRICTEST any
+ * consumer in the tree validates: the screenshot-id extractor reads
+ * `shot_[A-Za-z0-9_]{1,64}` out of truncated text (a hyphen would cut the id
+ * short), thread ids are `[A-Za-z0-9_-]{1,200}`. The Date/Math fallback exists
+ * ONLY for a realm without crypto.randomUUID and is the one place that pattern
+ * is allowed to live. */
+export function newId(prefix = "") {
+  const hex = typeof globalThis.crypto?.randomUUID === "function"
+    ? globalThis.crypto.randomUUID().replaceAll("-", "")
+    : `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}${Math.random().toString(36).slice(2, 10)}`;
+  return prefix ? `${prefix}_${hex}` : hex;
+}
 
 /** The UTF-8 BYTE length of a string (JS `.length` counts UTF-16 code units —
  * wrong for any non-ASCII text). */
@@ -79,21 +97,6 @@ export function timeAgo(ts) {
   return `${Math.floor(h / 24)}d ago`;
 }
 
-/** A unique id: `${prefix}_${hex}` (or the bare hex with no prefix), where
- * hex is a v4 UUID with its hyphens stripped — 32 lowercase `[0-9a-f]`. Every
- * store-facing id (threads, tasks, screenshots, assets, scripts, board jobs,
- * grants, lock tokens) mints here, and the charset is the STRICTEST any
- * consumer in the tree validates: the screenshot-id extractor reads
- * `shot_[A-Za-z0-9_]{1,64}` out of truncated text (a hyphen would cut the id
- * short), thread ids are `[A-Za-z0-9_-]{1,200}`. The Date/Math fallback exists
- * ONLY for a realm without crypto.randomUUID and is the one place that pattern
- * is allowed to live. */
-export function newId(prefix = "") {
-  const hex = typeof globalThis.crypto?.randomUUID === "function"
-    ? globalThis.crypto.randomUUID().replaceAll("-", "")
-    : `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}${Math.random().toString(36).slice(2, 10)}`;
-  return prefix ? `${prefix}_${hex}` : hex;
-}
 
 /** Resolve after `ms` milliseconds. */
 export function sleep(ms) {

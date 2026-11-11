@@ -1,6 +1,16 @@
 // lib/pure-hash.js — the hashing/ids seam (FNV-1a, SHA-256, HMAC, tool-name sanitising)
 // extracted from lib/pure.js by chrome-agent-platform-ux4ud. pure.js re-exports all of it.
 
+/** FNV-1a 32-bit (pure, deterministic, dependency-free). */
+export function fnv1a(input) {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < input.length; i++) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash >>> 0;
+}
+
 /**
  * Build a collision-resistant, bounded AI-SDK tool id from an origin + name.
  * Uses a 64-bit FNV-1a (two independent 32-bit rounds) so distinct
@@ -13,15 +23,6 @@ export function sanitizeToolName(origin, name) {
   return `site_${h}_${safe}`.slice(0, 64);
 }
 
-/** FNV-1a 32-bit (pure, deterministic, dependency-free). */
-export function fnv1a(input) {
-  let hash = 0x811c9dc5;
-  for (let i = 0; i < input.length; i++) {
-    hash ^= input.charCodeAt(i);
-    hash = Math.imul(hash, 0x01000193) >>> 0;
-  }
-  return hash >>> 0;
-}
 
 /** FNV-1a 64-bit: two independent 32-bit FNV rounds, hex-encoded (16 chars).
  * NON-cryptographic — fine for tool-name disambiguation, NEVER for security
