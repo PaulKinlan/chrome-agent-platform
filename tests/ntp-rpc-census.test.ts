@@ -3,7 +3,14 @@
 // Asserts that:
 // 1. Fresh ntp.html boot fires <= 22 RPCs (lowered from 24 in zdaj: coalesced all 4 duplicate routes, down from 54).
 // 2. Idle window fires <= 2 RPCs (down from 11).
-// 3. Opening a thread fires <= 4 RPCs (down from 14–21).
+// 3. A click on a thread row DISPATCHES EXACTLY ONE thread.get inside its dispatch burst.
+//
+// 8ijxu SCOPE — NARROWED ON PURPOSE (coord, three review rounds): item 3 is the claim the causal
+// boundary can actually observe. It counts the calls the click handler dispatches in its own task
+// plus microtask drain, and NOTHING ELSE. In particular an open RETRIED after an MV3 service-worker
+// restart (openThread's 400 ms second thread.get) ISSUES A CALL THIS TEST DOES NOT COUNT — that path
+// is covered by NOTHING today and is tracked as chrome-agent-platform-q5stl. Do not widen this claim
+// back into 'thread open fires <= N RPCs': the wider claim is what three reviews rejected.
 
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { launchChrome, openCdp, waitForServiceWorker, computeUnpackedExtensionId, resolveChromiumBinaryReport, teardownChrome } from "../scripts/lib/chrome-launch.ts";
@@ -76,7 +83,7 @@ function census(log: any[]) {
 }
 
 Deno.test({
-  name: "ntp-rpc-census: cold boot <= 22 RPCs, idle <= 2 RPCs, thread open <= 4 RPCs",
+  name: "ntp-rpc-census: cold boot <= 22 RPCs, idle <= 2 RPCs, and a thread-row click dispatches exactly ONE thread.get in its burst",
   sanitizeOps: false,
   sanitizeResources: false,
   fn: async () => {
@@ -196,6 +203,12 @@ Deno.test({
           };
         }
 
+        // OUT OF SCOPE FOR THIS TEST, EXPLICITLY: a thread open whose first read loses the race with
+        // an MV3 service-worker boot issues a SECOND thread.get 400 ms later (openThread's retry). That
+        // call follows an await + a sleep, so it sits outside this burst and is NOT counted here. No
+        // other test counts it either — the retry path is unobserved, tracked as
+        // chrome-agent-platform-q5stl — and that hole is exactly why this test claims ONE dispatch in
+        // the burst rather than a budget over the whole open.
         // THE CAUSAL WINDOW. The shim tags a call when C.burst is true; the flag is set immediately
         // before the click and cleared after the click's dispatch has run through its microtasks, so a
         // call issued by the click handler (or by the promise chain it starts in the same task) is
@@ -216,25 +229,39 @@ Deno.test({
           list: burst.map(r => r.type),
           opened,
           // The whole page's RPC traffic, reported for context only — it is NOT asserted on, because
-          // it contains hydration and polling that the coalescing budget was never about.
+          // it contains hydration and polling that this claim was never about.
           ambient: window.__rpc.log.length,
+          // FAIL-CLOSED WITNESSES (8ijxu r4, coord): an empty burst must be an ERROR, never a pass with
+          // zero samples. 'tagged === samples' proves the shim actually wrote the burst tag on every row
+          // it recorded — a shim that never read the flag would leave tagged at 0 for ever and every run
+          // would then 'pass' by observing nothing. 'flagReadable' proves the flag was set and read back.
+          samples: window.__rpc.log.length,
+          tagged: window.__rpc.log.filter(r => Object.prototype.hasOwnProperty.call(r, 'burst')).length,
+          flagReadable: window.__rpc.burst === false,
         };
       })()`);
 
       assert(!openResult.err, openResult.err);
-      // Print the measured burst so consecutive runs are COMPARABLE by eye in CI logs (the reviewer's
-      // flake was invisible: two runs disagreed and neither log said what it had counted).
-      console.log(`thread-open burst (${openResult.rpcs}): ${JSON.stringify(openResult.list)} · ambient page traffic: ${openResult.ambient}`);
-      // The view must actually open: a click that dispatched nothing because the handler never ran is
-      // not evidence of coalescing, and a burst of ZERO is reported as the failure it is rather than
-      // as a suspiciously good number.
-      assert(openResult.opened !== false, "the thread view must become visible after the click");
-      assert(openResult.rpcs >= 1, `the click must dispatch at least one RPC (got ${openResult.rpcs}; ambient page traffic was ${openResult.ambient})`);
+      // Print the measured burst so consecutive runs are COMPARABLE by eye in CI logs.
+      console.log(`thread-open burst (${openResult.rpcs}): ${JSON.stringify(openResult.list)} · ambient page traffic: ${openResult.ambient} · samples ${openResult.tagged}/${openResult.samples} tagged`);
+      // FAIL-CLOSED FIRST (coord): if the shim never wrote the burst tag, or the flag could not be set
+      // and read back, this session observed NOTHING — error out rather than let a zero-sample run read
+      // as a tidy 'exactly one call'.
       assert(
-        openResult.rpcs <= 4,
-        `Thread open DISPATCHED ${openResult.rpcs} RPCs, budget is <= 4 (was 14–21 before coalescing); routes: ` +
-          JSON.stringify(openResult.list),
+        openResult.samples > 0 && openResult.tagged === openResult.samples,
+        `the burst tag is missing from ${openResult.samples - openResult.tagged} of ${openResult.samples} recorded RPC rows — the census observed nothing and must fail closed`,
       );
+      assert(openResult.flagReadable === true, "the click burst flag could not be set and read back, so the dispatch window is unproven");
+      assert(openResult.opened !== false, "the thread view must become visible after the click");
+      // THE NARROWED CLAIM (8ijxu r4, coord): exactly one thread.get inside the click's dispatch burst.
+      // A second dispatch in the same task is a de-coalescing regression and reds here; a retried open
+      // after a service-worker restart is outside this boundary by design (chrome-agent-platform-q5stl).
+      assertEquals(
+        openResult.rpcs,
+        1,
+        `the click's dispatch burst must carry EXACTLY ONE RPC; dispatched ${openResult.rpcs}: ` + JSON.stringify(openResult.list),
+      );
+      assertEquals(openResult.list, ["thread.get"], "the one dispatched RPC must be thread.get");
     } finally {
       if (cdp) cdp.close();
       await teardownChrome(chrome, profile);
