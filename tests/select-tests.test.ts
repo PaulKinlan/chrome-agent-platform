@@ -15,6 +15,7 @@ import {
   buildReverseGraph,
   collectChangedFiles,
   fileMappingContextForPlan,
+  guardGapFor,
   isBuildResidue,
   omittedInventory,
   planSelection,
@@ -235,4 +236,54 @@ Deno.test("nn5eq: a large selection announces its fan-in cost without refusing t
   // No population, no claim.
   assertEquals(selectionFanInNotice({ selected: 10, population: 0 }), null);
   assertEquals(selectionFanInNotice({ selected: Number.NaN, population: 803 }), null);
+});
+
+// chrome-agent-platform-h346c: a guard-owning changed file must CARRY its guard in the
+// selection, or the gate must refuse. The five incidents (lrhyl, hvd4s, khwi9 on
+// service-worker.js; ibdr4 on script-host.js; qjoji+5b9mp's union) all share one shape: the
+// file WAS import-reachable, so the uncovered-file guard tables never looked at it, and the
+// plan still called itself a subset. A greener smaller selection is indistinguishable from a
+// real pass where a merger reads it, which is why the rule is applied to every changed file.
+Deno.test("h346c: a guard-owning changed file carries its dedicated guard even when the import graph covers it", () => {
+  const plan = planSelection({ changedFiles: () => ["extension/lib/script-host.js"] });
+  assertEquals(plan.kind, "subset", "script-host.js is import-reachable, so this stays a subset");
+  assert(
+    plan.files!.includes("tests/sandbox-egress-confinement.test.ts"),
+    "the egress-confinement journey imports script-host dynamically, so no static edge selects it — the registry must (ibdr4's delta ran its gate without it)",
+  );
+  assertEquals(plan.guardGap, [], "after enforcement no guard gap remains");
+  assert(
+    plan.notices.some((n) => n.includes("owns a dedicated guard") && n.includes("sandbox-egress-confinement")),
+    `the plan SAYS it added the guard, so a reader can see why the selection grew: ${plan.notices.join(" | ")}`,
+  );
+});
+
+Deno.test("h346c: a registry entry naming a suite the tree does not have FAILS CLOSED and names the guard", () => {
+  const plan = planSelection({
+    changedFiles: () => ["extension/lib/script-host.js"],
+    dedicatedGuards: { "extension/lib/script-host.js": ["tests/a-guard-that-does-not-exist.test.ts"] },
+    htmlGuards: {},
+  });
+  assertEquals(plan.kind, "full", "a registry entry the selection cannot honour is a coverage claim nobody can keep");
+  assert(plan.reason.includes("dedicated guard not resolvable"), plan.reason);
+  assertEquals(plan.unmappable.length, 1);
+  assertEquals(plan.unmappable[0].file, "extension/lib/script-host.js");
+  assert(
+    plan.unmappable[0].mechanism.includes("tests/a-guard-that-does-not-exist.test.ts"),
+    `the refusal names the expected guard: ${plan.unmappable[0].mechanism}`,
+  );
+  assertEquals(plan.guardGap, [{ file: "extension/lib/script-host.js", guard: "tests/a-guard-that-does-not-exist.test.ts" }]);
+});
+
+Deno.test("h346c: guardGapFor is the merger's stop signal — it counts changed files whose guard is absent", () => {
+  const changed = ["extension/background/service-worker.js", "extension/lib/script-host.js", "extension/lib/pure.js"];
+  assertEquals(guardGapFor(changed, ["tests/onmessage-sender-guard.test.ts"]), [
+    { file: "extension/lib/script-host.js", guard: "tests/sandbox-egress-confinement.test.ts" },
+  ], "only the guard-owning file with an absent guard counts; pure.js owns none");
+  assertEquals(
+    guardGapFor(changed, ["tests/onmessage-sender-guard.test.ts", "tests/sandbox-egress-confinement.test.ts"]),
+    [],
+    "a zero is a pass",
+  );
+  assertEquals(guardGapFor([], []), []);
 });
