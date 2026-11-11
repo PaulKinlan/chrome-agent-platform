@@ -212,7 +212,7 @@ Deno.test("js-capability admission: each fixture is refused with its typed code;
   assertEquals(clean.audit.denyList, EMSCRIPTEN_JS_CAPABILITY_DENY_LIST.map((e) => e.id));
   assertEquals(clean.audit.roots, ["glue"]);
   assertEquals(clean.audit.edges, []);
-  assertEquals(clean.audit.policy, "cap-js-capability-admission-ast-v2");
+  assertEquals(clean.audit.policy, "cap-js-capability-admission-ast-v3");
 });
 
 Deno.test("js-capability admission: the receipt says what a PASS does NOT prove (no C2 claim, never writer-free)", async () => {
@@ -468,12 +468,26 @@ Deno.test("js-capability admission: one static indirection hop does not defeat a
     [`Reflect.apply.call(null, self.fetch, null, ["/x"]);`, "fetch_call"],
     [`(true && self.fetch)("/x");`, "fetch_call"],
     [`(cond ? self.fetch : other).call(null, "/x");`, "fetch_call"],
+    // 3z2st: receiver-side wrappers the composed list missed — the structural
+    // rule closes the whole class (any occurrence of the name inside a call).
+    [`(self?.fetch).call(null, "/x");`, "fetch_call"],
+    [`(0, true && self.fetch).call(null, "/x");`, "fetch_call"],
+    [`(0, cond ? self.fetch : other).bind(null)("/x");`, "fetch_call"],
+    [`(x = self.fetch).call(null, "/x");`, "fetch_call"],
+    [`({ m: self.fetch }.m).call(null, "/x");`, "fetch_call"],
+    // coord acceptance: a wrapper-of-a-wrapper of the capability refuses.
+    [`w2(w1(self.fetch))("/x");`, "fetch_call"],
+    [`wrap(Reflect.construct)(self.Worker, ["blob:null/x"]);`, "worker_construction"],
   ]) {
     const { ok, error } = scanSource(`export const q = () => ${src}`);
     assertEquals(ok, false, `composed indirection must refuse: ${src}`);
     assertEquals(error.code, "js_capability_denied");
     assertEquals(error.detail, `glue:${code}`, `typed code must name the entry: ${src}`);
   }
+  // The receipt states the STRUCTURAL guarantee, not a shape enumeration.
+  const structuralReceipt = scanSource(CLEAN_SOURCE).audit;
+  assert(structuralReceipt.unproven.includes("no shape list, no hop bound"), "unproven must state the structural guarantee");
+  assertEquals(structuralReceipt.policy, "cap-js-capability-admission-ast-v3");
   // No overreach: the same helpers over NON-capability receivers/values stay
   // clean, identifier suffixes are still not capabilities — including the
   // composed helpers over benign receivers.
@@ -498,11 +512,12 @@ Deno.test("js-capability admission: one static indirection hop does not defeat a
     assertEquals(ok, false, `direct anchor must still refuse: ${direct}`);
   }
   // The receipt names the newly covered spellings AND keeps the honest
-  // residual: value-level aliasing and computed acquisition stay unproven.
+  // residual: the receipt states the STRUCTURAL guarantee and keeps the
+  // no-name residual (computed/string-built, factories) explicit.
   const receipt = scanSource(CLEAN_SOURCE).audit;
-  assert(receipt.unproven.includes("Reflect.construct"), "unproven must name the first-argument spellings now refused");
-  assert(receipt.unproven.includes("Value-level aliasing"), "unproven must keep the aliasing residual explicit");
-  assertEquals(receipt.policy, "cap-js-capability-admission-ast-v2");
+  assert(receipt.unproven.includes("no shape list, no hop bound"), "unproven must state the structural guarantee, not an enumeration");
+  assert(receipt.unproven.includes("WITHOUT the capability name"), "unproven must keep the no-name acquisition residual explicit");
+  assertEquals(receipt.policy, "cap-js-capability-admission-ast-v3");
 });
 
 Deno.test("js-capability admission: the parser closes the import graph (u3vfd + 0065v + 3awbd class)", () => {
@@ -745,7 +760,7 @@ Deno.test("js-capability admission: admitBundled records the verdict on the rece
   const audit = current.jsCapabilityAudit;
   assertEquals(audit?.verdict, "pass");
   assertEquals(audit.parser, { name: "acorn", version: VENDORED_ACORN_VERSION });
-  assertEquals(audit.policy, "cap-js-capability-admission-ast-v2");
+  assertEquals(audit.policy, "cap-js-capability-admission-ast-v3");
   assertEquals(audit.denyList, EMSCRIPTEN_JS_CAPABILITY_DENY_LIST.map((e) => e.id));
   assertEquals(audit.scanned.map((row) => row.asset), ["adapter", "glue"]);
   assertEquals(audit.scanned[1].exemptions, ["fetch", "xhr"]);
