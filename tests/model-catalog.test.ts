@@ -107,20 +107,61 @@ Deno.test("fetchLiveModels: OpenAI-compatible list, normalised, tiers dropped, n
     assertEquals(ids, ["gpt-5.5", "gpt-5.4-mini"]);
     assertEquals(seen[0].url, "https://api.openai.com/v1/models");
     assertEquals(seen[0].auth, "Bearer sk-test");
-    // Gemini native: the key travels in the query, the ids lose their models/ prefix.
-    globalThis.fetch = async (url) => {
-      seen.push({ url: String(url) });
+    // Gemini native: the key travels in the x-goog-api-key HEADER, never the URL
+    // (chrome-agent-platform-ofbtl), and the ids lose their models/ prefix.
+    globalThis.fetch = async (url, init) => {
+      seen.push({ url: String(url), gkey: init?.headers?.["x-goog-api-key"] ?? "" });
       return new Response(JSON.stringify({ models: [{ name: "models/gemini-3.7-flash" }, { name: "models/gemini-3.1-flash-image" }] }), { status: 200 });
     };
     const g = await fetchLiveModels("gemini", { baseURL: "https://generativelanguage.googleapis.com/v1beta/openai", apiKey: "gk" });
     assertEquals(g, ["gemini-3.7-flash"]);
-    assert(seen[1].url.startsWith("https://generativelanguage.googleapis.com/v1beta/models?key="));
+    assert(seen[1].url.startsWith("https://generativelanguage.googleapis.com/v1beta/models?"));
+    assertEquals(seen[1].url.includes("key="), false, `the provider key must not travel in the URL: ${seen[1].url}`);
+    assertEquals(seen[1].gkey, "gk");
     // Failure paths return [] — never a throw into the UI.
     globalThis.fetch = async () => new Response("nope", { status: 401 });
     assertEquals(await fetchLiveModels("openai", { baseURL: "https://api.openai.com/v1", apiKey: "bad" }), []);
     globalThis.fetch = async () => { throw new Error("boom https://x?key=SECRET"); };
     assertEquals(await fetchLiveModels("openai", { baseURL: "https://api.openai.com/v1", apiKey: "k" }), []);
     assertEquals(await fetchLiveModels("openai", { baseURL: "", apiKey: "k" }), []);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+// ── beads chrome-agent-platform-ofbtl (2026-11-09): the Gemini native LIST put
+// the provider API key in the URL query string (`?key=`), where every
+// intermediary, referrer and request log on the path sees it. Same class as
+// jjedl, which moved the image path to the x-goog-api-key header on this host.
+// Falsification: put `key=` back on either the initial page or the pageToken
+// continuation (or drop the header) and these go RED.
+Deno.test("fetchLiveModels gemini native: the key is a header on EVERY page, never a query param", async () => {
+  const realFetch = globalThis.fetch;
+  const seen = [];
+  globalThis.fetch = async (url, init) => {
+    seen.push({ url: String(url), headers: { ...(init?.headers ?? {}) } });
+    // Page 1 hands back a continuation cursor; page 2 ends the walk.
+    const body = seen.length === 1
+      ? { models: [{ name: "models/gemini-3.8-flash" }], nextPageToken: "tok/with+odd chars" }
+      : { models: [{ name: "models/gemini-3.7-flash" }] };
+    return new Response(JSON.stringify(body), { status: 200 });
+  };
+  try {
+    const ids = await fetchLiveModels("gemini", {
+      baseURL: "https://generativelanguage.googleapis.com/v1beta/openai",
+      apiKey: "gk-ofbtl",
+    });
+    assertEquals(ids, ["gemini-3.8-flash", "gemini-3.7-flash"]);
+    assertEquals(seen.length, 2, "the pageToken continuation must be followed");
+    for (const [i, req] of seen.entries()) {
+      assert(req.url.startsWith("https://generativelanguage.googleapis.com/v1beta/models?"), `page ${i}: ${req.url}`);
+      assertEquals(req.url.includes("key"), false, `page ${i}: the key must not appear in the URL at all: ${req.url}`);
+      assertEquals(req.url.includes("gk-ofbtl"), false, `page ${i}: the key value must not appear in the URL: ${req.url}`);
+      assertEquals(req.headers["x-goog-api-key"], "gk-ofbtl", `page ${i}: the key must travel in x-goog-api-key`);
+    }
+    // The continuation still carries the cursor — dropping the key must not
+    // silently drop pagination.
+    assert(seen[1].url.includes("pageToken=tok%2Fwith%2Bodd%20chars"), `page 2 cursor lost: ${seen[1].url}`);
   } finally {
     globalThis.fetch = realFetch;
   }
