@@ -27,6 +27,18 @@ function nfkc(s) {
 const CREDENTIAL_KEY_RE =
   /(api[_-]?key|token|secret|password|pwd|passphrase|authorization|auth|credential|bearer|access[_-]?key|vault|cookie|session|sig|signature|private|client[_-]?secret|refresh[_-]?token)/i;
 
+/** chrome-agent-platform-5b9mp: the differential between the HARVEST rule
+ * above (CREDENTIAL_KEY_RE — what collectProfileSecrets treats as a credential)
+ * and the canonical MASK rule (pure-redact.js SECRET_KEY_RE). The export mask
+ * must cover this difference — an export surface may never emit raw a key
+ * whose value the same module harvests (a tool result echoing
+ * {"set-cookie": "sid=abc123"} shipped the value whenever it matched no
+ * bare-secret shape). The extra words carry SECRET_KEY_RE's BOTH-side
+ * boundary discipline so ordinary words that merely CONTAIN a keyword still
+ * survive (author, mytoken, sessionTimeout, secretary) — qfu7k parity. */
+export const EXPORT_MASK_KEY_RE =
+  /(?<![a-z0-9])(cookie|pwd|passphrase|auth|vault|session|private)(?![a-z0-9])/i;
+
 /**
  * Collect all active credential strings from profile configurations.
  * Gathers exact secret values from provider configs, MCP servers, vault records,
@@ -350,12 +362,12 @@ export function redactExportValue(value, options = {}, depth = 0, seen = new Wea
         }
         // chrome-agent-platform-qfu7k: apply the CANONICAL key-shape rule
         // (pure.js SECRET_KEY_RE — the same locator redactSecrets, cap-log and
-        // lazy-tool-protocol use). Before this, nested credential keys carried
-        // raw values into the export whenever the VALUE matched no bare-secret
-        // shape (e.g. password: "hunter2"): the drop-list above only covered
-        // internal security fields, so this second sanitizer never reached
-        // parity with the canonical filter on structured payloads.
-        if (SECRET_KEY_RE.test(k)) {
+        // lazy-tool-protocol use). chrome-agent-platform-5b9mp: PLUS the
+        // differential the module's own harvest rule covers (cookie, pwd,
+        // passphrase, auth, vault, session, private with canonical boundaries)
+        // — the export may not emit raw a key whose value collectProfileSecrets
+        // would have gathered for exact-value redaction.
+        if (SECRET_KEY_RE.test(k) || EXPORT_MASK_KEY_RE.test(k)) {
           out[k] = "[REDACTED]";
           continue;
         }
