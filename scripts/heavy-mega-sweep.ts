@@ -25,7 +25,7 @@
 
 import { spawnSync } from "node:child_process";
 import { MEGA_HEAVY_FILES } from "./test-partition.mjs";
-import { currentCommitSha, writeMegaRecord } from "./lib/heavy-receipt.mjs";
+import { currentCommitSha, writeMegaRecord, writeTierRecord } from "./lib/heavy-receipt.mjs";
 import { fileURLToPath } from "node:url";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -35,6 +35,18 @@ const TIMEOUT_MS = Number(Deno.env.get("CAP_HEAVY_MEGA_TIMEOUT_MS") ?? 3_600_000
 function git(args: string[]): string {
   const out = spawnSync("git", args, { cwd: ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
   return (out.stdout ?? "").trim();
+}
+
+/** The KAT population: `npm run test:kat` runs every registry-classed KAT with its own exit code. */
+function runKatPopulation(): { file: string; rc: number; secs: number } {
+  const t0 = Date.now();
+  const child = spawnSync("deno", ["run", "-A", "scripts/kat-runner.ts"], {
+    cwd: ROOT, encoding: "utf8", stdio: "inherit", timeout: TIMEOUT_MS,
+    env: { ...Deno.env.toObject(), CAP_TEST_RUNNER: "1" },
+  });
+  const secs = Math.round((Date.now() - t0) / 1000);
+  const rc = child.error ? 124 : (child.status ?? 1);
+  return { file: "kat-runner (kat+named population)", rc, secs };
 }
 
 function runSuite(file: string): { file: string; rc: number; secs: number } {
@@ -92,28 +104,40 @@ function fileP1({ sha, failed }: { sha: string; failed: Array<{ file: string; se
 
 function main() {
   const dry = Deno.args.includes("--dry-run");
+  const tierArg = Deno.args.find((a) => a.startsWith("--tier="))?.split("=")[1] ?? "mega";
+  const tiers = tierArg === "all" ? ["mega", "kat"] : [tierArg];
+  if (!tiers.every((t) => t === "mega" || t === "kat")) {
+    console.error(`heavy-mega-sweep: unknown --tier=${tierArg} (mega | kat | all)`);
+    Deno.exit(2);
+  }
   const sha = currentCommitSha(ROOT) || git(["rev-parse", "HEAD"]);
   if (!sha || sha === "unknown") {
     console.error("heavy-mega-sweep: cannot resolve the commit — refusing to write an unattributable record");
     Deno.exit(2);
   }
-  console.log(`heavy-mega-sweep: ${MEGA_HEAVY_FILES.length} suite(s) at ${sha} (bound ${Math.round(TIMEOUT_MS / 1000)}s)`);
+  console.log(`heavy-mega-sweep: tiers=${tiers.join(",")} at ${sha} (bound ${Math.round(TIMEOUT_MS / 1000)}s)`);
   if (dry) {
-    for (const f of MEGA_HEAVY_FILES) console.log(`  would run ${f}`);
+    if (tiers.includes("mega")) for (const f of MEGA_HEAVY_FILES) console.log(`  would run ${f}`);
+    if (tiers.includes("kat")) console.log("  would run deno run -A scripts/kat-runner.ts (every registry KAT)");
     return 0;
   }
-  const results = MEGA_HEAVY_FILES.map((f) => runSuite(f));
+  const results: Array<{ file: string; rc: number; secs: number }> = [];
+  if (tiers.includes("mega")) results.push(...MEGA_HEAVY_FILES.map((f) => runSuite(f)));
+  if (tiers.includes("kat")) results.push(runKatPopulation());
   const failed = results.filter((r) => r.rc !== 0 && r.rc !== ENVIRONMENTAL_REFUSAL_EXIT);
   const envOnly = results.length > 0 && failed.length === 0 && results.some((r) => r.rc === ENVIRONMENTAL_REFUSAL_EXIT);
   // A product red is a red even on a stolen box; only a run that reported nothing usable is environmental.
   const result = failed.length ? "fail" : envOnly ? "environmental" : "pass";
-  writeMegaRecord({
-    sha,
-    result,
-    at: Date.now(),
-    suites: results.map((r): { file: string; rc: number; secs: number } => ({ file: r.file, rc: r.rc, secs: r.secs })),
-    detail: null,
-  });
+  const suites = results.map((r): { file: string; rc: number; secs: number } => ({ file: r.file, rc: r.rc, secs: r.secs }));
+  if (tiers.includes("mega")) {
+    writeMegaRecord({ sha, result, at: Date.now(), suites, detail: { tiers } });
+  }
+  // The KAT population gets its OWN record: the landing gate reads it to write the ledger line, and a
+  // mega sweep must never be able to stand in for a KAT run (different population, different failure).
+  if (tiers.includes("kat")) {
+    const kat = results.find((r) => r.file.startsWith("kat-runner"));
+    writeTierRecord("kat-harnesses", { sha, result: kat && kat.rc === 0 ? "pass" : "fail", at: Date.now(), detail: suites });
+  }
   console.log(`heavy-mega-sweep: ${result.toUpperCase()} (${results.map((r) => `${r.file} rc=${r.rc} ${r.secs}s`).join("; ")})`);
   if (result === "fail") {
     const filed = fileP1({ sha, failed });

@@ -129,3 +129,112 @@ Deno.test("1lvay (c): the mega sweep exists, records its verdict, and files a P1
   // the same class of lie (a receipt naming a coverage it does not have) that this bead closes.
   assertEquals(/writeReceipt\(/.test(src), false, "the sweep must not emit a heavy-tier receipt");
 });
+
+// ── 1lvay (d), re-pointed at the KAT population (coord, 2026-11-11) ────────────────────────────────
+// The invisible tier is not heavy: it is scripts/lib/harness-registry.ts, where 72 `kat` + 14 `named`
+// harnesses sit and `npm test` runs none of them. "Absent from the ledger" is exactly how they went
+// invisible, so these two assertions ARE the acceptance: never-run must be STATED, and stale must be
+// stated with the sha and the age it is behind by.
+import { HARNESSES } from "../scripts/lib/harness-registry.ts";
+import {
+  buildTierLedger,
+  parseHarnessRegistry,
+  TIER_IDS,
+  unrunHarnesses,
+} from "../scripts/lib/tier-ledger.mjs";
+
+Deno.test("1lvay: the registry parser agrees with the real module — a drifting parse reds here", async () => {
+  const text = await Deno.readTextFile(new URL("../scripts/lib/harness-registry.ts", import.meta.url));
+  const parsed = parseHarnessRegistry(text);
+  // Ground truth is the module itself, not a number typed into this test: prose in that file mentions
+  // harness names (`{ "kat-x.ts": … }` inside a comment) and reason strings contain `{…}`, which is
+  // exactly how a naive parse lost 4 real entries while still looking plausible.
+  const truth = Object.entries(HARNESSES as Record<string, { class: string }>);
+  const truthByClass: Record<string, string[]> = {};
+  for (const [file, entry] of truth) (truthByClass[entry.class] ??= []).push(file);
+  for (const list of Object.values(truthByClass)) list.sort();
+  assertEquals(
+    Object.keys(parsed.classes).sort(),
+    Object.keys(truthByClass).sort(),
+    "parser must see the same classes the module declares",
+  );
+  for (const [cls, files] of Object.entries(truthByClass)) {
+    assertEquals(parsed.classes[cls], files, `class ${cls}: parsed set must equal the module's`);
+  }
+  assertEquals(parsed.files.length, truth.length);
+  // And the population this bead is about, named explicitly so a silent zero cannot pass.
+  const unrun = unrunHarnesses(parsed);
+  assertEquals(unrun.length, (truthByClass.kat?.length ?? 0) + (truthByClass.named?.length ?? 0));
+  assert(unrun.includes("kat-python-permissioned-fetch.ts"), "the harness that prompted the bead must be IN the population");
+});
+
+Deno.test("1lvay (d): a never-run population is STATED as never-run, never silently absent", () => {
+  const ledger = buildTierLedger({
+    files: {
+      "heavy-parallel": ["tests/a.test.ts"],
+      "heavy-mega": ["tests/b.test.ts"],
+      "heavy-wall-clock": ["tests/c.test.ts"],
+      "kat-harnesses": ["kat-one.ts", "kat-two.ts"],
+    },
+    records: { "kat-harnesses": null },
+    sha: "1111111111111111",
+    now: 1_700_000_000_000,
+  });
+  assertEquals(ledger.entries.map((e: {id: string}) => e.id), [...TIER_IDS], "one entry per population, in a fixed order");
+  const kat = ledger.entries.find((e: {id: string}) => e.id === "kat-harnesses")!;
+  assertEquals(kat.status, "never-run");
+  assertStringIncludes(kat.line, "NOT RUN at this sha");
+  assertStringIncludes(kat.line, "never run");
+  assertStringIncludes(kat.line, "2 kat/named browser harnesses");
+  // The defect was SILENCE: every population must have a line even when it has no record at all.
+  assertEquals(ledger.lines.length, TIER_IDS.length);
+  for (const line of ledger.lines) assert(/^[a-z-]+: /.test(line), `every tier line names its tier: ${line}`);
+  assertEquals(ledger.payload.kat_harnesses.status, "never-run");
+});
+
+Deno.test("1lvay (d): a record from a tree BEHIND head is stale, with the sha and the age", () => {
+  const now = 1_700_000_000_000;
+  const ledger = buildTierLedger({
+    files: { "kat-harnesses": ["kat-one.ts"] },
+    records: { "kat-harnesses": { sha: "abcdef1234567890", result: "pass", at: now - 30 * 3_600_000 } },
+    sha: "9999999999999999",
+    now,
+  });
+  const kat = ledger.entries.find((e: {id: string}) => e.id === "kat-harnesses")!;
+  assertEquals(kat.status, "stale");
+  assertStringIncludes(kat.line, "NOT RUN at this sha");
+  assertStringIncludes(kat.line, "last green abcdef123");
+  assertStringIncludes(kat.line, "30h ago");
+  assertEquals(kat.age_h, 30);
+  // A record AT this tree is credited instead — the ledger must be able to say "it ran", or nobody will
+  // trust it when it says "it did not".
+  const same = buildTierLedger({
+    files: { "kat-harnesses": ["kat-one.ts"] },
+    records: { "kat-harnesses": { sha: "9999999999999999", result: "pass", at: now - 3_600_000 } },
+    sha: "9999999999999999",
+    now,
+  }).entries.find((e: {id: string}) => e.id === "kat-harnesses")!;
+  assertEquals(same.status, "ran");
+  assertStringIncludes(same.line, "ran at this sha (PASS");
+});
+
+Deno.test("1lvay (d): a FAILED population is reported as a red, not as a gap or a green", () => {
+  const now = 1_700_000_000_000;
+  const sameTree = buildTierLedger({
+    files: { "heavy-mega": ["tests/b.test.ts"] },
+    records: { "heavy-mega": { sha: "abc1234567", result: "fail", at: now - 2 * 3_600_000 } },
+    sha: "abc1234567",
+    now,
+  }).entries.find((e: {id: string}) => e.id === "heavy-mega")!;
+  assertEquals(sameTree.status, "failed");
+  assertStringIncludes(sameTree.line, "RED");
+  const otherTree = buildTierLedger({
+    files: { "heavy-mega": ["tests/b.test.ts"] },
+    records: { "heavy-mega": { sha: "deadbeef00", result: "fail", at: now - 2 * 3_600_000 } },
+    sha: "abc1234567",
+    now,
+  }).entries.find((e: {id: string}) => e.id === "heavy-mega")!;
+  assertEquals(otherTree.status, "failed");
+  assertStringIncludes(otherTree.line, "NOT RUN at this sha");
+  assertStringIncludes(otherTree.line, "last run deadbeef0 FAIL");
+});

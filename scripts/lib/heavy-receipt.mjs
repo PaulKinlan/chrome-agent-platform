@@ -39,8 +39,8 @@
 // escalate to a 40-minute tier gate — measured on 92157a0e5's first fast gate).
 
 import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync, writeSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { execFileSync } from "node:child_process";
-import { join } from "node:path";
 import { durableDir } from "./durable-root.mjs";
 import { STEAL_THRESHOLD_PCT } from "./cpu-steal-sampler.mjs";
 import { HEAVY_GATE_FILES, QUARANTINED_HEAVY_FILES } from "../test-partition.mjs";
@@ -110,6 +110,43 @@ export function currentTreeHash(cwd) {
  * <sha> <age>h)". Absent file = no sweep has ever reported, which the line says in those words
  * rather than assuming a green.
  */
+/**
+ * Per-population tier records (chrome-agent-platform-1lvay (d)). One file per DEFERRED population, so
+ * the landing gate can state "ran at this sha" or "last green <sha> <age>h" or "never run" for each,
+ * instead of implying that a green FULL gate covered populations it never touches.
+ *
+ * Durable (cap-evidence), not per-tree: the whole point is to carry a fact ACROSS trees — the last time
+ * this population ran, and on which sha.
+ */
+export function tierRecordPath(id) {
+  if (!/^[a-z][a-z0-9-]*$/.test(String(id ?? ""))) throw new Error(`tier record: invalid id ${JSON.stringify(id)}`);
+  return join(receiptDir(), "tiers", `${id}.json`);
+}
+
+/** null when nothing has ever been recorded: "never run" is a fact, and silence must not mean pass. */
+export function readTierRecord(id) {
+  try {
+    const raw = JSON.parse(readFileSync(tierRecordPath(id), "utf8"));
+    return raw && typeof raw === "object" ? raw : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * @param {string} id
+ * @param {{ sha: string, result: "pass"|"fail"|"environmental", at?: number, detail?: unknown }} rec
+ */
+export function writeTierRecord(id, { sha, result, at = Date.now(), detail = null }) {
+  if (!sha || !result) throw new Error("tier record needs a sha and a result");
+  const file = tierRecordPath(id);
+  mkdirSync(dirname(file), { recursive: true });
+  const tmp = `${file}.tmp-${process.pid}`;
+  writeFileSync(tmp, `${JSON.stringify({ sha, result, at, detail }, null, 2)}\n`);
+  renameSync(tmp, file);
+  return file;
+}
+
 export function megaRecordPath() {
   return join(receiptDir(), "mega-last.json");
 }

@@ -23,6 +23,8 @@
 import { existsSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { constants as osConstants } from "node:os";
 import { resolve as resolvePath } from "node:path";
 import { BUILD_GATE, BUILD_GATE_FILES, BUILD_GATE_REASONS, DEFERRED_HEAVY_FILES, HEAVY_GATE, HEAVY_GATE_FILES, HEAVY_GATE_REASONS, PER_LANDING_HEAVY_FILES, READ_ONLY_DIST, SERIAL, partition } from "./test-partition.mjs";
@@ -36,7 +38,51 @@ import {
 } from "./lib/parallel-plan.mjs";
 import { loadWeights, scheduleOrder } from "./lib/parallel-schedule.mjs";
 import { emitGateLedger, deferredTierEntries, fullTierManifestFields, heavyTierStatus, parseGateBuild } from "./lib/gate-manifest.mjs";
-import { currentCommitSha, readMegaRecord } from "./lib/heavy-receipt.mjs";
+import { currentCommitSha, readMegaRecord, readTierRecord, writeTierRecord } from "./lib/heavy-receipt.mjs";
+import { MEGA_HEAVY_FILES, WALL_CLOCK_HEAVY_FILES } from "./test-partition.mjs";
+import { buildTierLedger, parseHarnessRegistry, unrunHarnesses } from "./lib/tier-ledger.mjs";
+
+/**
+ * 1lvay (d): the TIER LEDGER — every population a landing's gate does not fully execute, with the fact
+ * of whether it ran at THIS tree and, when it did not, which tree last did and how stale that is.
+ *
+ * The KAT population is why this exists: 72 `kat` + 14 `named` harnesses in
+ * scripts/lib/harness-registry.ts that `npm test` never runs. "Absent from the report" is exactly how
+ * they went invisible, so a population with no record is STATED as never-run rather than omitted.
+ */
+function tierLedgerFor({ heavyParallel = [], sha = null } = {}) {
+  const registryPath = join(dirname(fileURLToPath(import.meta.url)), "lib", "harness-registry.ts");
+  let harnessFiles = [];
+  try {
+    harnessFiles = unrunHarnesses(parseHarnessRegistry(readFileSync(registryPath, "utf8")));
+  } catch {
+    // An unreadable registry must not hide the other three populations; the KAT line then reads
+    // "never run" with a count of 0, which is visibly wrong to a reader rather than quietly absent.
+    harnessFiles = [];
+  }
+  const records = {};
+  for (const id of ["heavy-parallel", "heavy-mega", "heavy-wall-clock", "kat-harnesses"]) {
+    records[id] = id === "heavy-mega" ? readMegaRecordSafely() : safeTierRecord(id);
+  }
+  return buildTierLedger({
+    files: {
+      "heavy-parallel": heavyParallel,
+      "heavy-mega": MEGA_HEAVY_FILES,
+      "heavy-wall-clock": WALL_CLOCK_HEAVY_FILES,
+      "kat-harnesses": harnessFiles,
+    },
+    records,
+    sha,
+  });
+}
+
+function safeTierRecord(id) {
+  try {
+    return readTierRecord(id);
+  } catch {
+    return null;
+  }
+}
 
 /** Never let a missing/corrupt mega record break a landing gate: null IS the "never run" fact. */
 function readMegaRecordSafely() {
@@ -497,6 +543,18 @@ export async function main(args = process.argv.slice(2)) {
   const heavyRc = (stopAfterSerial || heavyParallel.length === 0)
     ? 0
     : await runParallel(heavyParallel, "per-landing heavy phase", suiteDurations, killedPhases, neverSpawnedFiles);
+  // 1lvay (d): the per-landing heavy phase is the one population this command CAN certify, so record its
+  // verdict against this tree's sha — that is what lets the ledger say "ran at this sha" for it while
+  // saying "NOT RUN at this sha (last green …)" for the populations it cannot afford.
+  const gateSha = currentCommitSha(process.cwd());
+  if (cliFiles.length === 0 && heavyParallel.length && !stopAfterSerial) {
+    try {
+      writeTierRecord("heavy-parallel", { sha: gateSha, result: heavyRc === 0 ? "pass" : "fail", at: Date.now() });
+    } catch {
+      // A receipt we cannot write must not break the gate; the ledger then says "never run", which is
+      // conservative in the safe direction (it never claims a run that did not happen).
+    }
+  }
   if (neverSpawnedFiles.length > 0) {
     gaps.push(`parallel phase child never spawned (${neverSpawnedFiles.length} file(s) unrun)`);
   }
@@ -530,11 +588,7 @@ export async function main(args = process.argv.slice(2)) {
   // 1lvay (d): say which tiers this run covered, beside the summary a human reads. The structured
   // copy rides the manifest; this is the line that stops "FULL" being read as "everything ran".
   if (cliFiles.length === 0) {
-    for (const line of heavyTierStatus({
-      heavyParallelFiles: stopAfterSerial ? [] : heavyParallel,
-      megaRecord: readMegaRecordSafely(),
-      sha: currentCommitSha(process.cwd()),
-    }).lines) {
+    for (const line of tierLedgerFor({ heavyParallel: stopAfterSerial ? [] : heavyParallel, sha: gateSha }).lines) {
       console.log(`run-tests: ${line}`);
     }
   }
@@ -591,11 +645,7 @@ export async function main(args = process.argv.slice(2)) {
       // which tiers this receipt covers — including the one it does not, in words that read like the
       // gap rather than like a scheduling note.
       heavyParallelFiles: stopAfterSerial ? [] : heavyParallel,
-      tiers: heavyTierStatus({
-        heavyParallelFiles: stopAfterSerial ? [] : heavyParallel,
-        megaRecord: readMegaRecordSafely(),
-        sha: currentCommitSha(process.cwd()),
-      }),
+      tiers: tierLedgerFor({ heavyParallel: stopAfterSerial ? [] : heavyParallel, sha: gateSha }),
       rc: effectiveRc,
       build: parseGateBuild(process.env.CAP_GATE_BUILD_JSON),
       fileMappingContext,

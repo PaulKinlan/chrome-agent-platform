@@ -69,16 +69,43 @@ deno run -A scripts/heavy-mega-sweep.ts             # sweep, record, file a P1 o
 Schedule it at least every 24h — the bound the bead states:
 
 ```cron
-30 4 * * * cd /home/exedev/worktrees/chrome-agent-platform-impl-d && CAP_HEAVY_MEGA_TIMEOUT_MS=3600000 /path/to/deno run -A scripts/heavy-mega-sweep.ts >> /home/exedev/cap-evidence/heavy-receipts/mega-sweep.log 2>&1
+30 4 * * * cd /home/exedev/worktrees/chrome-agent-platform-impl-d && CAP_HEAVY_MEGA_TIMEOUT_MS=3600000 /path/to/deno run -A scripts/heavy-mega-sweep.ts --tier=all >> /home/exedev/cap-evidence/heavy-receipts/mega-sweep.log 2>&1
 ```
 
 (Installed on the fleet VM at 04:30 daily; a nightly job that runs 40 minutes should not share the box
 with a landing.)
 
+## The tier ledger: all four populations, stated per population
+
+`scripts/lib/tier-ledger.mjs` builds the ledger; it rides the gate receipt as `tiers` and prints one line
+per population. Four states, each derived from a durable record and never assumed:
+
+| state | meaning | line |
+| --- | --- | --- |
+| `ran` | the record's sha is this tree's and it passed | `heavy-mega: ran at this sha (PASS, 2h ago)` |
+| `failed` | it ran at this tree and failed | `heavy-mega: ran at this sha (FAIL, 1h ago) — this is a RED, not a gap` |
+| `stale` | a record exists for another tree | `kat-harnesses: NOT RUN at this sha (last green abc123456 30h ago)` |
+| `never-run` | no record at all | `kat-harnesses: NOT RUN at this sha (never run — no run has ever recorded a result for these 86 kat/named browser harnesses)` |
+
+Never-run is its own state because **absence is the defect**: 86 harnesses went invisible precisely by
+not appearing anywhere. Coverage of the four populations:
+
+| population | count | recorded by | when |
+| --- | --- | --- | --- |
+| per-landing heavy | 18 | the landing gate itself | every landing |
+| mega heavy | 2 | `scripts/heavy-mega-sweep.ts --tier=mega` | daily |
+| wall-clock NTP | 1 | `npm run test:heavy` | on demand / with the heavy receipt |
+| kat + named harnesses | 86 | `scripts/heavy-mega-sweep.ts --tier=kat` | daily |
+
+The KAT count comes from the registry *module*, not from a number in a doc: the parse in
+`parseHarnessRegistry` is cross-checked against `HARNESSES` in `tests/heavy-tier-ledger.test.ts`, so a
+drift in either reds the gate. (A naive `[^{}]*` parse loses 4 real entries — reason strings contain
+`{missing:true}` — which is the under-count this ledger exists to prevent.)
+
 ## What is still NOT covered by a landing
 
 * the 2 mega-suites and the wall-clock suite (above) — visible in every receipt, swept nightly;
-* the browser/KAT harnesses: `scripts/lib/harness-registry.ts` declares **72 `kat` + 13 `named`**
+* the browser/KAT harnesses: `scripts/lib/harness-registry.ts` declares **72 `kat` + 14 `named`**
   harnesses that `npm test` does not run at all. `kat-python-permissioned-fetch` — the red that
   prompted this bead — lives there, not in the heavy tier. Running the heavy tier could never have
   caught it; the receipt field is what makes that population visible, and it is the next piece of
