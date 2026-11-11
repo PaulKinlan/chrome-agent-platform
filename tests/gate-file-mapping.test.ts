@@ -255,3 +255,67 @@ Deno.test("7w5k1: explainChangedFileMapping defaults to the old wording (runExit
   });
   assertStringIncludes(omittedRows[0].reason, "reachable suite not run: heavy tier owns the verdict");
 });
+
+// chrome-agent-platform-xpmke: a file the selector refused ON PURPOSE is not an unmapped GAP.
+// Two independent gates today warned "unmapped changed file(s)" about scripts/select-tests.mjs
+// and scripts/lib/changed-file-mapping.mjs — files the selector had just fail-closed on purpose —
+// and about scripts/git-hooks/pre-commit, which widened one gate to 796 suites / 341s while the
+// line read as an unexplained gap. The fleet raises its COVERAGE WARNING from the `unmapped`
+// list, so collapsing the two classes makes the warning unfixable noise a lane cannot act on.
+Deno.test("xpmke: the ledger keeps refused-by-policy files off the unmapped line, and still names them", () => {
+  const rows = explainChangedFileMapping({
+    changed: ["scripts/select-tests.mjs", "extension/no-guard.js"],
+    executedSuites: [],
+    unmappable: [
+      // the selector's own machinery: refused by coverage POLICY
+      { file: "scripts/select-tests.mjs", kind: "policy", mechanism: "the test selector's own machinery — a subset chosen by the thing under test cannot validate it" },
+      // nothing covers it: a genuine GAP
+      { file: "extension/no-guard.js", mechanism: "no graph importer and no declared guard" },
+    ],
+  });
+  const byFile = Object.fromEntries(rows.map((row: {file: string, status: string}) => [row.file, row.status]));
+  assertEquals(byFile["scripts/select-tests.mjs"], "fail-closed", "a policy refusal is not an unmapped gap");
+  assertEquals(byFile["extension/no-guard.js"], "unmapped", "a real gap keeps its own, louder word");
+
+  const lines: string[] = [];
+  emitGateLedger({ fileMapping: rows, log: (line: string) => lines.push(line) });
+
+  // The fleet parses the `unmapped` line into its COVERAGE WARNING; it must carry only the gap.
+  assertEquals(
+    lines.filter((line) => line.startsWith("fast-gate: unmapped:")),
+    ["fast-gate: unmapped: extension/no-guard.js"],
+    "the warning list contains the gap and NOT the file the selector refused on purpose",
+  );
+  assertEquals(
+    lines.filter((line) => line.startsWith("fast-gate: fail-closed:")),
+    ["fast-gate: fail-closed: scripts/select-tests.mjs"],
+  );
+  // Disclosure is not lost in the move: the reason still rides the log, per file.
+  assert(lines.some((line) => line.startsWith("fast-gate: fail-closed-reason: ") && line.includes("selector's own machinery")));
+  assert(lines.some((line) => line.startsWith("fast-gate: unmapped-reason: ") && line.includes("no declared guard")));
+});
+
+Deno.test("xpmke: an entry WITHOUT a kind keeps the old unmapped word, so no caller is silently reclassified", () => {
+  const rows = explainChangedFileMapping({
+    changed: ["extension/no-guard.js"],
+    executedSuites: [],
+    unmappable: [{ file: "extension/no-guard.js", mechanism: "no graph importer" }],
+  });
+  assertEquals(rows[0].status, "unmapped");
+});
+
+// xpmke: the manifest validator must ACCEPT the policy status, or the very ledger emission that
+// reports a fail-closed file dies on its own record (measured: without this, four
+// gate-outcome-child-run cases red because formatGateManifest throws inside emitGateLedger).
+Deno.test("xpmke: a fail-closed row is a valid reasoned placement, and still needs its reason", () => {
+  const row = { file: "scripts/select-tests.mjs", status: "fail-closed", executed_suites: [], reason: "the test selector's own machinery" };
+  const line = formatGateManifest({ tier: "fast", executed: 0, fileMapping: [row] });
+  const payload = JSON.parse(line.split(": manifest: ")[1]);
+  assertEquals(payload.file_mapping, [row], "the wire carries the policy status, not a re-labelled gap");
+  assertThrows(
+    () => formatGateManifest({ tier: "fast", executed: 0, fileMapping: [{ ...row, reason: "" }] }),
+    Error,
+    "invalid reasoned changed-file placement",
+    "an unstated reason is still refused, whatever the status",
+  );
+});

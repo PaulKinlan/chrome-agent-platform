@@ -817,7 +817,7 @@ export function planLockfileDelta(changed = [], options = {}) {
       verdict,
       files,
       mapped: [],
-      unmappable: files.map((file) => ({ file, mechanism: `${LOCKFILE_DELTA_REFUSAL} ${verdict.reason}` })),
+      unmappable: files.map((file) => ({ file, kind: "policy", mechanism: `${LOCKFILE_DELTA_REFUSAL} ${verdict.reason}` })),
       ledger,
     };
   }
@@ -1245,7 +1245,7 @@ export function exitGate(rc, { graph, ran, changed = null, failed = null }, seam
  *   changed: string[],
  *   uncovered: string[],
  *   mapped: Array<{ file: string, mechanism: string, tests: string[] }>,
- *   unmappable: Array<{ file: string, mechanism: string }>,
+ *   unmappable: Array<{ file: string, mechanism: string, kind?: "policy" | "unmapped" }>,
  *   notices: string[],
  *   guardGap: Array<{ file: string, guard: string }>,
  *   omittedReason?: string,
@@ -1278,6 +1278,11 @@ export function planSelection({
   if (selfChanged.length) {
     const unmappable = selfChanged.map((file) => ({
       file,
+      // xpmke: KIND separates "this file was refused ON PURPOSE" from "nothing covers it".
+      // Both withhold a subset, but only the second is an unmapped GAP, and collapsing them
+      // made the gate warn "unmapped" about files the selector had just refused by policy —
+      // noise a lane cannot act on, which is indistinguishable from a real gap to its reader.
+      kind: "policy",
       mechanism: "the test selector's own machinery — a subset chosen by the thing under test cannot validate it",
     }));
     return {
@@ -1373,6 +1378,12 @@ export function planSelection({
       mapped,
       unmappable: [{
         file: unresolvableGuard.file,
+        // 1lvay/xpmke integration (coord's warning, made real): h346c's refusal is a POLICY refusal — the
+        // registry names a guard the tree cannot run, so the selector is refusing by design, not reporting
+        // a file nothing covers. Without `kind` the manifest re-derives it as an unmapped GAP and the
+        // fleet raises a COVERAGE WARNING no lane can act on — exactly the noise xpmke exists to remove.
+        // The two beads merged cleanly and still contradicted each other here; this is that contradiction.
+        kind: "policy",
         mechanism: `the dedicated guard this file owns does not exist in the tree: ${unresolvableGuard.guard}` +
           ` — a registry entry naming a suite the selection cannot run is a coverage claim nobody can honour`,
       }],

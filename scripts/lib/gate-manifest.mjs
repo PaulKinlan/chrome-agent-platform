@@ -61,6 +61,12 @@ export const FLEET_MANIFEST_GRAPHS = ["FULL", "PARTIAL", "INCOMPLETE"];
 /** The Class-1 lockfile certification trail (chrome-agent-platform-lezl0). */
 export const LOCKFILE_DELTA_PREFIX = "lockfile-delta: ";
 export const GATE_UNMAPPED_PREFIX = "fast-gate: unmapped: ";
+
+/** xpmke: a file the selector refused ON PURPOSE (its own machinery, an uncertifiable
+ *  lockfile delta) is not an unmapped GAP. It gets its own line so the fleet's coverage
+ *  warning stops firing on files no lane can act on — and so a genuine gap stays loud and
+ *  alone at the top of a log. The MANIFEST row still carries the file and its reason. */
+export const GATE_FAIL_CLOSED_PREFIX = "fast-gate: fail-closed: ";
 export const GATE_UNKNOWN_PREFIX = "fast-gate: unknown: ";
 
 /** Sorted, de-duplicated suite list — the consumer compares paths verbatim. */
@@ -72,12 +78,17 @@ export function normalizeSuiteList(files = []) {
  * Candidates come from the selector's reverse graph / exact mappings; executed_suites
  * comes only from the runner. The fleet's independent extractor may find additional
  * gaps, but this ledger never claims a selected or omitted suite actually ran.
- * @param {{changed?: string[], candidates?: Record<string, string[]>, executedSuites?: string[], omitted?: Array<{file: string, reason: string}>, unmappable?: Array<{file: string, mechanism: string}>, runExitCode?: number|null}} args
+ * @param {{changed?: string[], candidates?: Record<string, string[]>, executedSuites?: string[], omitted?: Array<{file: string, reason: string}>, unmappable?: Array<{file: string, mechanism: string, kind?: "policy" | "unmapped"}>, runExitCode?: number|null}} args
  */
 export function explainChangedFileMapping({ changed = [], candidates = {}, executedSuites = [], omitted = [], unmappable = [], runExitCode = null } = {}) {
   const ran = new Set(executedSuites);
   const omittedByFile = new Map(omitted.map(({ file, reason }) => [file, reason]));
   const unmappableByFile = new Map(unmappable.map(({ file, mechanism }) => [file, mechanism]));
+  // xpmke: the selector already decided WHY it refused this file. `kind: "policy"` means the
+  // refusal is a coverage policy holding (the selector's own machinery, an uncertifiable
+  // lockfile delta), which is not the same claim as "nothing covers this file". Re-deriving the
+  // status from candidates-vs-ran here could only ever turn a policy into a gap.
+  const policyByFile = new Set(unmappable.filter((u) => u?.kind === "policy").map((u) => u.file));
   return normalizeSuiteList(changed).map((file) => {
     if (isRepoMetadata(file) || isPassiveContentFile(file)) {
       return { file, status: "not-applicable", executed_suites: [], reason: "repo metadata or passive content; no executable suite required" };
@@ -86,7 +97,12 @@ export function explainChangedFileMapping({ changed = [], candidates = {}, execu
     // suite happens to import it. Full execution is not selector authority.
     const failClosedReason = unmappableByFile.get(file);
     if (failClosedReason) {
-      return { file, status: "unmapped", executed_suites: [], reason: failClosedReason };
+      return {
+        file,
+        status: policyByFile.has(file) ? "fail-closed" : "unmapped",
+        executed_suites: [],
+        reason: failClosedReason,
+      };
     }
     const reachable = normalizeSuiteList(candidates[file] ?? []);
     const executed = reachable.filter((suite) => ran.has(suite));
@@ -232,7 +248,12 @@ export function formatGateManifest({
   if (unmappedList.length) payload.unmapped = unmappedList;
   if (fileMapping.length) {
     for (const row of fileMapping) {
-      if (!row.file || !["mapped", "unmapped", "not-applicable"].includes(row.status) || !row.reason?.trim() ||
+      // xpmke: "fail-closed" is a distinct status from "unmapped" — the selector refused the
+      // file ON PURPOSE (its own machinery, an uncertifiable lockfile delta), which is a policy
+      // holding, not a coverage gap. It is additive to the vocabulary: the fleet reads the
+      // `unmapped` LIST, not these rows (verified: no fleet consumer reads file_mapping), and
+      // keeping the two words apart is what makes that list trustworthy.
+      if (!row.file || !["mapped", "unmapped", "fail-closed", "not-applicable"].includes(row.status) || !row.reason?.trim() ||
           (row.status === "mapped" && !row.executed_suites?.length) ||
           (row.status !== "mapped" && row.executed_suites?.length)) {
         throw new Error(`gate manifest: invalid reasoned changed-file placement: ${JSON.stringify(row)}`);
@@ -454,6 +475,12 @@ export function formatGateUnmapped(files = []) {
   return list.length ? GATE_UNMAPPED_PREFIX + list.join(" ") : null;
 }
 
+/** `fast-gate: fail-closed: a b c` — null when there is nothing to report. */
+export function formatGateFailedClosed(files = []) {
+  const list = normalizeSuiteList(files);
+  return list.length ? GATE_FAIL_CLOSED_PREFIX + list.join(" ") : null;
+}
+
 /** `fast-gate: unknown: <reason>` — the run must not be read as KNOWN coverage. */
 export function formatGateUnknown(reason) {
   const text = String(reason ?? "").trim();
@@ -483,6 +510,12 @@ export function emitGateLedger({ manifest = null, unmapped = [], fileMapping = [
   const unmappedLine = formatGateUnmapped([...unmapped, ...missing.map((row) => row.file)]);
   if (unmappedLine) lines.push(unmappedLine);
   for (const row of missing) lines.push(`fast-gate: unmapped-reason: ${JSON.stringify({ file: row.file, reason: row.reason })}`);
+  // xpmke: refused-by-policy files are disclosed, but on their own line, so the fleet's
+  // `unmapped` list (the one that raises a COVERAGE WARNING) keeps only real gaps.
+  const closed = fileMapping.filter((row) => row.status === "fail-closed");
+  const closedLine = formatGateFailedClosed(closed.map((row) => row.file));
+  if (closedLine) lines.push(closedLine);
+  for (const row of closed) lines.push(`fast-gate: fail-closed-reason: ${JSON.stringify({ file: row.file, reason: row.reason })}`);
   if (unknown) lines.push(formatGateUnknown(unknown));
   for (const line of lines) log(line);
   return lines;
