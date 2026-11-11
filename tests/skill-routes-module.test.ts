@@ -88,4 +88,9 @@ Deno.test("skill routes: the file store is SHARED with the worker's catalog, nev
   assert(/import \{[^}]*skillFileStore[^}]*\} from "\.\.\/lib\/skill-files\.js"/.test(worker),
     "the worker must import the shared store rather than define its own");
   assert(!/^const skillFileStore = \{/m.test(worker), "the worker must not keep a second definition");
+  // chrome-agent-platform-d4m44: the raw writers must NOT be worker imports — the store's single
+  // definition is the whole point, and keeping writeSkillFiles/removeSkillFiles one keystroke away
+  // from a future worker handler re-opens the second write path the move closed.
+  assert(!/\bwriteSkillFiles\b/.test(worker), "the worker must not import the raw writer — go through skillFileStore");
+  assert(!/\bremoveSkillFiles\b/.test(worker), "the worker must not import the raw remover — go through skillFileStore");
 });

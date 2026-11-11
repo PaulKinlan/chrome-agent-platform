@@ -294,7 +294,7 @@ import {
   formatSiteAgentName,
   recoverDeclaringPageIdentity,
 } from "../lib/site-identity.js";
-import { allSkills, getSkills, setSkills, getSiteNote, setSiteNote } from "../lib/skills.js";
+import { getSkills, getSiteNote } from "../lib/skills.js";
 import {
   createNamedAgent,
   deleteNamedAgent,
@@ -466,19 +466,14 @@ import { getSkill, SKILLS, backgroundSkills, intentOf, agentSkillIds, mergeRunSk
 import { skillMatchesUrl } from "../shared/match-patterns.js";
 import { resolveSkillRef, createMemoizedSkillStores } from "../lib/skill-resolve.js";
 import {
-  fetchSkillFromUrl,
-  installImportedSkill,
-  removeImportedSkill,
   loadAllImportedSkills,
-  discoverRepoSkillsAndCommands,
-  installBatchSkillsAndCommands,
   loadAllImportedCommands,
   removeImportedCommand,
   adoptImportedCommand,
   validateTaskInstructionAdmission,
   IMPORTED_COMMAND_REVIEW_REQUIRED_STATUS,
 } from "../lib/skill-import.js";
-import { readSkillFile, skillFileStore, writeSkillFiles, removeSkillFiles } from "../lib/skill-files.js";
+import { readSkillFile, skillFileStore } from "../lib/skill-files.js";
 import { attachedSkillRefs, JOURNALED_SKILLS_CAP } from "../lib/skill-promotion.js";
 import { durableRuns, sweepOrphanAgentData } from "../lib/durable-runs.js";
 import { replaySafetyForTool } from "../lib/tool-replay-safety.js";
