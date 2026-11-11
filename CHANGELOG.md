@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.743] — 2026-11-11
+- A tool's web request is now refused instead of followed when a site tries to redirect it to your own network or to a cloud metadata address.
+
 ## [0.3.742] — 2026-11-11
 - Imported skills' names and descriptions can no longer pose as instructions to the agent, and built-in skills' descriptions render without mangling.
 
