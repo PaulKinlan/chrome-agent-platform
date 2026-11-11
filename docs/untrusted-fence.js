@@ -42,6 +42,23 @@ export function untrustedClose(token) {
   return `<<<END run:${token}>>>`;
 }
 
+/** Escape a string for literal embedding in prompt markup (el1zy). Builders
+ * that assemble structured prompt blocks (<cap-skill ref="..." name="...">
+ * etc.) from untrusted metadata are the markup authority: the only tag and
+ * attribute syntax in their output must be the syntax the builder itself
+ * emitted. Escaping & < > " makes a hostile field unable to close an element,
+ * open a fake one, or break out of an attribute value — the text still reaches
+ * the model, but as inert data, not as structure. (Content that is MEANT to be
+ * a quoted block uses the fence above instead; this is for the short metadata
+ * fields that live inside the builder's own tags.) */
+export function escapeUntrustedMarkup(text) {
+  return String(text ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
+}
+
 /** Check whether text is a structurally well-formed, fully closed untrusted fence
  * with matching open and close delimiters and nothing trailing after the close (tos4l). */
 export function isWellFormedFenceWithToken(text, token = UNTRUSTED_TOKEN_PLACEHOLDER) {

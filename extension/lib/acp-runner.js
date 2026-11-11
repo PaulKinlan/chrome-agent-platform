@@ -12,6 +12,7 @@ import {
   wrapUntrustedContent,
   isWellFormedFenceWithToken,
   UNTRUSTED_TOKEN_PLACEHOLDER,
+  escapeUntrustedMarkup,
 } from "./untrusted-fence.js";
 
 
@@ -76,14 +77,22 @@ export function buildPromptWithSkillContext(task, skills, runToken = null) {
     const safePrompt = isImported && promptText && !isWellFormedFenceWithToken(promptText, token)
       ? wrapUntrustedContent(promptText, token)
       : promptText;
+    // el1zy: refId/name/description come from imported-skill frontmatter
+    // (skill-import.js parses them with no escaping), so they are untrusted.
+    // They are rendered escaped so the only markup in the assembled block is
+    // the builder's own; the fence below covers the body.
     return (
-      `<cap-skill ref="${s.refId}" name="${s.name}">\n` +
-      (s.description ? `<description>${s.description}</description>\n` : "") +
+      `<cap-skill ref="${escapeUntrustedMarkup(s.refId)}" name="${escapeUntrustedMarkup(s.name)}">\n` +
+      (s.description ? `<description>${escapeUntrustedMarkup(s.description)}</description>\n` : "") +
       `<instructions>\n${safePrompt}\n</instructions>\n` +
       `</cap-skill>`
     );
   }).join("\n");
-  return `<cap-skills>\n${block}\n\n${String(task ?? "")}`;
+  // el1zy: the wrapper is CLOSED here. Unclosed, the first hostile "</cap-skills>"
+  // in untrusted metadata became the only close in the payload — ending the
+  // skills block early and evicting the owner's task from it. Now the builder's
+  // own close is the only one, and the owner's text sits outside the block.
+  return `<cap-skills>\n${block}\n</cap-skills>\n\n${String(task ?? "")}`;
 }
 
 /**
