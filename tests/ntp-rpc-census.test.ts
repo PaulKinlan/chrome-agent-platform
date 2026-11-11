@@ -3,7 +3,14 @@
 // Asserts that:
 // 1. Fresh ntp.html boot fires <= 22 RPCs (lowered from 24 in zdaj: coalesced all 4 duplicate routes, down from 54).
 // 2. Idle window fires <= 2 RPCs (down from 11).
-// 3. Opening a thread fires <= 4 RPCs (down from 14–21).
+// 3. A click on a thread row DISPATCHES EXACTLY ONE thread.get inside its dispatch burst.
+//
+// 8ijxu SCOPE — NARROWED ON PURPOSE (coord, three review rounds): item 3 is the claim the causal
+// boundary can actually observe. It counts the calls the click handler dispatches in its own task
+// plus microtask drain, and NOTHING ELSE. In particular an open RETRIED after an MV3 service-worker
+// restart (openThread's 400 ms second thread.get) ISSUES A CALL THIS TEST DOES NOT COUNT — that path
+// is covered by NOTHING today and is tracked as chrome-agent-platform-q5stl. Do not widen this claim
+// back into 'thread open fires <= N RPCs': the wider claim is what three reviews rejected.
 
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { launchChrome, openCdp, waitForServiceWorker, computeUnpackedExtensionId, resolveChromiumBinaryReport, teardownChrome } from "../scripts/lib/chrome-launch.ts";
@@ -34,7 +41,14 @@ const RPC_SHIM = `(() => {
       const m = args.find(a => a && typeof a === 'object');
       const t = performance.now();
       const p = orig(...args);
-      const row = { type: m?.type ?? '?', payload: m, at: Math.round(t), ms: null };
+      // 8ijxu: BURST TAGGING. The census must count the RPCs the CLICK dispatches, and no
+      // time-based rule can separate those from unrelated hydration/poll traffic that happens to be
+      // in flight (measured: hydration calls landing 1.3-2.3 s after the click made the count swing
+      // between 4 and 5 run to run, and "wait until everything settled" never converged — 22 boot
+      // calls never resolve even unthrottled). A causal boundary needs no clock: while
+      // C.burst === true a call is tagged as click-dispatched, and the flag is only true across the
+      // click's own synchronous dispatch plus its microtask drain.
+      const row = { type: m?.type ?? '?', payload: m, at: Math.round(t), ms: null, burst: C.burst === true };
       C.log.push(row);
       if (p && p.then) {
         p.then(() => { row.ms = Math.round(performance.now() - t); }, () => { row.ms = -1; });
@@ -46,7 +60,7 @@ const RPC_SHIM = `(() => {
       rt.connect = (...a) => {
         const port = oc(...a);
         const name = a.find(x => x && x.name)?.name ?? '?';
-        C.log.push({ type: 'connect:' + name, at: Math.round(performance.now()), ms: 0 });
+        C.log.push({ type: 'connect:' + name, at: Math.round(performance.now()), ms: 0, burst: C.burst === true });
         try {
           port.onMessage?.addListener?.((msg) => {
             C.events.push({ at: Math.round(performance.now()), msg });
@@ -69,7 +83,7 @@ function census(log: any[]) {
 }
 
 Deno.test({
-  name: "ntp-rpc-census: cold boot <= 22 RPCs, idle <= 2 RPCs, thread open <= 4 RPCs",
+  name: "ntp-rpc-census: cold boot <= 22 RPCs, idle <= 2 RPCs, and a thread-row click dispatches exactly ONE thread.get in its burst",
   sanitizeOps: false,
   sanitizeResources: false,
   fn: async () => {
@@ -148,30 +162,106 @@ Deno.test({
       await sleep(2000);
 
       await cdp.send("Page.navigate", { url: `chrome-extension://${EXPECTED_ID}/ntp/ntp.html` }, o.sessionId);
-      await sleep(3000);
 
+      // 8ijxu EVIDENCE KNOB: emulate the starved box deterministically instead of hoping for one.
+      // CAP_CENSUS_CPU_THROTTLE=20 makes Chrome throttle this page's main thread 20x through CDP, so
+      // hydration lands far past any fixed sleep — the condition that produced the original red. The
+      // gate below runs this file BOTH ways at that rate (see the bead): the retired stopwatch shape
+      // reds 'no thread row found in sidebar', the state-wait shape passes. Default 1 = no change
+      // for every other caller.
+      const throttle = Number(Deno.env.get("CAP_CENSUS_CPU_THROTTLE") ?? "1");
+      if (Number.isFinite(throttle) && throttle > 1) {
+        await cdp.send("Emulation.setCPUThrottlingRate", { rate: throttle }, o.sessionId);
+      }
+
+      // 8ijxu: this step used to be a STOPWATCH — reload, sleep(3000), then look for the row. On a
+      // starved box (50-87% steal) hydration had not finished at the 3 s mark, so the census redded
+      // with 'no thread row found in sidebar': a wall-clock assertion that cannot tell a slow box
+      // from a product defect. It is now a WAIT-ON-STATE with a named bound (never a raised sleep):
+      // wait for the row the seed guarantees, wait for the RPC log to go QUIET so the count that
+      // follows is the click's own (not whatever hydration still owed), then click and wait for the
+      // view to actually open. A row that never appears, or a view that never opens, still FAILS —
+      // with the state it saw — so starvation can neither pass vacuously nor red the wrong cause.
       const openResult = await cdp.eval(o.sessionId, `(async () => {
-        window.__rpc.log.length = 0;
-        const btn = document.querySelector('#thread-sidebar .thread-item .t-open');
-        if (!btn) return { err: 'no thread row found in sidebar' };
-        const tv = document.getElementById('thread-view');
-        btn.click();
-        let waited = 0;
-        while (waited < 5000) {
-          await new Promise(r => setTimeout(r, 16));
-          waited += 16;
-          if (!tv.hidden) break;
+        // ROW APPEARANCE is a state wait (15 s bound): without it the click would land on a sidebar
+        // that is not there yet, which is the load-sensitive red this bead is about. No other timing
+        // rule takes part in the measurement itself — the count below is causal, not temporal.
+        const ROW_BOUND_MS = 15000;
+        const OPEN_BOUND_MS = 10000;
+        const waitUntil = async (pred, boundMs, step = 50) => {
+          const t0 = Date.now();
+          while (Date.now() - t0 < boundMs) { if (pred()) return true; await new Promise(r => setTimeout(r, step)); }
+          return pred();
+        };
+
+        const rowAppeared = await waitUntil(() => !!document.querySelector('#thread-sidebar .thread-item .t-open'), ROW_BOUND_MS);
+        if (!rowAppeared) {
+          return {
+            err: 'no thread row appeared within ' + ROW_BOUND_MS + 'ms of the reload: the seeded run never produced a sidebar row' +
+              ' (threadItems=' + document.querySelectorAll('#thread-sidebar .thread-item').length +
+              ', sidebar=' + !!document.querySelector('#thread-sidebar') + ') — this is a product/seed failure, not a timing one',
+          };
         }
-        await new Promise(r => setTimeout(r, 300));
-        const rpcs = JSON.parse(JSON.stringify(window.__rpc.log));
-        return { rpcs: rpcs.length, list: rpcs.map(r => r.type) };
+
+        // OUT OF SCOPE FOR THIS TEST, EXPLICITLY: a thread open whose first read loses the race with
+        // an MV3 service-worker boot issues a SECOND thread.get 400 ms later (openThread's retry). That
+        // call follows an await + a sleep, so it sits outside this burst and is NOT counted here. No
+        // other test counts it either — the retry path is unobserved, tracked as
+        // chrome-agent-platform-q5stl — and that hole is exactly why this test claims ONE dispatch in
+        // the burst rather than a budget over the whole open.
+        // THE CAUSAL WINDOW. The shim tags a call when C.burst is true; the flag is set immediately
+        // before the click and cleared after the click's dispatch has run through its microtasks, so a
+        // call issued by the click handler (or by the promise chain it starts in the same task) is
+        // tagged, while a hydration/poll call issued later from a timer is not. Nothing here depends on
+        // how long anything takes: the same code takes the same tags on a fast or a starved box.
+        const tv = document.getElementById('thread-view');
+        const btn = document.querySelector('#thread-sidebar .thread-item .t-open');
+        window.__rpc.burst = true;
+        btn.click();
+        await Promise.resolve();
+        await Promise.resolve();
+        window.__rpc.burst = false;
+
+        const opened = await waitUntil(() => tv && !tv.hidden, OPEN_BOUND_MS);
+        const burst = JSON.parse(JSON.stringify(window.__rpc.log.filter(r => r.burst === true)));
+        return {
+          rpcs: burst.length,
+          list: burst.map(r => r.type),
+          opened,
+          // The whole page's RPC traffic, reported for context only — it is NOT asserted on, because
+          // it contains hydration and polling that this claim was never about.
+          ambient: window.__rpc.log.length,
+          // FAIL-CLOSED WITNESSES (8ijxu r4, coord): an empty burst must be an ERROR, never a pass with
+          // zero samples. 'tagged === samples' proves the shim actually wrote the burst tag on every row
+          // it recorded — a shim that never read the flag would leave tagged at 0 for ever and every run
+          // would then 'pass' by observing nothing. 'flagReadable' proves the flag was set and read back.
+          samples: window.__rpc.log.length,
+          tagged: window.__rpc.log.filter(r => Object.prototype.hasOwnProperty.call(r, 'burst')).length,
+          flagReadable: window.__rpc.burst === false,
+        };
       })()`);
 
       assert(!openResult.err, openResult.err);
+      // Print the measured burst so consecutive runs are COMPARABLE by eye in CI logs.
+      console.log(`thread-open burst (${openResult.rpcs}): ${JSON.stringify(openResult.list)} · ambient page traffic: ${openResult.ambient} · samples ${openResult.tagged}/${openResult.samples} tagged`);
+      // FAIL-CLOSED FIRST (coord): if the shim never wrote the burst tag, or the flag could not be set
+      // and read back, this session observed NOTHING — error out rather than let a zero-sample run read
+      // as a tidy 'exactly one call'.
       assert(
-        openResult.rpcs <= 4,
-        `Thread open RPC count ${openResult.rpcs} must be <= 4 (was 14–21 before coalescing)`
+        openResult.samples > 0 && openResult.tagged === openResult.samples,
+        `the burst tag is missing from ${openResult.samples - openResult.tagged} of ${openResult.samples} recorded RPC rows — the census observed nothing and must fail closed`,
       );
+      assert(openResult.flagReadable === true, "the click burst flag could not be set and read back, so the dispatch window is unproven");
+      assert(openResult.opened !== false, "the thread view must become visible after the click");
+      // THE NARROWED CLAIM (8ijxu r4, coord): exactly one thread.get inside the click's dispatch burst.
+      // A second dispatch in the same task is a de-coalescing regression and reds here; a retried open
+      // after a service-worker restart is outside this boundary by design (chrome-agent-platform-q5stl).
+      assertEquals(
+        openResult.rpcs,
+        1,
+        `the click's dispatch burst must carry EXACTLY ONE RPC; dispatched ${openResult.rpcs}: ` + JSON.stringify(openResult.list),
+      );
+      assertEquals(openResult.list, ["thread.get"], "the one dispatched RPC must be thread.get");
     } finally {
       if (cdp) cdp.close();
       await teardownChrome(chrome, profile);
