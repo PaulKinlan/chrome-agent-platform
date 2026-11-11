@@ -136,14 +136,29 @@ const PARSER_POLICY = "cap-js-capability-admission-ast-v2";
 const INDIRECT_METHOD_NAMES = new Set(["call", "apply", "bind"]);
 const FIRST_ARG_INVOKE_METHOD_NAMES = new Set(["call", "apply", "bind", "construct"]);
 
-/** Strip SequenceExpression parens-spelling: the effective callee/argument is
- * the last expression — `(0, self.fetch)(x)` invokes self.fetch. */
-function effectiveTarget(node) {
-  let cursor = node;
-  while (cursor?.type === "SequenceExpression" && Array.isArray(cursor.expressions) && cursor.expressions.length) {
-    cursor = cursor.expressions[cursor.expressions.length - 1];
+/** Terminal candidate nodes of a call target or helper argument (2lx02
+ * composed spellings): a sequence resolves to its last expression, and a
+ * logical/conditional spelling is judged on EVERY branch — a scan cannot know
+ * which branch fires, so fail-closed judges all of them. Iterative: the main
+ * walk's node budget bounds what is ever reachable here, and untrusted AST
+ * depth must never become host recursion depth. */
+function targetCandidates(node) {
+  const out = [];
+  const stack = [node];
+  while (stack.length) {
+    const cur = stack.pop();
+    if (!cur || typeof cur !== "object") continue;
+    if (cur.type === "SequenceExpression" && Array.isArray(cur.expressions) && cur.expressions.length) {
+      stack.push(cur.expressions[cur.expressions.length - 1]);
+    } else if (cur.type === "LogicalExpression") {
+      stack.push(cur.left, cur.right);
+    } else if (cur.type === "ConditionalExpression") {
+      stack.push(cur.consequent, cur.alternate);
+    } else {
+      out.push(cur);
+    }
   }
-  return cursor;
+  return out;
 }
 
 /** The call/new deny entries whose capability names include `name`. */
@@ -194,7 +209,15 @@ function memberChain(node) {
   const names = [];
   let opaque = false;
   let cursor = node;
-  while (cursor?.type === "MemberExpression") {
+  while (cursor?.type === "MemberExpression" || cursor?.type === "SequenceExpression") {
+    // 2lx02: a sequence-parenthesised receiver is not opaque — (0, self.fetch).call
+    // resolves to the chain of its last expression, exactly like an argument.
+    if (cursor.type === "SequenceExpression") {
+      cursor = Array.isArray(cursor.expressions) && cursor.expressions.length
+        ? cursor.expressions[cursor.expressions.length - 1]
+        : null;
+      continue;
+    }
     const prop = cursor.property;
     if (prop.type === "Identifier") names.unshift(prop.name);
     else if (prop.type === "Literal" && typeof prop.value === "string") names.unshift(prop.value);
@@ -256,18 +279,45 @@ function judgeAst(ast) {
       // Alias-extracting spellings of call/new capabilities (zwhbv):
       // <capability>.call / .apply / .bind — denied where it appears, called
       // or not, because the extracted method IS the capability alias.
-      if (names.length >= 2 && INDIRECT_METHOD_NAMES.has(last)) {
-        for (const listItem of callNewEntriesFor(names[names.length - 2])) deny(listItem);
+      // 2lx02: the RECEIVER may itself be wrapped — (0, self.fetch).call,
+      // (cond ? self.fetch : other).bind — so the capability name is looked
+      // for in EVERY terminal receiver candidate, not just one chain.
+      if (INDIRECT_METHOD_NAMES.has(last)) {
+        // The capability is the TERMINAL of the receiver chain; this node's own
+        // property is the alias method. A plain receiver yields the full chain
+        // (method included → capability at [length-2]); a composed receiver
+        // yields one receiver-only chain per candidate → capability at
+        // [length-1].
+        const composed = node.object?.type === "LogicalExpression" || node.object?.type === "ConditionalExpression";
+        const receiverChains = [];
+        if (composed) {
+          for (const cand of targetCandidates(node.object)) {
+            if (cand?.type === "Identifier") receiverChains.push([cand.name]);
+            else if (cand?.type === "MemberExpression") receiverChains.push(memberChain(cand).names);
+          }
+        } else {
+          receiverChains.push(names);
+        }
+        for (const chain of receiverChains) {
+          const capability = composed
+            ? chain[chain.length - 1]
+            : chain[chain.length - 2];
+          if (capability) {
+            for (const listItem of callNewEntriesFor(capability)) deny(listItem);
+          }
+        }
       }
     } else if (node.type === "Identifier") {
       const hit = DENY_SINGLE_NAMES.get(node.name);
       if (hit) deny(hit);
     } else if (node.type === "NewExpression" || node.type === "CallExpression") {
-      // Sequence-expression parens-spelling resolves to its last expression:
-      // (0, self.fetch)(x) is a fetch call (zwhbv).
-      const callee = effectiveTarget(node.callee);
-      const name = calleeName(callee);
-      if (name) {
+      // Composed spellings resolve to EVERY terminal candidate (2lx02):
+      // (0, self.fetch)(x), (true && self.fetch)(x), (cond ? a : b)(x) are all
+      // calls whose callee is one of the candidates — a scan cannot know which
+      // fires, so each is judged and any match denies.
+      for (const callee of targetCandidates(node.callee)) {
+        const name = calleeName(callee);
+        if (!name) continue;
         for (const listItem of EMSCRIPTEN_JS_CAPABILITY_DENY_LIST) {
           if (listItem.kind !== "new" && listItem.kind !== "call") continue;
           if (listItem.kind === "new" && node.type !== "NewExpression") continue;
@@ -286,13 +336,20 @@ function judgeAst(ast) {
           }
         }
         // First-argument invocation of a capability through a helper
-        // (zwhbv): f.call(<cap>, …), f.apply(<cap>, …), f.bind(<cap>, …),
-        // Reflect.construct(<cap>, …). Any receiver, fail-closed; the
-        // argument is unwrapped through SequenceExpression spelling first.
+        // (zwhbv; positions extended per 2lx02): f.call(<cap>, …),
+        // f.apply(<cap>, …), f.bind(<cap>, …), Reflect.construct(<cap>, …)
+        // put the capability at arguments[0] — but routing the HELPER itself
+        // through .call/.apply/.bind shifts it to arguments[1]
+        // (Reflect.construct.call(null, <cap>, …), f.bind(null, <cap>)).
+        // Any receiver, fail-closed; each argument candidate is judged.
         if (node.type === "CallExpression" && FIRST_ARG_INVOKE_METHOD_NAMES.has(name)) {
-          const argName = calleeName(effectiveTarget(node.arguments?.[0]));
-          if (argName) {
-            for (const listItem of callNewEntriesFor(argName)) deny(listItem);
+          for (const argIndex of [0, 1]) {
+            for (const argTarget of targetCandidates(node.arguments?.[argIndex])) {
+              const argName = calleeName(argTarget);
+              if (argName) {
+                for (const listItem of callNewEntriesFor(argName)) deny(listItem);
+              }
+            }
           }
         }
       }

@@ -457,8 +457,26 @@ Deno.test("js-capability admission: one static indirection hop does not defeat a
     assertEquals(ok, false, `same-class indirection must refuse: ${src}`);
     assertEquals(error.code, "js_capability_denied");
   }
+  // COMPOSED spellings (2lx02 review): the zwhbv shapes composed with each
+  // other — a sequence-wrapped capability re-aliased through .call/.bind, the
+  // helper itself invoked through .call (capability shifted to arguments[1]),
+  // and logical/conditional callee spellings.
+  for (const [src, code] of [
+    [`(0, self.fetch).call(null, "/x");`, "fetch_call"],
+    [`(0, self.fetch).bind(null)("/x");`, "fetch_call"],
+    [`Reflect.construct.call(null, self.Worker, ["blob:null/x"]);`, "worker_construction"],
+    [`Reflect.apply.call(null, self.fetch, null, ["/x"]);`, "fetch_call"],
+    [`(true && self.fetch)("/x");`, "fetch_call"],
+    [`(cond ? self.fetch : other).call(null, "/x");`, "fetch_call"],
+  ]) {
+    const { ok, error } = scanSource(`export const q = () => ${src}`);
+    assertEquals(ok, false, `composed indirection must refuse: ${src}`);
+    assertEquals(error.code, "js_capability_denied");
+    assertEquals(error.detail, `glue:${code}`, `typed code must name the entry: ${src}`);
+  }
   // No overreach: the same helpers over NON-capability receivers/values stay
-  // clean, identifier suffixes are still not capabilities.
+  // clean, identifier suffixes are still not capabilities — including the
+  // composed helpers over benign receivers.
   for (const clean of [
     `export const q = () => arr.map.call(arr, f);`,
     `export const q = () => Reflect.construct(Map, []);`,
@@ -467,6 +485,9 @@ Deno.test("js-capability admission: one static indirection hop does not defeat a
     `export const q = () => utils.applyDefaults(opts);`,
     `export const q = () => obj.callCap(ctx, v);`,
     `export const q = () => new Workerish("w.mjs");`,
+    `export const q = () => Reflect.construct.call(null, Map, []);`,
+    `export const q = () => (true && cb)("/x");`,
+    `export const q = () => helper.bind(null, payload);`,
   ]) {
     const { ok } = scanSource(clean);
     assertEquals(ok, true, `benign helper use must not refuse: ${clean}`);
