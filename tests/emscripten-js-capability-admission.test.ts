@@ -478,6 +478,15 @@ Deno.test("js-capability admission: one static indirection hop does not defeat a
     // coord acceptance: a wrapper-of-a-wrapper of the capability refuses.
     [`w2(w1(self.fetch))("/x");`, "fetch_call"],
     [`wrap(Reflect.construct)(self.Worker, ["blob:null/x"]);`, "worker_construction"],
+    // round-4 (rev-zwhbv-r3 on 4e4fb3c86): a STATIC template-literal key is
+    // the same name to the engine — self[`fetch`] executes fetch exactly like
+    // self["fetch"], in member, new, call and object-key positions.
+    ['self[`fetch`]("/x");', "fetch_call"],
+    ['new self[`Worker`]("blob:null/x");', "worker_construction"],
+    ['use({ [`fetch`]: 1 });', "fetch_call"],
+    ['self?.[`fetch`].call(null, "/x");', "fetch_call"],
+    // substituted templates stay non-static: the computed residual, not a pass
+    // on a name the scan can see.
   ]) {
     const { ok, error } = scanSource(`export const q = () => ${src}`);
     assertEquals(ok, false, `composed indirection must refuse: ${src}`);
