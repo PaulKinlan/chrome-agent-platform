@@ -157,6 +157,16 @@ export const HARNESSES: Record<string, HarnessEntry> = {
     npm: "test:heavy",
     reason: "does NOT take the fleet turn: executes WASM and heavy binary fixture tests in a dedicated tier (chrome-agent-platform-o29c0)",
   },
+  // chrome-agent-platform-1lvay (c): the SCHEDULED mega sweep. Classed `named` rather than `gate` on
+  // purpose — it must NOT take the fleet turn or join `test:all`, because it runs the two mega-suites a
+  // landing's gate cannot afford (2310s measured, 6.4x the full gate). Cron invokes the command directly
+  // at 04:30 daily (docs/heavy-tier.md); the npm script exists so a human can run it on demand and so the
+  // registry's own guard has a script to point at. On FAIL it files a P1 bead instead of printing a report.
+  "heavy-mega-sweep.ts": {
+    class: "named",
+    npm: "test:heavy-mega",
+    reason: "scheduled sweep for the 2 mega heavy suites; auto-files a P1 on red so a deferred-tier failure cannot stay invisible",
+  },
 
   // ── named (npm script, run on demand) ───────────────────────────────────
   "agent-access-journeys.ts": { class: "named", npm: "test:agent-access", reason: "81/7 at the re-inventory (seven agent-access checks red); 90 s; promote to a gate once green" },

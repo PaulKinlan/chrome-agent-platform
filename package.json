@@ -22,6 +22,7 @@
     "test": "node scripts/run-tests.mjs",
     "test:build": "deno run -A scripts/build-gate.ts",
     "test:heavy": "deno run -A scripts/heavy-gate.ts",
+    "test:heavy-mega": "deno run -A scripts/heavy-mega-sweep.ts",
     "test:changed": "node scripts/select-tests.mjs",
     "gate:fast": "node scripts/select-tests.mjs --build-if-needed",
     "test:file": "CAP_TEST_RUNNER=1 deno test -A --config deno.runner.jsonc",
