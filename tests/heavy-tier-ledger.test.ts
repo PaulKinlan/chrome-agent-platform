@@ -8,7 +8,7 @@
 //   (d) the receipt states which tiers ran, in words that read like the gap rather than a note,
 //   (c) the mega pair is swept on a schedule that AUTO-FILES a P1 on red (bound <= 24h).
 // These tests pin the three halves that are pure, because a live gate cannot exercise them in CI.
-import { assert, assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
+import { assert, assertEquals, assertStringIncludes, assertThrows } from "jsr:@std/assert@1";
 import {
   DEFERRED_HEAVY_FILES,
   HEAVY_GATE_FILES,
@@ -238,4 +238,31 @@ Deno.test("1lvay (d): a FAILED population is reported as a red, not as a gap or 
   assertEquals(otherTree.status, "failed");
   assertStringIncludes(otherTree.line, "NOT RUN at this sha");
   assertStringIncludes(otherTree.line, "last run deadbeef0 FAIL");
+});
+
+Deno.test("1lvay: the registry parser FAILS LOUDLY on anything it cannot classify — a census must not under-count", () => {
+  // The defect class this whole bead is about, one level down: a census that drops entries it could not
+  // parse reads as a PASS. Measured on my own first attempt — a naive [^{}]* body match lost FOUR real
+  // entries (reason strings contain `{missing:true}`) and reported 70 kat instead of 72.
+  assertThrows(
+    () => parseHarnessRegistry(`export const HARNESSES: Record<string, HarnessEntry> = {\n  "silent-drop.ts": { npm: "test:x" },\n};`),
+    Error,
+    "declares no readable class",
+    "an entry with no class must be a parse failure, never an absence",
+  );
+  // And a file whose registry literal cannot be found must not report a population of zero.
+  assertThrows(
+    () => parseHarnessRegistry("// no registry here"),
+    Error,
+    "cannot find the HARNESSES registry literal",
+  );
+  // Braces inside strings and comments must not shorten the literal: the real file has both.
+  const sample = `export const HARNESSES: Record<string, HarnessEntry> = {
+  // { "documented-in-prose.ts": { exit, at } }
+  "one.ts": { class: "kat", reason: "throws with {missing:true}" },
+  "two.ts": { class: "named", npm: "x", reason: 'says {ok:false,error}' },
+};`;
+  const parsed = parseHarnessRegistry(sample);
+  assertEquals(parsed.classes.kat, ["one.ts"]);
+  assertEquals(parsed.classes.named, ["two.ts"]);
 });

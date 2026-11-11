@@ -45,7 +45,23 @@ const TIER_LABELS = Object.freeze({
  * @returns {{ files: string[], classes: Record<string, string[]> }}
  */
 export function parseHarnessRegistry(text) {
-  const lines = String(text ?? "").split("\n");
+  const source = String(text ?? "");
+  // Scope the scan to the HARNESSES literal. Without that, every `"name.ts": {…}` map in the file would
+  // look like a registry entry — and a broad scan cannot tell a real entry it failed to parse from a key
+  // that was never one, which is how a census under-counts and still reads as a pass.
+  // Comments inside the literal document harnesses in prose (`// { "kat-x.ts": { exit, at } }`) and
+  // carry braces; leaving them in makes the brace match close early and the census read short — which is
+  // precisely the failure this parser now refuses to make quietly.
+  const stripped = stripLineComments(source);
+  const declared = /export const HARNESSES[^=]*=\s*\{/.exec(stripped);
+  if (!declared) {
+    throw new Error("tier ledger: cannot find the HARNESSES registry literal — refusing to report a population of 0");
+  }
+  const bodyStart = declared.index + declared[0].length;
+  const body = stripped.slice(bodyStart);
+  const closeAt = matchingBrace(body);
+  if (closeAt < 0) throw new Error("tier ledger: HARNESSES literal is unbalanced — refusing to guess its contents");
+  const lines = body.slice(0, closeAt).split("\n");
   const byClass = new Map();
   let entry = null; // { file, body, depth }
   for (const raw of lines) {
@@ -77,10 +93,17 @@ export function parseHarnessRegistry(text) {
     }
     if (entry.depth <= 0) {
       const cls = /\bclass:\s*"([a-z-]+)"/.exec(entry.body)?.[1];
-      if (cls) {
-        if (!byClass.has(cls)) byClass.set(cls, new Set());
-        byClass.get(cls).add(entry.file);
+      if (!cls) {
+        // FAIL LOUDLY. Dropping an entry we could not classify is exactly how a census reports a
+        // population that is missing members while still looking green — the defect this bead is about,
+        // one level down. A registry entry with no readable class is a parse failure, not an absence.
+        throw new Error(
+          `tier ledger: registry entry ${JSON.stringify(entry.file)} declares no readable class — ` +
+            `refusing to under-count the population by skipping it`,
+        );
       }
+      if (!byClass.has(cls)) byClass.set(cls, new Set());
+      byClass.get(cls).add(entry.file);
       entry = null;
     }
   }
@@ -90,6 +113,59 @@ export function parseHarnessRegistry(text) {
   }
   const files = Object.values(classes).flat().sort();
   return { files, classes };
+}
+
+/**
+ * Index of the `}` that closes the object starting just before `text`, or -1. String-aware, because
+ * `reason` text legitimately contains braces (`{missing:true}`, `{ok:false,error}`).
+ * @param {string} text
+ * @returns {number}
+ */
+/**
+ * Remove `//` comments and everything after them, per line, without touching string contents.
+ * @param {string} text
+ * @returns {string}
+ */
+function stripLineComments(text) {
+  const out = [];
+  for (const line of String(text ?? "").split("\n")) {
+    let inString = false;
+    let quote = "";
+    let cut = line.length;
+    for (let i = 0; i < line.length; i += 1) {
+      const ch = line[i];
+      if (inString) {
+        if (ch === "\\") { i += 1; continue; }
+        if (ch === quote) inString = false;
+        continue;
+      }
+      if (ch === '"' || ch === "'" || ch === "`") { inString = true; quote = ch; continue; }
+      if (ch === "/" && line[i + 1] === "/") { cut = i; break; }
+    }
+    out.push(line.slice(0, cut));
+  }
+  return out.join("\n");
+}
+
+function matchingBrace(text) {
+  let depth = 1;
+  let inString = false;
+  let quote = "";
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    if (inString) {
+      if (ch === "\\") i += 1;
+      else if (ch === quote) inString = false;
+      continue;
+    }
+    if (ch === '"' || ch === "'" || ch === "`") { inString = true; quote = ch; continue; }
+    if (ch === "{") depth += 1;
+    else if (ch === "}") {
+      depth -= 1;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
 }
 
 /** The population a landing's gate never runs: registry classes `kat` and `named`. */
