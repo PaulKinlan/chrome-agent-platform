@@ -13,7 +13,7 @@
 
 import { fileURLToPath } from "node:url";
 import { homedir, platform } from "node:os";
-import { join, dirname } from "node:path";
+import { join, dirname, relative, isAbsolute } from "node:path";
 import { existsSync, mkdirSync, writeFileSync, rmSync, readFileSync, readdirSync } from "node:fs";
 
 const HOME = homedir();
@@ -60,6 +60,7 @@ export const manifestPath = () => join(manifestDirs()[0], `${HOST_NAME}.json`);
 
 /** Find the unpacked extension's id by matching its path in a Chrome profile. */
 function detectExtensionId() {
+  const settingsByPrefs = [];
   const profiles = [];
   const bases = OS === "darwin"
     ? [join(HOME, "Library", "Application Support", "Google", "Chrome")]
@@ -73,12 +74,30 @@ function detectExtensionId() {
   }
   for (const prefs of profiles) {
     try {
-      const settings = JSON.parse(readFileSync(prefs, "utf8"))?.extensions?.settings ?? {};
-      for (const [id, value] of Object.entries(settings)) {
-        const p = String(value?.path ?? "");
-        if (p && ROOT.startsWith(p) && /^[a-p]{32}$/.test(id)) return id;
-      }
+      settingsByPrefs.push(JSON.parse(readFileSync(prefs, "utf8"))?.extensions?.settings ?? {});
     } catch { /* unreadable profile */ }
+  }
+  return detectExtensionIdInSettings(settingsByPrefs);
+}
+
+/** The containment rule (chrome-agent-platform-6lvbx): the loaded extension's
+ * path must be a genuine CHILD of the repo root. The old `ROOT.startsWith(p)`
+ * was a raw string prefix with no separator boundary, so a SIBLING whose path
+ * is a string prefix (`/repo/bu` for `/repo/build`), an ANCESTOR (`/repo`),
+ * the root itself, or a `..` traversal all matched — and the first match's id
+ * became the ONLY allowed_origin of the shell-capable native-messaging host.
+ * `path.relative` is the real containment check: empty, `..`-prefixed or
+ * absolute results refuse. Exported with injectable settings so the
+ * acceptance test can feed fixture profiles without a real Chrome profile. */
+export function detectExtensionIdInSettings(settingsByPrefs, root = ROOT) {
+  for (const settings of settingsByPrefs) {
+    for (const [id, value] of Object.entries(settings ?? {})) {
+      const p = String(value?.path ?? "");
+      if (!p) continue;
+      const rel = relative(root, p);
+      if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) continue;
+      if (/^[a-p]{32}$/.test(id)) return id;
+    }
   }
   return "";
 }
