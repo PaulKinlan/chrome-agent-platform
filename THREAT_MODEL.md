@@ -655,6 +655,11 @@ and each names the executable check that would catch a regression.
   `checkFetchPolicy` → `checkFetchTarget` and whose refusal vocabulary is the fixed `forbidden_host` code —
   one destination, one code, whichever route answered. A sab0g pin proves the brokered route still
   DISPATCHES to the service worker and surfaces that `forbidden_host` code rather than a host-side one.
+  The fallback does not follow REDIRECTS either (z7i3m): it fetches with `redirect: "manual"` and refuses a
+  `3xx` / `opaqueredirect` answer with the broker's own fixed `redirect_refused` code, so a public host that
+  30x-redirects to a loopback or metadata address cannot be reached by chasing the hop on the one path that
+  lacks the broker's checks. Both policies are now the broker's, not a weaker copy of it; pinned in
+  `tests/script-host.test.ts` (z7i3m — dropping either the refusal or `redirect: "manual"` reds the pin).
 - **INV-6 — A credential-shaped key never reaches a prompt, a log, a receipt or an error
   string.** `extension/lib/pure-redact.js#SECRET_KEY_RE` classifies the credential-shaped keys that
   `extension/lib/pure-redact.js#redactSecrets` strips recursively (`redactSecretText` and
