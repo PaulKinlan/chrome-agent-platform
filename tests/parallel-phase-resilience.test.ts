@@ -14,6 +14,7 @@
 import { fileURLToPath } from "node:url";
 import { assert, assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
 import { durableDir, durableRoot } from "../scripts/lib/durable-root.mjs";
+import { currentStealFractionSync, stealScaleComponent } from "../scripts/lib/serial-phase.mjs";
 import { DEFAULT_PARALLEL_TIMEOUT_MS as RUN_PARALLEL_TIMEOUT_MS, areAllFailuresEnvironmental } from "../scripts/run-tests.mjs";
 import { DEFAULT_PARALLEL_TIMEOUT_MS as SELECT_PARALLEL_TIMEOUT_MS } from "../scripts/select-tests.mjs";
 
@@ -362,13 +363,19 @@ export function computeLoadScale(load: number, cpus: number, maxScale = 4): numb
  * Under gate load, Deno process initialization + TypeScript compilation can take
  * several seconds before line 1 of a test probe executes. Sizing the ready-marker
  * timeout with load (min 15s, ceiling 60s) prevents false-124 flakes on busy heavy slots.
+ *
+ * cqxo3: the scale now also takes the measured CPU steal FRACTION (optional,
+ * default sampled), because loadavg is blind to hypervisor steal — the 8qy5d
+ * measurement: 64.7% steal at load 0.25/cpu. Steal joins by MAX, never product,
+ * under the same ceiling, via the serial phase's own stealScaleComponent.
  */
-export function loadScaledTimeout(baseMs = 15_000, maxScale = 4, load?: number, cpus?: number): number {
+export function loadScaledTimeout(baseMs = 15_000, maxScale = 4, load?: number, cpus?: number, steal?: number | null): number {
   try {
     const l = typeof load === "number" && !Number.isNaN(load) ? load : Deno.loadavg()[0];
     const c = typeof cpus === "number" && !Number.isNaN(cpus) && cpus > 0 ? cpus : (navigator.hardwareConcurrency || 1);
-    const scale = computeLoadScale(l, c, maxScale);
-    return Math.round(baseMs * scale);
+    const s = steal === undefined ? currentStealFractionSync() : steal;
+    const scale = Math.max(computeLoadScale(l, c, maxScale), stealScaleComponent(s));
+    return Math.round(baseMs * Math.min(scale, maxScale));
   } catch {
     return baseMs;
   }
@@ -963,11 +970,28 @@ Deno.test("v6kut: computeLoadScale and loadScaledTimeout are bounded, load-respo
   assertEquals(computeLoadScale(1, 0), 1);
   assertEquals(computeLoadScale(-5, 1), 1);
 
-  // Injected load tests for loadScaledTimeout proving 60s ceiling on any box
-  assertEquals(loadScaledTimeout(15_000, 4, 0, 1), 15_000, "floor is 15s");
-  assertEquals(loadScaledTimeout(15_000, 4, 2, 1), 30_000, "2x load gives 30s");
-  assertEquals(loadScaledTimeout(15_000, 4, 100, 1), 60_000, "100x load capped at 60s ceiling");
-  assertEquals(loadScaledTimeout(15_000, 4, Infinity, 1), 60_000, "Infinity load capped at 60s ceiling");
+  // Injected load tests for loadScaledTimeout proving 60s ceiling on any box.
+  // Steal is injected too (0 = quiet box): the ambient default would make these
+  // pins host-state-dependent, red for everyone on a stolen box (cqxo3).
+  assertEquals(loadScaledTimeout(15_000, 4, 0, 1, 0), 15_000, "floor is 15s");
+  assertEquals(loadScaledTimeout(15_000, 4, 2, 1, 0), 30_000, "2x load gives 30s");
+  assertEquals(loadScaledTimeout(15_000, 4, 100, 1, 0), 60_000, "100x load capped at 60s ceiling");
+  assertEquals(loadScaledTimeout(15_000, 4, Infinity, 1, 0), 60_000, "Infinity load capped at 60s ceiling");
+});
+
+Deno.test("cqxo3: loadScaledTimeout keys on measured steal beside load — max, never product, same ceiling", () => {
+  // The 8qy5d defect class: 64.7% steal with a QUIET loadavg must still stretch
+  // the budget, because the vCPU is descheduled while the runnable queue reads idle.
+  assertEquals(
+    loadScaledTimeout(15_000, 4, 1, 8, 0.647),
+    Math.round(15_000 * (1 / (1 - 0.647))),
+    "quiet loadavg + 65% steal earns 1/(1-S), the honest compensation",
+  );
+  assertEquals(loadScaledTimeout(15_000, 4, 1, 8, 0.01), 15_000, "dead band: 1% steal is hypervisor noise");
+  assertEquals(loadScaledTimeout(15_000, 4, 1, 8, null), 15_000, "unmeasurable steal fails closed to load-only");
+  assertEquals(loadScaledTimeout(15_000, 4, 1, 8, 0.99), 60_000, "saturated steal hits the same ceiling");
+  // Max, never product: load x2 with steal x2 (S=0.5) grants x2, not x4.
+  assertEquals(loadScaledTimeout(15_000, 4, 2, 1, 0.5), 30_000);
 });
 
 Deno.test("xkm3b: 6z8yi parallel resilience tests derive probe readiness and reap budgets from loadScaledTimeout, avoiding fixed 5s timeouts under gate load", async () => {

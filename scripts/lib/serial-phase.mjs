@@ -313,14 +313,28 @@ export function measuredReadyLoad() {
  * machine earns one bounded grace window; absent markers still time out.
  * Unmeasurable load is NOT assumed loaded. The same x4 ceiling as the serial
  * execution timeout applies, but only after observing load at the deadline.
+ *
+ * chrome-agent-platform-cqxo3: the contention signal now includes measured CPU
+ * STEAL beside loadavg. loadavg is blind to hypervisor steal — 8qy5d measured
+ * a 64.7%-steal box at load 0.25/cpu — so a stolen box descheduled the child's
+ * cold boot while this classifier read the box as IDLE and granted no grace,
+ * redding READY_MARKER_TIMEOUT_IDLE_NEVER_SETTLED (a cause the environmental
+ * verdict treats as strictly product). A descheduled child IS contended: steal
+ * above the dead band earns the same bounded grace load earns, through the
+ * same max-not-product scale and the same ceiling. No number changed.
+ * @param {{ baseMs?: number, loadPerCpu?: number|null, steal?: number|null }} [options]
+ * @returns {{ cause: string, loadPerCpu: number|null, steal: number|null, hardTimeoutMs: number }}
  */
-export function classifyReadyMarkerTimeout({ baseMs, loadPerCpu } = {}) {
+export function classifyReadyMarkerTimeout({ baseMs, loadPerCpu, steal = null } = {}) {
   const measured = Number.isFinite(loadPerCpu) && loadPerCpu >= 0;
   const loaded = measured && loadPerCpu > 1;
+  const stolen = Number.isFinite(steal) && steal > STEAL_DEAD_BAND;
+  const contended = loaded || stolen;
   return {
-    cause: !measured ? "unmeasurable" : loaded ? "loaded" : "idle-never-settled",
+    cause: !measured && !stolen ? "unmeasurable" : contended ? "loaded" : "idle-never-settled",
     loadPerCpu: measured ? loadPerCpu : null,
-    hardTimeoutMs: loaded ? serialFileTimeoutMs({ base: baseMs, loadPerCpu }) : baseMs,
+    steal: Number.isFinite(steal) ? steal : null,
+    hardTimeoutMs: contended ? serialFileTimeoutMs({ base: baseMs, loadPerCpu, steal }) : baseMs,
   };
 }
 
@@ -340,7 +354,7 @@ export function defaultSerialTimeoutMs(env = process.env) {
 
 /**
  * @param {string} file
- * @param {{ timeoutMs?: number, readyFile?: string, readyTimeoutMs?: number, readyLoadPerCpu?: number, stdio?: import("node:child_process").StdioOptions, cwd?: string, env?: NodeJS.ProcessEnv }} [options]
+ * @param {{ timeoutMs?: number, readyFile?: string, readyTimeoutMs?: number, readyLoadPerCpu?: number, readySteal?: number, stdio?: import("node:child_process").StdioOptions, cwd?: string, env?: NodeJS.ProcessEnv }} [options]
  * @returns {{ code: number, timedOut: boolean, error?: Error, stdout?: Buffer|null, stderr?: Buffer|null }}
  */
 export function runSerialFile(file, {
@@ -348,6 +362,7 @@ export function runSerialFile(file, {
   readyFile = undefined,
   readyTimeoutMs = 60_000,
   readyLoadPerCpu = undefined, // explicit test seam; otherwise measure at the soft deadline
+  readySteal = undefined, // explicit test seam (cqxo3); otherwise measured at the soft deadline
   stdio = "inherit",
   cwd = undefined,
   env = process.env,
@@ -356,7 +371,9 @@ export function runSerialFile(file, {
   if (targetReadyFile) {
     const runnerScript = fileURLToPath(new URL("serial-runner.mjs", import.meta.url));
     const args = [runnerScript, file, targetReadyFile, String(timeoutMs), String(readyTimeoutMs)];
-    if (readyLoadPerCpu !== undefined) args.push(String(readyLoadPerCpu));
+    if (readyLoadPerCpu !== undefined || readySteal !== undefined) {
+      args.push(String(readyLoadPerCpu), String(readySteal));
+    }
     const r = spawnSync(process.execPath, args, {
       stdio,
       cwd,

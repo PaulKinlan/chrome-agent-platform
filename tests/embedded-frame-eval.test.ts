@@ -1,6 +1,6 @@
 import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
 import { clampNextChangeMs, isMissingCdpContext, NEXT_CHANGE_MAX_MS, trackEmbeddedFrameContexts } from "../scripts/lib/embedded-frame-eval.ts";
-import { classifyReadyMarkerTimeout, measuredReadyLoad } from "../scripts/lib/serial-phase.mjs";
+import { classifyReadyMarkerTimeout, currentStealFractionSync, measuredReadyLoad } from "../scripts/lib/serial-phase.mjs";
 
 // chrome-agent-platform-h6ow3: the readiness bound these cases declare is a DEADLINE, and a starved box
 // spends it on the poll interval rather than on the tracker's work: `nextChange` sleeps up to 120 ms per
@@ -14,6 +14,7 @@ function readyBoundMs(load?: number): number {
   return classifyReadyMarkerTimeout({
     baseMs: READY_BOUND_BASE_MS,
     loadPerCpu: load ?? measuredReadyLoad(),
+    steal: currentStealFractionSync(), // cqxo3: steal beside load, same classifier
   }).hardTimeoutMs;
 }
 

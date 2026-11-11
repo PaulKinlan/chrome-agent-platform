@@ -8,7 +8,7 @@
 // (marked resolved).
 // @ts-nocheck — dynamic chrome/OPFS stubs (no types in Deno).
 import { assert, assertEquals } from "jsr:@std/assert@1";
-import { currentLoadPerCpu, serialFileTimeoutMs } from "../scripts/lib/serial-phase.mjs";
+import { currentLoadPerCpu, currentStealFractionSync, serialFileTimeoutMs } from "../scripts/lib/serial-phase.mjs";
 
 // ---- minimal in-memory OPFS fake (masterMemory lives under memory/master) ----
 function dirNode() { return { kind: "directory", children: new Map() }; }
@@ -129,7 +129,7 @@ Deno.test("background-agent.delete ROUTE: a teardown marking failure keeps the s
   // box, so wait for it to be OBSERVABLY settled: the orphan sweep awaits the
   // memoized recovery and reports it back as `bootRecovery`.
   const bootRecovery = await (async () => {
-    const deadline = Date.now() + serialFileTimeoutMs({ base: 5000, loadPerCpu: currentLoadPerCpu() });
+    const deadline = Date.now() + serialFileTimeoutMs({ base: 5000, loadPerCpu: currentLoadPerCpu(), steal: currentStealFractionSync() }); // cqxo3: steal-aware, loadavg is blind to descheduling
     let observed;
     do {
       observed = await dispatch({ type: "schedule.cancelOrphans" });

@@ -3,9 +3,9 @@
 import { spawn } from "node:child_process";
 import { existsSync, statSync, writeFileSync } from "node:fs";
 import { constants as osConstants } from "node:os";
-import { classifyReadyMarkerTimeout, measuredReadyLoad } from "./serial-phase.mjs";
+import { classifyReadyMarkerTimeout, currentStealFractionSync, measuredReadyLoad } from "./serial-phase.mjs";
 
-const [file, readyFile, timeoutMsStr, readyTimeoutMsStr, injectedReadyLoadStr] = process.argv.slice(2);
+const [file, readyFile, timeoutMsStr, readyTimeoutMsStr, injectedReadyLoadStr, injectedReadyStealStr] = process.argv.slice(2);
 const timeoutMs = Number(timeoutMsStr || "10000");
 const readyTimeoutMs = Number(readyTimeoutMsStr || "60000");
 
@@ -29,7 +29,12 @@ let timedOut = false;
 let timer = null;
 let poll = null;
 let readyVerdict = null;
-const injectedReadyLoad = injectedReadyLoadStr === undefined ? undefined : Number(injectedReadyLoadStr);
+const parseSeam = (s) => (s === undefined || s === "undefined" ? undefined : Number(s));
+const injectedReadyLoad = parseSeam(injectedReadyLoadStr);
+// cqxo3: steal is the contention signal loadavg cannot see (a stolen box
+// deschedules the child's cold boot with a SHORT runnable queue), so the
+// readiness classification samples it at the soft deadline beside the load.
+const injectedReadySteal = parseSeam(injectedReadyStealStr);
 
 const startTimeout = () => {
   timer = setTimeout(() => {
@@ -65,16 +70,18 @@ if (readyFile) {
         baseMs: readyTimeoutMs,
         // kzy5x: ABSOLUTE load, so an 8-core box at load 5.5 is not read as idle and the cold boot gets grace.
         loadPerCpu: injectedReadyLoad === undefined ? measuredReadyLoad() : injectedReadyLoad,
+        // cqxo3: and steal, so a 65%-stolen box with a quiet loadavg is not read as idle either.
+        steal: injectedReadySteal === undefined ? currentStealFractionSync() : injectedReadySteal,
       });
       if (readyVerdict.cause === "loaded" && !readyVerdict.reported) {
-        process.stderr.write(`\nrunSerialFile: READY_MARKER_LOADED_GRACE ${readyFile} soft=${readyTimeoutMs}ms hard=${readyVerdict.hardTimeoutMs}ms load=${readyVerdict.loadPerCpu.toFixed(2)}\n`);
+        process.stderr.write(`\nrunSerialFile: READY_MARKER_LOADED_GRACE ${readyFile} soft=${readyTimeoutMs}ms hard=${readyVerdict.hardTimeoutMs}ms load=${readyVerdict.loadPerCpu?.toFixed(2) ?? "unmeasurable"} steal=${readyVerdict.steal ?? "unmeasurable"}\n`);
         readyVerdict.reported = true;
       }
       if (Date.now() - t0 <= readyVerdict.hardTimeoutMs) return;
       clearInterval(poll);
       poll = null;
       timedOut = true;
-      process.stderr.write(`\nrunSerialFile: READY_MARKER_TIMEOUT_${readyVerdict.cause.toUpperCase().replaceAll("-", "_")} ${readyFile} soft=${readyTimeoutMs}ms hard=${readyVerdict.hardTimeoutMs}ms load=${readyVerdict.loadPerCpu ?? "unmeasurable"}\n`);
+      process.stderr.write(`\nrunSerialFile: READY_MARKER_TIMEOUT_${readyVerdict.cause.toUpperCase().replaceAll("-", "_")} ${readyFile} soft=${readyTimeoutMs}ms hard=${readyVerdict.hardTimeoutMs}ms load=${readyVerdict.loadPerCpu ?? "unmeasurable"} steal=${readyVerdict.steal ?? "unmeasurable"}\n`);
       if (child.pid) {
         try { process.kill(-child.pid, "SIGKILL"); } catch { /* gone */ }
       }

@@ -12,7 +12,7 @@
 
 import { fileURLToPath } from "node:url";
 import { assert, assertEquals } from "jsr:@std/assert@1";
-import { classifyReadyMarkerTimeout, runSerialFile, serialFileTimeoutMs } from "../scripts/lib/serial-phase.mjs";
+import { classifyReadyMarkerTimeout, currentStealFractionSync, runSerialFile, serialFileTimeoutMs } from "../scripts/lib/serial-phase.mjs";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -618,13 +618,38 @@ Deno.test("xy6n2 falsifier: the DERIVED late-marker window is still a BOUND — 
 
 Deno.test("xy6n2: ready timeout classification has an idle bound, measured x4 load cap, and unmeasurable refusal", () => {
   assertEquals(classifyReadyMarkerTimeout({ baseMs: 5_000, loadPerCpu: 1 }),
-    { cause: "idle-never-settled", loadPerCpu: 1, hardTimeoutMs: 5_000 });
+    { cause: "idle-never-settled", loadPerCpu: 1, steal: null, hardTimeoutMs: 5_000 });
   assertEquals(classifyReadyMarkerTimeout({ baseMs: 5_000, loadPerCpu: 2.5 }),
-    { cause: "loaded", loadPerCpu: 2.5, hardTimeoutMs: 12_500 });
+    { cause: "loaded", loadPerCpu: 2.5, steal: null, hardTimeoutMs: 12_500 });
   assertEquals(classifyReadyMarkerTimeout({ baseMs: 5_000, loadPerCpu: 99 }),
-    { cause: "loaded", loadPerCpu: 99, hardTimeoutMs: 20_000 });
+    { cause: "loaded", loadPerCpu: 99, steal: null, hardTimeoutMs: 20_000 });
   assertEquals(classifyReadyMarkerTimeout({ baseMs: 5_000, loadPerCpu: null }),
-    { cause: "unmeasurable", loadPerCpu: null, hardTimeoutMs: 5_000 });
+    { cause: "unmeasurable", loadPerCpu: null, steal: null, hardTimeoutMs: 5_000 });
+});
+
+Deno.test("cqxo3: steal is contention the loadavg cannot see — a stolen box earns the same bounded grace", () => {
+  // The 8qy5d measurement, as a classification: 64.7% steal with a QUIET
+  // loadavg must not read as idle — the child's cold boot is descheduled, and
+  // 'idle-never-settled' is classified STRICTLY PRODUCT RED by the
+  // environmental verdict, so this misread filed environmental noise as product.
+  const stolen = classifyReadyMarkerTimeout({ baseMs: 5_000, loadPerCpu: 0.25, steal: 0.647 });
+  assertEquals(stolen.cause, "loaded", "steal above the dead band is contention, never 'idle'");
+  // The honest compensation: at S=0.647 the child gets (1-S) of the CPU, so the
+  // window stretches 1/(1-S) = x2.83, max-not-product with the load scale.
+  assertEquals(stolen.hardTimeoutMs, Math.round(5_000 * (1 / (1 - 0.647))));
+  assertEquals(stolen.steal, 0.647);
+  // The dead band keeps a cloud VM idling at 1-2% steal on the idle path.
+  assertEquals(classifyReadyMarkerTimeout({ baseMs: 5_000, loadPerCpu: 1, steal: 0.01 }),
+    { cause: "idle-never-settled", loadPerCpu: 1, steal: 0.01, hardTimeoutMs: 5_000 });
+  // Unmeasurable steal fails closed to the load-only decision, never to idle.
+  assertEquals(classifyReadyMarkerTimeout({ baseMs: 5_000, loadPerCpu: 2.5, steal: null }).cause, "loaded");
+  // Steal alone (load unmeasurable) is still measurable contention.
+  assertEquals(classifyReadyMarkerTimeout({ baseMs: 5_000, loadPerCpu: null, steal: 0.5 }),
+    { cause: "loaded", loadPerCpu: null, steal: 0.5, hardTimeoutMs: 10_000 });
+  // The x4 ceiling still bounds the grace under saturated steal.
+  assertEquals(classifyReadyMarkerTimeout({ baseMs: 5_000, loadPerCpu: 1, steal: 0.99 }).hardTimeoutMs, 20_000);
+  // Max, never product: load x2.5 with steal x2 (S=0.5) grants x2.5, not x5.
+  assertEquals(classifyReadyMarkerTimeout({ baseMs: 5_000, loadPerCpu: 2.5, steal: 0.5 }).hardTimeoutMs, 12_500);
 });
 
 Deno.test("xy6n2: loaded grace still refuses a genuinely absent marker by a named hard bound", async () => {
@@ -684,6 +709,7 @@ Deno.test("passes immediately after marker", () => {});
     const bootBudgetMs = Math.max(15_000, serialFileTimeoutMs({
       base: 5_000,
       loadPerCpu: Deno.loadavg()[0],
+      steal: currentStealFractionSync(), // cqxo3: steal beside absolute load (x4 cap keeps the 15-20s band)
     }));
     assert(bootBudgetMs >= 15_000 && bootBudgetMs <= 20_000,
       `positive marker soft boot budget must stay in 15–20s, got ${bootBudgetMs}ms`);
