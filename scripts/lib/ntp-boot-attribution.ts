@@ -860,6 +860,19 @@ export interface BootStagingPolicyEvaluation {
 }
 
 /**
+ * dn8ox: the fewest valid (non-excluded) runs a verdict may be certified from.
+ *
+ * A median over fewer than a majority of the requested runs is not a median of the measurement — it is
+ * a median of whatever survived, presented as if it described the box. Below this floor the honest
+ * answer is UNKNOWN: the box could not measure, which is a different statement from "the change is
+ * fine" and from "the change is broken". Majority-of-requested generalises if the run count changes.
+ */
+export function minimumValidRuns(requestedRuns: number): number {
+  const n = Math.max(0, Math.trunc(requestedRuns));
+  return n <= 1 ? Math.max(1, n) : Math.ceil(n / 2);
+}
+
+/**
  * Evaluates the multi-run policy for NTP boot staging:
  * - Product contract ceiling: 50.0 ms.
  * - Measurement honesty under contention:
@@ -918,7 +931,20 @@ export function evaluateBootStagingPolicy(
   // sibling (a red beats an environmental refusal). No usable bracketed measurement
   // (no timeOrigin, no timestamps, nothing within reach) also stays red: 'we could
   // not place the steal' is never 'the stretch explains the stall'.
-  for (const r of runs) {
+  // dn8ox (coord ruling 2026-11-11): EXCLUSION MEANS EXCLUSION FOR EVERY STATISTIC, including
+  // severe-breach detection. The loop below used to iterate `runs`, so a breach inside a run already
+  // excluded as contended could still fail the whole suite — 'does not count toward the median' but
+  // 'does count for the verdict', the worst of both: it fails honest landings at random on a shared box
+  // (measured: run 5 excluded at 27% steal and another at 13%/load 0.29, each still red) and it is
+  // unfixable from inside the VM because hypervisor steal is invisible to load average.
+  //
+  // What replaces it is a NARROWING, not a loosening: the severe check keeps its full force over VALID
+  // runs (a genuine 668ms regression on a quiet box lands in a valid run and still reds), and when there
+  // are too few valid runs to certify, the outcome is UNKNOWN — a gate refusal, never a pass. The mirror
+  // risk (a breach discarded because its run looked contended) is paid for by that floor: with no valid
+  // majority the gate refuses rather than deciding. Breaches in excluded runs are still REPORTED, with
+  // the same proportional steal arithmetic, so the evidence survives even though it no longer decides.
+  for (const r of validRuns) {
     if (r.severeBreaches.length === 0) continue;
     let breaches = r.severeBreaches;
     if (r.invalidatedBySteal) {
@@ -951,10 +977,36 @@ export function evaluateBootStagingPolicy(
     }
   }
 
-  // 3. Check 2: If ALL N runs are contended, REFUSE with a named environmental refusal — never a silent pass!
-  if (validRuns.length === 0) {
-    const reasons = contendedRuns.map((r) => `Run ${r.run}: ${r.invalidReason}`).join("; ");
-    const detail = `all ${runs.length} runs were contended and excluded from measurement: ${reasons}`;
+  // 2b. dn8ox: an EXCLUDED run's severe breaches are evidence, not verdict. Report them with the same
+  // proportional arithmetic the old red used, so a reader can see whether the stall fitted the steal in
+  // force across its own window — the difference is that it no longer decides a landing on a box the
+  // suite already said it could not measure.
+  for (const r of contendedRuns) {
+    for (const t of r.severeBreaches) {
+      const fits = t.stealExcuse != null && t.durationMs <= t.stealExcuse.maxExcusableWallMs;
+      warnings.push(
+        `[ntp-boot-staging] Run ${r.run}: severe stall of ${Math.round(t.durationMs)}ms inside an EXCLUDED run — reported, not decisive (dn8ox): ${fits ? `fits inside the ${Math.round(t.stealExcuse!.maxExcusableWallMs)}ms wall the stretch in force across its window predicts, so it is contention` : "does NOT fit what the steal predicts, so if a real regression were hiding here it would be visible as an excess on a quiet box"}`,
+      );
+    }
+  }
+
+  // 3. Check 2 (dn8ox three outcomes): too few VALID runs to certify => UNKNOWN, a gate refusal that
+  // names the evidence base. Never a silent pass, and no longer only when ALL runs were contended — the
+  // median of one surviving run is not a measurement of the box, and the old floor let it decide.
+  const requiredValidRuns = minimumValidRuns(runs.length);
+  if (validRuns.length < requiredValidRuns) {
+    const excludedSummary = contendedRuns
+      .map((r) => `Run ${r.run}: ${r.invalidReason}`)
+      .join("; ");
+    const stealFigures = contendedRuns
+      .map((r) => (r.hostEnvironment ?? "").match(/steal[^,;\]]*/i)?.[0]?.trim())
+      .filter((v, i, a): v is string => Boolean(v) && a.indexOf(v) === i)
+      .join(" | ");
+    const detail =
+      `valid runs ${validRuns.length} of ${runs.length}, excluded ${contendedRuns.length}` +
+      (stealFigures ? ` (${stealFigures})` : "") +
+      ` — below the ${requiredValidRuns} valid runs a verdict needs, so this measurement cannot certify` +
+      (excludedSummary ? `: ${excludedSummary}` : "");
     const refusal = new BootStagingEnvironmentalRefusalError(runs, detail);
     return {
       ok: false,
