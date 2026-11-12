@@ -24,6 +24,7 @@ import {
   selectionFanInNotice,
 } from "../scripts/select-tests.mjs";
 import { explainChangedFileMapping } from "../scripts/lib/gate-manifest.mjs";
+import { guardsForChangedFile } from "../scripts/lib/changed-file-mapping.mjs";
 
 // A real seam with a known importer: schedule-parser.js is imported by
 // tests/schedule-parser.test.ts. If the graph walk stops resolving, the subset
@@ -193,6 +194,37 @@ Deno.test("fhh50: dot-prefixed paths reach the ledger instead of vanishing from 
   assert(!collected.includes("docs/index.html"), "docs/ stays out of the executable changed set");
   assert(!collected.includes("CHANGELOG.md"), "the changelog is never a test-selection input");
   assertEquals(collectChangedFiles(["a.js", "a.js"]), ["a.js"], "the changed set stays de-duplicated");
+});
+
+Deno.test("xycyl: a file whose DEDICATED guard ran is mapped, not reported as an unmapped gap", () => {
+  // The lzccc shape, measured on the gate: scripts/lib/serial-runner.mjs has no import
+  // edge to any suite (it executes at import time, so importing it would RUN a test file),
+  // and the gate printed "unmapped changed file" while BOTH of its dedicated guards ran.
+  // Driven here as a PURE plan (reverse: null) so the assertion cannot be satisfied by an
+  // incidental graph edge: with no import graph, the dedicated table is the only thing that
+  // can name an inspecting suite for this file.
+  const file = "scripts/lib/serial-runner.mjs";
+  const guards = guardsForChangedFile(file);
+  assert(guards.length > 0, "fixture precondition: this file owns dedicated guards");
+
+  const fullPlan = { kind: "full", changed: [file], mapped: [], reverse: null, unmappable: [], lockfileDelta: [] };
+  const context = fileMappingContextForPlan(fullPlan);
+  for (const guard of guards) {
+    assert(
+      (context.candidates[file] ?? []).includes(guard),
+      `${guard} must be a candidate for ${file}; got ${JSON.stringify(context.candidates[file])}`,
+    );
+  }
+
+  // And the ledger then says mapped when they ran — the actual warning condition.
+  const rows = explainChangedFileMapping({
+    changed: [file],
+    candidates: context.candidates,
+    executedSuites: guards,
+    runExitCode: 0,
+  });
+  assertEquals(rows[0].status, "mapped", `a covered file must not read as a gap: ${JSON.stringify(rows[0])}`);
+  assertEquals(rows[0].executed_suites, [...guards].sort());
 });
 
 Deno.test("fhh50: a plan that cannot map the delta says so (selection_covers_delta)", () => {
