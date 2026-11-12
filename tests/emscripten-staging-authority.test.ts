@@ -214,10 +214,20 @@ Deno.test("95o2n: the harness owner is codec-derived, never the legacy ':|' shap
   // The CODE must not build the legacy owner (a comment may still NAME it — the
   // explanation is the documentation); pin the construction pattern, not the text.
   assert(!/["']agent:["']\s*\+/.test(src), "the legacy 'agent:' + … owner construction must not survive in the harness");
-  assert(
-    src.includes("emscriptenJobOwner"),
-    "the harness must derive the sealed owner through emscriptenJobOwner (the v2 codec the stage path uses)",
-  );
+  // qrhp4: assert the CORRESPONDENCE, not the text — the three mutant classes the
+  // old text-only pin missed:
+  // (M2) the page script's owner MUST come from the serialized sealedOwner, never
+  //      from any literal or template expression of its own:
+  assert(src.includes("owner = ${JSON.stringify(sealedOwner)}"),
+    "the page-side owner must be the serialized sealedOwner — any locally built owner (even a template literal) evades the seal path");
+  // (M3) the fixture run id must exist EXACTLY ONCE — one constant interpolated
+  //      into both the seal tuple and the page script, so the two can never drift:
+  assert(src.includes("emscriptenJobOwner({ runId: fixtureRunId, agentId: \"hub\" })"),
+    "the seal tuple must use the shared fixtureRunId constant");
+  assert(src.includes("runId = ${JSON.stringify(fixtureRunId)}"),
+    "the page-side runId must be interpolated from the same constant");
+  const occurrences = src.split("exec_browser_stage_123456").length - 1;
+  assertEquals(occurrences, 1, "the fixture run id literal must exist exactly once (a duplicate can drift)");
   // The defect itself, stated positively: for the harness's fixture tuple the
   // codec output and the legacy string are DIFFERENT — that is why the old
   // harness refused its own sealed input.

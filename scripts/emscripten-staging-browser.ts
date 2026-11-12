@@ -110,9 +110,14 @@ try {
   // path derives (emscripten-sw-stage.js → emscriptenJobOwner); the legacy
   // 'agent:<run>:|hub' shape no longer equals it and the stage refuses the
   // harness's own sealed input (emscripten_stage_input_unavailable).
-  const sealedOwner = emscriptenJobOwner({ runId: "exec_browser_stage_123456", agentId: "hub" });
+  // qrhp4: ONE source of truth for the fixture run id — the seal tuple and the
+  // page-side script interpolate the same constant, so the owner the harness
+  // seals always corresponds to the runId it registers/stages (a duplicated
+  // literal can drift silently: M3 in the bead).
+  const fixtureRunId = "exec_browser_stage_123456";
+  const sealedOwner = emscriptenJobOwner({ runId: fixtureRunId, agentId: "hub" });
   const outcome = await evaluate(swSession, `(async () => {
-    const runId = 'exec_browser_stage_123456';
+    const runId = ${JSON.stringify(fixtureRunId)};
     const owner = ${JSON.stringify(sealedOwner)};
     const root = await navigator.storage.getDirectory();
     const streams = await root.getDirectoryHandle('wasm-tool-streams-v1', { create:true });
