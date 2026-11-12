@@ -8,6 +8,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { launchChrome, openCdp } from "./lib/chrome-launch.ts";
 import { durableDir } from "./lib/durable-root.mjs";
+import { emscriptenJobOwner } from "../extension/lib/emscripten-custody.js";
 
 const source = fileURLToPath(new URL("../extension/", import.meta.url));
 const scratch = durableDir("emscripten-staging-browser", crypto.randomUUID());
@@ -105,9 +106,14 @@ try {
   const swSession = (await send("Target.attachToTarget", { targetId: sw.id, flatten: true })).sessionId;
   await send("Runtime.enable", {}, swSession);
   const graphDigest = "a".repeat(64);
+  // 95o2n: the sealed input's owner must be the SAME v2-codec string the stage
+  // path derives (emscripten-sw-stage.js → emscriptenJobOwner); the legacy
+  // 'agent:<run>:|hub' shape no longer equals it and the stage refuses the
+  // harness's own sealed input (emscripten_stage_input_unavailable).
+  const sealedOwner = emscriptenJobOwner({ runId: "exec_browser_stage_123456", agentId: "hub" });
   const outcome = await evaluate(swSession, `(async () => {
     const runId = 'exec_browser_stage_123456';
-    const owner = 'agent:' + runId + ':|hub';
+    const owner = ${JSON.stringify(sealedOwner)};
     const root = await navigator.storage.getDirectory();
     const streams = await root.getDirectoryHandle('wasm-tool-streams-v1', { create:true });
     const id = Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0')).join('');
