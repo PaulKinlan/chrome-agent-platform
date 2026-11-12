@@ -391,6 +391,10 @@ const ALLOWED_FILES = new Set([
   // path strings that never touch the filesystem).
   "tests/00-use-npm-test_test.ts",
   "tests/beads-precommit-hook.test.ts",
+  // erxkj: a fake `deno` binary + its shell wrapper for the runPhase refusal-
+  // classification pins — script-lived scratch, removed in the test's finally,
+  // never retained evidence.
+  "tests/select-tests.test.ts",
   "tests/build-bootstrap.test.ts",
   "tests/bump-version-sanitize.test.ts",
   "tests/changelog-delta.test.ts",

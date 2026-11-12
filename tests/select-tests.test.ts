@@ -425,3 +425,76 @@ Deno.test("xpmke+h346c: a guard-registry refusal is POLICY, so the manifest does
   const rows = explainChangedFileMapping({ changed: ["extension/lib/script-host.js"], executedSuites: [], unmappable: plan.unmappable });
   assertEquals(rows[0].status, "fail-closed");
 });
+
+// ── erxkj: the subset parallel phase resolves a REFUSAL, not a raw 1 ───────
+// Behavioral pin: drive the real runPhase through a fake `deno` on PATH whose
+// output is the r2l8n incident's shape (an all-environmental failure), and a
+// second fake whose shape is a genuine product red. Before the fix runPhase
+// resolved the child's RAW code (stdio: "inherit", no capture), so the refusal
+// red-ed the fast gate and the landing queue paid a retry.
+
+async function runPhaseWithFakeDeno(fakeOutput: string, fakeExit: number): Promise<number> {
+  const root = await Deno.makeTempDir();
+  try {
+    const bin = join(root, "bin");
+    await Deno.mkdir(bin);
+    const fake = join(bin, "deno");
+    await Deno.writeTextFile(fake, `#!/bin/sh\ncat <<'FAKEOUT'\n${fakeOutput}\nFAKEOUT\nexit ${fakeExit}\n`);
+    await Deno.chmod(fake, 0o755);
+    const moduleUrl = new URL("../scripts/select-tests.mjs", import.meta.url).href;
+    const cmd = new Deno.Command("node", {
+      args: [
+        "--input-type=module",
+        "-e",
+        `import { runPhase } from ${JSON.stringify(moduleUrl)};` +
+          `const rc = await runPhase(["tests/fake.test.ts"], [], "parallel phase", 60000);` +
+          `process.exit(rc);`,
+      ],
+      env: { ...Deno.env.toObject(), PATH: `${bin}:${Deno.env.get("PATH") ?? ""}` },
+      stdout: "piped",
+      stderr: "piped",
+    });
+    const out = await cmd.output();
+    return out.code;
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+}
+
+const ERXKJ_REFUSAL_SHAPE = `
+ ERRORS 
+
+boot timing under steal => ./tests/fake-quiet.test.ts:10:6
+error: QuietWindowRefusedError: ENVIRONMENT: machine is not quiet enough for this gate (load1=11.76 load5=9.21 cores=8 load/core=1.47 heavy-builders=3)
+    throw new QuietWindowRefusedError(msg);
+          ^
+
+ FAILURES 
+
+boot timing under steal => ./tests/fake-quiet.test.ts:10:6
+
+FAILED | 0 passed | 1 failed (15ms)
+`;
+
+const ERXKJ_PRODUCT_SHAPE = `
+ ERRORS 
+
+assertion fails => ./tests/fake-product.test.ts:20:6
+error: AssertionError: Values are not equal
+    throw new AssertionError(msg);
+          ^
+
+ FAILURES 
+
+assertion fails => ./tests/fake-product.test.ts:20:6
+
+FAILED | 0 passed | 1 failed (9ms)
+`;
+
+Deno.test("erxkj: a subset parallel phase whose failures are ALL environmental resolves 75, not the raw deno code", async () => {
+  assertEquals(await runPhaseWithFakeDeno(ERXKJ_REFUSAL_SHAPE, 1), 75, "the fast gate must receive the refusal, not a product red");
+});
+
+Deno.test("erxkj: a subset parallel phase with a PRODUCT failure keeps the raw 1 (the fix must not soften reds)", async () => {
+  assertEquals(await runPhaseWithFakeDeno(ERXKJ_PRODUCT_SHAPE, 1), 1, "a product red stays a product red");
+});

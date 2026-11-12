@@ -66,7 +66,7 @@ import { isPassiveContentFile } from "./lib/content-exemptions.mjs";
 import { emitGateLedger, explainChangedFileMapping, fleetReceiptForExit } from "./lib/gate-manifest.mjs";
 import { decideBuild, ensureStoreBuild, findDistConsumers } from "./build-if-needed.mjs";
 import { checkBrowserPrerequisite } from "./lib/browser-prerequisite.mjs";
-import { ENVIRONMENTAL_REFUSAL_EXIT, combinePhaseExitCodes } from "./lib/environmental-verdict.mjs";
+import { ENVIRONMENTAL_REFUSAL_EXIT, classifyPhaseExitFromOutput, combinePhaseExitCodes } from "./lib/environmental-verdict.mjs";
 
 export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -1022,19 +1022,32 @@ export function omittedInventory(files, reason, limit = omittedLimit()) {
   };
 }
 
-function runPhase(files, flags, label, timeoutMs = null) {
+export function runPhase(files, flags, label, timeoutMs = null) {
   const effectiveTimeoutMs = timeoutMs ?? computeParallelPhaseTimeout(files.length);
   // Deno schedules parallel files independently; print candidate names first
   // so a mid-phase kill retains attribution without falsely naming a culprit.
   announce(`select-tests: ${label} candidates (${files.length} file(s)):\n${files.map((file) => `  - ${file}`).join("\n")}`);
   const t0 = Date.now();
   return new Promise((resolve) => {
+    // erxkj: the phase output is CAPTURED (and teed through unchanged) so a
+    // non-zero exit can be classified like the full tier (scripts/run-tests.mjs):
+    // a phase whose every failure is a verified environmental refusal resolves
+    // 75 — a refusal is a re-run, never a product red on the fast gate.
     const child = spawn("deno", ["test", "-A", "--config", "deno.runner.jsonc", ...flags, ...files], {
-      stdio: "inherit",
+      stdio: ["inherit", "pipe", "pipe"],
       cwd: ROOT,
       // The marker tests/00-use-npm-test_test.ts checks for.
       env: { ...process.env, CAP_TEST_RUNNER: "1" },
       detached: true,
+    });
+    let capturedOutput = "";
+    child.stdout.on("data", (chunk) => {
+      capturedOutput += chunk;
+      process.stdout.write(chunk);
+    });
+    child.stderr.on("data", (chunk) => {
+      capturedOutput += chunk;
+      process.stderr.write(chunk);
     });
 
     let timedOut = false;
@@ -1080,9 +1093,14 @@ function runPhase(files, flags, label, timeoutMs = null) {
         return;
       }
       const secs = ((Date.now() - t0) / 1000).toFixed(0);
-      console.error(`select-tests: ${label} ${code === 0 ? "GREEN" : "FAILED"} in ${secs}s`);
       const signalNumber = signal ? (osConstants.signals[signal] ?? 15) : 0;
-      resolve(code ?? (signal ? 128 + signalNumber : 1));
+      const rawCode = code ?? (signal ? 128 + signalNumber : 1);
+      // erxkj: classify a non-zero phase exit against its own captured output —
+      // an all-environmental failure is a REFUSAL (75), a product red is untouched.
+      const classified = rawCode === 0 ? { code: 0 } : classifyPhaseExitFromOutput(rawCode, capturedOutput);
+      if (classified.note) announce(`select-tests: ${label} ${classified.note}`);
+      console.error(`select-tests: ${label} ${classified.code === 0 ? "GREEN" : classified.code === ENVIRONMENTAL_REFUSAL_EXIT ? `REFUSED (environmental, exit ${ENVIRONMENTAL_REFUSAL_EXIT})` : "FAILED"} in ${secs}s`);
+      resolve(classified.code);
     });
 
     child.on("error", (err) => {
