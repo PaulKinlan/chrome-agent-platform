@@ -14,6 +14,7 @@ import {
   isWellFormedFenceWithToken,
   UNTRUSTED_TOKEN_PLACEHOLDER,
 } from "./untrusted-fence.js";
+import { mustFenceSkill } from "./skill-trust.js";
 
 
 // ── CAP skill context on the harness turn (chrome-agent-platform-etdn) ──────
@@ -37,13 +38,6 @@ export function extractSkillRefs(text) {
   }
   return out;
 }
-
-/** The ONLY skill sources whose metadata may render raw (2ol0n).
- *  `builtin` = the bundled onDemandSkills catalogue, authored in this repo.
- *  Anything else — `imported`, `custom`, an unknown name, or NO source at all —
- *  is fenced. Adding a source here is a claim that its metadata cannot carry
- *  natural language, so it belongs in a reviewed diff, not in a default. */
-const TRUSTED_SKILL_SOURCES = new Set(["builtin"]);
 
 /** Resolve /skill: references against the Chrome skill store (ONE skill.list
  *  read; rows are the full records — prompt body included). Unknown refs are
@@ -92,17 +86,13 @@ export function buildPromptWithSkillContext(task, skills, runToken = null) {
   if (!list.length) return String(task ?? "");
   const token = typeof runToken === "string" && runToken ? runToken : UNTRUSTED_TOKEN_PLACEHOLDER;
   const block = list.map((s) => {
-    // 2ol0n: fail CLOSED. The three import signals were a deny-list — a row whose
-    // source was "custom", unknown, or absent rendered ref/name/description RAW,
-    // including inside the <cap-skill ref="…" name="…"> attributes, so a future
-    // catalog source inherited interpolation by saying nothing. Trust is now
-    // POSITIVE: the row must name a source on the allowlist AND carry no import
-    // signal. Everything else is fenced as data.
-    const mustFence = !(
-      TRUSTED_SKILL_SOURCES.has(String(s.source ?? "")) &&
-      s.untrusted !== true &&
-      !String(s.refId ?? "").startsWith("imported:")
-    );
+    // 2ol0n: fail CLOSED — the deny-list this replaced rendered ref/name/description
+    // RAW (including into the <cap-skill ref="…" name="…"> attributes) for any row whose
+    // source was "custom", unknown, or absent, so a future catalog source inherited
+    // interpolation by saying nothing. r9uia: the predicate now lives in
+    // extension/lib/skill-trust.js, the ONE place that answers this question — this file
+    // and skill-promotion.js had each grown their own copy, and both failed open.
+    const mustFence = mustFenceSkill(s);
     const promptText = String(s.prompt ?? "");
     const safePrompt = mustFence && promptText && !isWellFormedFenceWithToken(promptText, token)
       ? wrapUntrustedContent(promptText, token)
