@@ -150,6 +150,8 @@ export const MAX_LOAD_SCALE = 4;
 // every cloud VM idling at 1-2% — noise, not signal.
 export const STEAL_DEAD_BAND = 0.02;
 
+
+
 /** Pure: the scale component for a measured steal fraction (null = unmeasurable -> x1). */
 export function stealScaleComponent(steal) {
   if (!Number.isFinite(steal) || steal <= STEAL_DEAD_BAND) return 1;
@@ -210,6 +212,44 @@ export const STEAL_SAMPLE_MS = 150;
 function busySleepSync(ms, now = () => performance.now()) {
   const end = now() + ms;
   while (now() < end) { /* bounded measurement spin (see STEAL_SAMPLE_MS) */ }
+}
+
+/** One CUMULATIVE steal sample: /proc/stat's steal jiffies, no sleeping, no spin.
+ *  Two of these bracket the readiness wait, so their difference is the average steal
+ *  experienced ACROSS the wait — the window lzccc asks for.
+ *  @param {{ readFile?: typeof readFileSync }} [options]
+ *  @returns {{ steal: number, total: number } | null}
+ */
+export function stealSampleSync({ readFile = /** @type {typeof readFileSync} */ (readFileSync) } = /** @type {any} */ ({})) {
+  try {
+    return stealJiffiesFromStatLine(readFile("/proc/stat", "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+/** The readiness STEAL signal: the average over the wait when both counter samples are
+ *  usable, else the instantaneous 150ms fraction, else null.
+ *
+ *  lzccc: the cqxo3 signal was a 150ms instant beside a ~1-minute loadavg, so a bursty
+ *  host that happened to be quiet AT the deadline was classified idle-never-settled and a
+ *  healthy child was killed — and a quiet host that caught one burst earned x4 grace it had
+ *  not earned. Cumulative counters fix both directions exactly: the difference over the wait
+ *  IS the share of the wait the child lost to steal, with no sampling window to be unlucky
+ *  in and no extra spin (two cheap reads, however long the wait).
+ *
+ *  Deliberately NOT /proc/pressure/cpu (hd7td): PSI `some avg60` measures tasks waiting for
+ *  CPU INSIDE the guest, a different quantity from hypervisor steal, and it cannot recover
+ *  steal that already happened. `source` says which signal answered, so a receipt never
+ *  implies a window it did not have.
+ *  @param {{ startJiffies?: { steal: number, total: number } | null, endJiffies?: { steal: number, total: number } | null, instantFraction?: number | null }} [options]
+ *  @returns {{ fraction: number | null, source: "window" | "instant" | "unmeasurable" }}
+ */
+export function readinessStealSignal({ startJiffies = null, endJiffies = null, instantFraction = null } = /** @type {any} */ ({})) {
+  const windowed = stealFractionFromStatSamples(startJiffies, endJiffies);
+  if (Number.isFinite(windowed)) return { fraction: windowed, source: "window" };
+  if (Number.isFinite(instantFraction)) return { fraction: instantFraction, source: "instant" };
+  return { fraction: null, source: "unmeasurable" };
 }
 
 /** The steal fraction over the last `sampleMs` of host time, sampled
@@ -323,6 +363,9 @@ export function measuredReadyLoad() {
  * above the dead band earns the same bounded grace load earns, through the
  * same max-not-product scale and the same ceiling. No number changed.
  * @param {{ baseMs?: number, loadPerCpu?: number|null, steal?: number|null }} [options]
+ *   `steal` is the steal experienced over the WAIT (readinessStealSignal): the only signal
+ *   that can tell a bursty-stolen host from an idle one (lzccc). Above the dead band the
+ *   child was not given CPU, which is environmental, so it earns the bounded grace.
  * @returns {{ cause: string, loadPerCpu: number|null, steal: number|null, hardTimeoutMs: number }}
  */
 export function classifyReadyMarkerTimeout({ baseMs, loadPerCpu, steal = null } = {}) {

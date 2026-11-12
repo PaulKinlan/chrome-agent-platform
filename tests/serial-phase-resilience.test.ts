@@ -12,7 +12,14 @@
 
 import { fileURLToPath } from "node:url";
 import { assert, assertEquals } from "jsr:@std/assert@1";
-import { classifyReadyMarkerTimeout, currentStealFractionSync, runSerialFile, serialFileTimeoutMs } from "../scripts/lib/serial-phase.mjs";
+import {
+  classifyReadyMarkerTimeout,
+  currentStealFractionSync,
+  readinessStealSignal,
+  stealSampleSync,
+  runSerialFile,
+  serialFileTimeoutMs,
+} from "../scripts/lib/serial-phase.mjs";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -548,6 +555,7 @@ Deno.test("passes after late marker", () => {});
       readyTimeoutMs: softMs,
       readyLoadPerCpu: 4, // deterministic injected reading, never manufacture system load
       readySteal: 0, // cqxo3: pin the quiet box too, or ambient steal manufactures grace
+      readyStall: 0, // lzccc: same reason for the window — ambient stall would manufacture grace
       stdio: "pipe",
       cwd: ROOT,
     } as Parameters<typeof runSerialFile>[1]);
@@ -594,6 +602,7 @@ Deno.test("xy6n2 falsifier: the DERIVED late-marker window is still a BOUND — 
       readyTimeoutMs: softMs,
       readyLoadPerCpu: 1, // idle: the derived number gets NO grace, so the derivation itself is the bound
       readySteal: 0, // cqxo3: and no steal contention — an ambient stolen box would manufacture grace and rename the refusal
+      readyStall: 0, // lzccc: and no ambient CPU-pressure window either — this leg asserts the BOUND
       stdio: ["ignore", "ignore", "pipe"],
       cwd: ROOT,
     } as Parameters<typeof runSerialFile>[1]);
@@ -650,6 +659,92 @@ Deno.test("passes after late marker", () => {});
     const err = res.stderr?.toString() ?? "";
     assert(err.includes("READY_MARKER_LOADED_GRACE"), `the grace is named: ${err}`);
     assert(err.includes("steal=0.8"), `the receipt names the steal that earned it: ${err}`);
+  } finally {
+    await Deno.remove(tempDir, { recursive: true }).catch(() => {});
+  }
+});
+
+Deno.test("lzccc: the steal window is the difference of cumulative counters across the WAIT", () => {
+  // Two /proc/stat samples bracket the wait; their difference is the share of the WHOLE
+  // wait lost to steal. This is what the 150ms instant could not see (hd7td: PSI `some
+  // avg60` is guest-side pressure, a different quantity, and cannot recover past steal).
+  // /proc/stat cpu fields: user nice system idle iowait irq softirq STEAL — steal is the
+  // 8th field and the parser sums the first eight. Both the steal and the idle counters
+  // move across a real wait, so the fraction is steal jiffies over ALL jiffies elapsed.
+  const stats = (stealJiffies: number, idleJiffies: number) =>
+    `cpu  0 0 0 ${idleJiffies} 0 0 0 ${stealJiffies} 0 0\n`;
+  const start = stealSampleSync({ readFile: (() => stats(0, 0)) as never });
+  // a wait that lost ~65% of its jiffies to steal
+  const bursty = stealSampleSync({ readFile: (() => stats(3900, 2100)) as never });
+  assert(start && bursty, "both samples must parse");
+  const windowed = readinessStealSignal({ startJiffies: start, endJiffies: bursty });
+  assertEquals(windowed.source, "window");
+  assert((windowed.fraction ?? 0) > 0.4, `a heavily-stolen wait must read as contended: ${windowed.fraction}`);
+
+  // The two lzccc halves, in one place:
+  // (a) a bursty host that is QUIET at the deadline still reads contended (the old bug)...
+  assertEquals(readinessStealSignal({ startJiffies: start, endJiffies: bursty, instantFraction: 0 }).fraction,
+    windowed.fraction);
+  // (b) ...and a quiet wait that catches one burst does NOT earn grace (the other half),
+  //     because the window — not the instant — is what answered.
+  // 60s of idle wait that catches one ~150ms burst: 15 steal jiffies of ~6000
+  const quiet = readinessStealSignal({ startJiffies: start, endJiffies: stealSampleSync({ readFile: (() => stats(15, 6000)) as never }), instantFraction: 0.8 });
+  assertEquals(quiet.source, "window");
+  assert((quiet.fraction ?? 1) < 0.02, `one burst in a quiet wait must not read as sustained steal: ${quiet.fraction}`);
+
+  // Unmeasurable counters fall back to the instant, and say so, rather than inventing zero.
+  const fallback = readinessStealSignal({ startJiffies: null, endJiffies: null, instantFraction: 0.8 });
+  assertEquals(fallback.source, "instant");
+  assertEquals(fallback.fraction, 0.8);
+  assertEquals(readinessStealSignal({}).source, "unmeasurable");
+});
+
+Deno.test("lzccc: a WINDOWED stolen wait earns the grace end-to-end, from counters the runner reads itself", async () => {
+  // This one has to go through the real counters or it proves nothing: an injected
+  // `readySteal` value passes on the pre-lzccc instant-only code too (measured — the first
+  // version of this leg did exactly that and stayed green on the mutant). So the FIXTURE
+  // serves its own /proc/stat through CAP_SERIAL_STEAL_STAT: it advances the idle counter
+  // to look like a long quiet wait and then advances the STEAL counter hard just before
+  // writing the marker. The runner takes its start sample before the wait and its end
+  // sample at the deadline, so only a genuine window can see that steal.
+  const tempDir = await Deno.makeTempDir({ dir: durableDir("scratch"), prefix: "cap-stall-window-" });
+  const readyFile = `${tempDir}/late.marker`;
+  const statFile = `${tempDir}/stat`;
+  const tempTest = `${tempDir}/late-ready.test.ts`;
+  const bootMs = await measureChildBootMs(tempDir);
+  const softMs = bootMs + 500;
+  const lateMarginMs = 1_500;
+  const statLine = (stealJiffies: number, idleJiffies: number) =>
+    `cpu  0 0 0 ${idleJiffies} 0 0 0 ${stealJiffies} 0 0\n`;
+  // Start: a quiet box. The child then spends the wait "stolen": ~65% of the jiffies it
+  // elapsed went to hypervisor steal while the guest idle counter barely moved.
+  await Deno.writeTextFile(statFile, statLine(0, 0));
+  // The runner samples the counters BEFORE the wait and AT the soft deadline, so the fixture
+  // must move them inside that window — writing them after the deadline would prove nothing.
+  // The write is the fixture's FIRST statement (no await before it): a write placed after a
+  // delay races the child's own compile, and the sample then lands too early (measured).
+  await Deno.writeTextFile(tempTest, `${selfReapWatchdog(`${tempTest}.runner`)}await Deno.writeTextFile(${JSON.stringify(statFile)}, ${JSON.stringify(statLine(3900, 2100))});
+await new Promise((resolve) => setTimeout(resolve, ${softMs + lateMarginMs}));
+await Deno.writeTextFile(${JSON.stringify(readyFile)}, "ready");
+Deno.test("passes after late marker", () => {});
+`);
+  try {
+    const res = runSerialFile(tempTest, {
+      timeoutMs: 2_000,
+      readyFile,
+      readyTimeoutMs: softMs,
+      readyLoadPerCpu: 1, // idle on loadavg, and the box is quiet AT the deadline
+      stdio: "pipe",
+      cwd: ROOT,
+      env: { ...process.env, CAP_SERIAL_STEAL_STAT: statFile },
+    } as Parameters<typeof runSerialFile>[1]);
+    assertEquals(res.code, 0, `a stolen WAIT must not kill the late marker: ${res.stderr?.toString()}`);
+    assertEquals(res.timedOut, false);
+    const err = res.stderr?.toString() ?? "";
+    assert(err.includes("READY_MARKER_LOADED_GRACE"), `the grace is named: ${err}`);
+    const named = /steal=([0-9.]+)/.exec(err);
+    assert(named, `the receipt names the steal it measured: ${err}`);
+    assert(Number(named[1]) > 0.4, `the named steal must be the WINDOW's, not an instant: ${err}`);
   } finally {
     await Deno.remove(tempDir, { recursive: true }).catch(() => {});
   }

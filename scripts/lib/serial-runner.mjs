@@ -1,9 +1,15 @@
 // scripts/lib/serial-runner.mjs — bounded child execution with readiness handshake
 // for serial phase test fixtures (chrome-agent-platform-5nhz).
 import { spawn } from "node:child_process";
-import { existsSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { constants as osConstants } from "node:os";
-import { classifyReadyMarkerTimeout, currentStealFractionSync, measuredReadyLoad } from "./serial-phase.mjs";
+import {
+  classifyReadyMarkerTimeout,
+  currentStealFractionSync,
+  measuredReadyLoad,
+  readinessStealSignal,
+  stealSampleSync,
+} from "./serial-phase.mjs";
 
 const [file, readyFile, timeoutMsStr, readyTimeoutMsStr, injectedReadyLoadStr, injectedReadyStealStr] = process.argv.slice(2);
 const timeoutMs = Number(timeoutMsStr || "10000");
@@ -47,6 +53,15 @@ const startTimeout = () => {
 
 if (readyFile) {
   const t0 = Date.now();
+  // lzccc: cumulative counters bracketing the wait. Their difference is the share of the
+  // WHOLE wait lost to hypervisor steal — so a bursty host that is quiet at the deadline is
+  // still seen, and a quiet host that catches one burst no longer earns grace it did not earn.
+  // CAP_SERIAL_STEAL_STAT lets a fixture serve its own /proc/stat: the child runs during the
+  // wait, so a test can show the window a stolen wait and prove the runner READ it, not just
+  // that the seam works.
+  const statPath = process.env.CAP_SERIAL_STEAL_STAT || "/proc/stat";
+  const readStat = () => readFileSync(statPath, "utf8");
+  const stealAtStart = injectedReadySteal === undefined ? stealSampleSync({ readFile: readStat }) : null;
   poll = setInterval(() => {
     let ready = false;
     try {
@@ -71,7 +86,13 @@ if (readyFile) {
         // kzy5x: ABSOLUTE load, so an 8-core box at load 5.5 is not read as idle and the cold boot gets grace.
         loadPerCpu: injectedReadyLoad === undefined ? measuredReadyLoad() : injectedReadyLoad,
         // cqxo3: and steal, so a 65%-stolen box with a quiet loadavg is not read as idle either.
-        steal: injectedReadySteal === undefined ? currentStealFractionSync() : injectedReadySteal,
+        steal: readinessStealSignal({
+          startJiffies: stealAtStart,
+          endJiffies: stealAtStart ? stealSampleSync({ readFile: readStat }) : null,
+          // The seam is the WINDOW's value: a test that injects 0.8 asserts what the wait
+          // experienced, exactly like a real bursty host.
+          instantFraction: injectedReadySteal === undefined ? currentStealFractionSync() : injectedReadySteal,
+        }).fraction,
       });
       if (readyVerdict.cause === "loaded" && !readyVerdict.reported) {
         process.stderr.write(`\nrunSerialFile: READY_MARKER_LOADED_GRACE ${readyFile} soft=${readyTimeoutMs}ms hard=${readyVerdict.hardTimeoutMs}ms load=${readyVerdict.loadPerCpu?.toFixed(2) ?? "unmeasurable"} steal=${readyVerdict.steal ?? "unmeasurable"}\n`);
