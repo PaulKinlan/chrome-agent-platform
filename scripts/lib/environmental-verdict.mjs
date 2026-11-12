@@ -89,3 +89,43 @@ export function combinePhaseExitCodes(...codes) {
   return 0;
 }
 
+/** True when captured phase output carries any environmental-refusal needle. */
+export function outputHasEnvironmentalMarker(output) {
+  return output.includes(ENVIRONMENTAL_REFUSAL_MARKER) ||
+    output.includes("QuietWindowRefusedError") ||
+    output.includes("ENVIRONMENT: machine is not quiet enough for this gate") ||
+    output.includes("ENVIRONMENT: ntp-boot-staging refusal") ||
+    output.includes("ENVIRONMENT: the fleet-wide heavy-gate slot is busy");
+}
+
+/**
+ * Classify a phase's exit using the phase's own captured output (erxkj).
+ *
+ * The full tier (scripts/run-tests.mjs) does this inline; the subset path
+ * (scripts/select-tests.mjs) historically resolved the child's RAW code, so a
+ * stolen box red-ed the fast gate with rc=1 and the landing queue paid a retry
+ * for an environmental refusal. The rule is the full tier's, two-sided:
+ * every failure a VERIFIED refusal → exit 75 (a re-run, never a red); anything
+ * else — a product block beside the refusals, a marker with no FAILED summary,
+ * no marker at all — keeps the raw code, because refusal changes what the
+ * operator does (requeue) and a genuine failure must never read as retryable.
+ *
+ * @param {number} rawCode the child process's exit code
+ * @param {string} capturedOutput everything the child wrote (stdout + stderr)
+ * @returns {{ code: number, note?: string }}
+ */
+export function classifyPhaseExitFromOutput(rawCode, capturedOutput) {
+  if (rawCode === 0) return { code: 0 };
+  if (!outputHasEnvironmentalMarker(capturedOutput)) return { code: rawCode };
+  const clean = capturedOutput.replace(/\x1b\[[0-9;]*[mGKH]/gu, "");
+  const summaryMatch = /FAILED\b[\s\S]*?\|\s*(\d+)\s*failed/i.exec(clean);
+  if (!summaryMatch) {
+    return { code: rawCode, note: "exited non-zero with a refusal marker but no FAILED summary — preserving the raw code" };
+  }
+  const failCount = Number(summaryMatch[1]);
+  if (failCount > 0 && areAllFailuresEnvironmental(clean)) {
+    return { code: ENVIRONMENTAL_REFUSAL_EXIT, note: "every failure was an environmental refusal" };
+  }
+  return { code: rawCode, note: "contains non-environmental failure(s) — preserving PRODUCT RED" };
+}
+

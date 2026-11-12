@@ -5,6 +5,7 @@ import { assertEquals, assert } from "jsr:@std/assert@1";
 import {
   ENVIRONMENTAL_REFUSAL_EXIT,
   ENVIRONMENTAL_REFUSAL_MARKER,
+  classifyPhaseExitFromOutput,
   combinePhaseExitCodes,
 } from "../scripts/lib/environmental-verdict.mjs";
 import {
@@ -192,3 +193,54 @@ Deno.test("xj6sb: combinePhaseExitCodes combines exit codes correctly and priori
   assertEquals(combinePhaseExitCodes(1, 0, 0), 1);
 });
 
+
+// ── erxkj: the subset parallel phase must classify like the full tier ──────
+
+const REFUSAL_ONLY_OUTPUT = `
+ ERRORS 
+
+boot timing under steal => ./tests/fake-quiet.test.ts:10:6
+error: QuietWindowRefusedError: ENVIRONMENT: machine is not quiet enough for this gate (load1=11.76 load5=9.21 cores=8 load/core=1.47 heavy-builders=3)
+    throw new QuietWindowRefusedError(msg);
+          ^
+
+ FAILURES 
+
+boot timing under steal => ./tests/fake-quiet.test.ts:10:6
+
+FAILED | 0 passed | 1 failed (15ms)
+`;
+
+const PRODUCT_RED_OUTPUT = `
+ ERRORS 
+
+assertion fails => ./tests/fake-product.test.ts:20:6
+error: AssertionError: Values are not equal
+    throw new AssertionError(msg);
+          ^
+
+ FAILURES 
+
+assertion fails => ./tests/fake-product.test.ts:20:6
+
+FAILED | 0 passed | 1 failed (9ms)
+`;
+
+Deno.test("erxkj: classifyPhaseExitFromOutput maps an all-environmental failure to 75 — the subset gate must not red on a refusal", () => {
+  // The r2l8n incident: a stolen box (steal 36%, load/core 1.47) red-ed the fast gate
+  // with rc=1 because the subset path returned the raw deno code.
+  const verdict = classifyPhaseExitFromOutput(1, REFUSAL_ONLY_OUTPUT);
+  assertEquals(verdict.code, ENVIRONMENTAL_REFUSAL_EXIT);
+  assert(verdict.note?.length, "a reclassified exit always says why");
+});
+
+Deno.test("erxkj: classifyPhaseExitFromOutput NEVER softens a product red (two-sided pin)", () => {
+  assertEquals(classifyPhaseExitFromOutput(1, PRODUCT_RED_OUTPUT).code, 1, "an AssertionError block is a product stop, refusal marker or not");
+  const mixed = REFUSAL_ONLY_OUTPUT.replace("FAILURES", "X") + PRODUCT_RED_OUTPUT; // two blocks, one product
+  assertEquals(classifyPhaseExitFromOutput(1, mixed).code, 1, "one product failure beside a refusal stays 1");
+  assertEquals(classifyPhaseExitFromOutput(1, "no markers here at all\nFAILED | 0 passed | 1 failed").code, 1, "no marker → raw code");
+  const noSummary = REFUSAL_ONLY_OUTPUT.replace(/FAILED \| 0 passed \| 1 failed \(15ms\)/, "");
+  assertEquals(classifyPhaseExitFromOutput(1, noSummary).code, 1, "a refusal marker without a FAILED summary keeps the raw code");
+  assertEquals(classifyPhaseExitFromOutput(0, REFUSAL_ONLY_OUTPUT).code, 0, "green is untouched");
+  assertEquals(classifyPhaseExitFromOutput(124, "timed out").code, 124, "a bound kill is untouched");
+});
