@@ -36,6 +36,7 @@ import {
   untrustedClose,
   fenceUntrustedText,
 } from "./untrusted-fence.js";
+import { isImportedSkill, mustFenceSkill } from "./skill-trust.js";
 
 export const PROMOTION_BUDGET = 600; // max rendered characters
 export const PROMOTION_TOP_N = 4; // max promoted skills
@@ -97,15 +98,6 @@ export function compareRelevance(a, b) {
   return ia < ib ? -1 : ia > ib ? 1 : 0;
 }
 
-/** Is a catalog row an IMPORTED (remote, untrusted) skill? skillCatalog rows
- * carry `source: "imported"`; synthetic/test rows carry a source-qualified
- * `imported:` refId. Everything else is owner-authored/trusted. */
-function isImportedSkill(skill) {
-  if (!skill || typeof skill !== "object") return false;
-  if (skill?.source === "imported") return true;
-  return String(skill?.refId ?? skill?.id ?? "").startsWith("imported:");
-}
-
 /** Shorten untrusted inner text (never splitting a UTF-16 surrogate pair — a
  * lone surrogate would decode to U+FFFD) and mark the cut with an ellipsis. */
 function fitInner(inner, maxChars) {
@@ -128,23 +120,29 @@ function promotionRow(skill, token, budget, headingLen, instrLen) {
   const rawId = String(skill?.id ?? refId);
   const name = String(skill?.name ?? refId);
   const desc = String(skill?.description ?? "").trim();
-  const imported = isImportedSkill(skill);
-  const guidance = imported
+  // v9yc8: FENCE BY DEFAULT — the boundary comes from mustFenceSkill(), not from
+  // "does this row look imported" (that deny-list rendered unknown sources raw).
+  // xhr57: and the FENCE IS NOT THE READ PATH. skill_read fetches an imported OPFS
+  // body, which an unknown-source row does not have, so the promise is gated on
+  // isImportedSkill() separately: a row can be fenced AND unreadable.
+  const fenced = mustFenceSkill(skill);
+  const readable = isImportedSkill(skill);
+  const guidance = readable
     ? `adopt with /skill:${refId} or read it now via skill_read(skill:"${rawId}")`
     : `adopt with /skill:${refId}`;
-  if (imported) {
+  if (fenced) {
     const open = untrustedOpen(token);
     const close = untrustedClose(token);
     // row = open + "\n" + inner + "\n" + close + "\n- " + guidance, and the
     // section = heading + "\n" + row + "\n" + instructions.
     const innerMax = budget - headingLen - instrLen - 2 - open.length - close.length - guidance.length - 5;
     const inner = fitInner(`${name} — ${desc}`, innerMax);
-    return { text: `${open}\n${inner}\n${close}\n- ${guidance}`, imported: true };
+    return { text: `${open}\n${inner}\n${close}\n- ${guidance}`, imported: readable };
   }
   // row = "- " + inner + " (" + guidance + ")"
   const innerMax = budget - headingLen - instrLen - 2 - guidance.length - 5;
   const inner = fitInner(`${name} — ${desc}`, innerMax);
-  return { text: `- ${inner} (${guidance})`, imported: false };
+  return { text: `- ${inner} (${guidance})`, imported: readable };
 }
 
 /**
@@ -181,7 +179,7 @@ export function promoteSkills({ task, catalog, adoptedIds = new Set(), untrusted
   // The skill_read read path is IMPORTED-only: promise it only when a promoted
   // row is imported (recomputed after budget trims so a popped imported row
   // can never leave a promise behind).
-  let instructions = top.some(({ skill }) => isImportedSkill(skill))
+  let instructions = top.some(({ skill }) => mustFenceSkill(skill))
     ? 'Adopt one by writing /skill:<id> in your next message (its full body composes for this run), or read an imported skill on demand via skill_read(skill:"<id>") without adopting.'
     : "Adopt one by writing /skill:<id> in your next message (its full body composes for this run).";
   const rows = top.map(({ skill }) => promotionRow(skill, token, budget, heading.length, instructions.length));
