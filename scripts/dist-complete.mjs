@@ -75,8 +75,16 @@ export const INDEXED_SOURCE_EXCLUDED_PATHS = Object.freeze(new Set([
  *   total FELL 129,784 B - this is dedupe, not proliferation). Bound 20 keeps the
  *   same +2 spare slots and the same fail-closed purpose: a surface that stops
  *   sharing and starts emitting per-entry chunks reds here.
+ * - gzkmx (2026-11-11): 20 -> 21. The credential-SHAPE constants moved out of
+ *   pure-redact.js into their own module (lib/pure-secret-shapes.js, cap-log's
+ *   fat import re-pointed) so a redaction-logic delta stops reaching cap-log's
+ *   consumer set. Measured on main 413167134 with the selector's own build:
+ *   before 19 chunks / 835,023 B, after 21 chunks / 835,192 B (+169 B aggregate
+ *   - the shapes module shares cap-log's chunk; one downstream module split out).
+ *   21 keeps this convention's +2 spare slots over the new count and the same
+ *   fail-closed purpose.
  */
-export const MAX_CHUNK_COUNT = 20;
+export const MAX_CHUNK_COUNT = 21;
 export const MAX_CHUNK_FILE_BYTES = 500 * 1024;
 export const CHUNK_PATH_RE = /^chunks\/[a-zA-Z0-9._-]+\.js$/u;
 

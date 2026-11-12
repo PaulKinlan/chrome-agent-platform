@@ -49,6 +49,10 @@ const FILES = [
   ["extension/lib/pure-hash.js", "docs/pure-hash.js"],
   ["extension/lib/pure-text.js", "docs/pure-text.js"],
   ["extension/lib/pure-redact.js", "docs/pure-redact.js"],
+  // chrome-agent-platform-gzkmx: the credential SHAPES pure-redact.js imports and
+  // re-exports — the gallery graph must resolve the shapes module beside the seam.
+  ["extension/lib/pure-secret-shapes.js", "docs/pure-secret-shapes.js"],
+  ["extension/lib/pure-id-hash.js", "docs/pure-id-hash.js"],
   ["extension/lib/pure-trust.js", "docs/pure-trust.js"],
   ["extension/lib/pure-webmcp.js", "docs/pure-webmcp.js"],
   ["extension/lib/pure-tabs.js", "docs/pure-tabs.js"],

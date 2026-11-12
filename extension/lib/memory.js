@@ -211,8 +211,7 @@ async function currentVersion(dir, key) {
 }
 
 import { kvGet } from "./kv.js";
-import { fnv1a } from "./pure-hash.js";
-import { newId } from "./pure-text.js";
+import { fnv1a, newId } from "./pure-id-hash.js"; // gzkmx: the narrow id/hash module, not the seams
 
 const ENROLL_KEY = "cap:enrollment";
 

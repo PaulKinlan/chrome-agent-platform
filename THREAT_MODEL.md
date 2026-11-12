@@ -671,7 +671,7 @@ and each names the executable check that would catch a regression.
   lacks the broker's checks. Both policies are now the broker's, not a weaker copy of it; pinned in
   `tests/script-host.test.ts` (z7i3m — dropping either the refusal or `redirect: "manual"` reds the pin).
 - **INV-6 — A credential-shaped key never reaches a prompt, a log, a receipt or an error
-  string.** `extension/lib/pure-redact.js#SECRET_KEY_RE` classifies the credential-shaped keys that
+  string.** `extension/lib/pure-secret-shapes.js#SECRET_KEY_RE` classifies the credential-shaped keys that
   `extension/lib/pure-redact.js#redactSecrets` strips recursively (`redactSecretText` and
   `safeProviderError` cover the text and provider-error surfaces; the caller surfaces whose
   `redactSecrets` calls are censused live are `extension/lib/tool-summary.js`,
