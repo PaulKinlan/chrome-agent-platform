@@ -24,6 +24,7 @@ import {
   RECEIPT_FUTURE_SKEW_MS,
   CANONICAL_HEAVY_GATE_COMMAND,
   RECEIPT_VERSION,
+  attributeParallelBatchOutput,
   auditSuiteLedger,
   describeReceiptCoverage,
   heavyGateCommand,
@@ -34,6 +35,69 @@ import {
   writeHeavyReceipt,
 } from "../scripts/lib/heavy-receipt.mjs";
 import { currentTreeHash, evaluateStealConditions } from "../scripts/lib/heavy-receipt.mjs";
+// ── n3t01: per-file attribution for a failed parallel batch ─────────────────
+// Recorded shape of `deno test --parallel` (Deno 2.9.7) with one failing file:
+// per-test lines carry `./<file> => <test> ... ok|FAILED`, and the ERRORS/
+// FAILURES sections carry `<test> => ./<file>:line:col`.
+
+const BATCH_OUT = `Check tests/a.test.ts
+Check tests/b.test.ts
+Check tests/c.test.ts
+./tests/c.test.ts => c ok ... \u001b[32mok\u001b[0m (439µs)
+./tests/a.test.ts => a ok ... ok (458µs)
+./tests/b.test.ts => b fails ... FAILED (977µs)
+./tests/b.test.ts => b ok ... ok (79µs)
+
+ ERRORS 
+
+b fails => ./tests/b.test.ts:1:6
+error: Error: boom
+
+ FAILURES 
+
+b fails => ./tests/b.test.ts:1:6
+
+FAILED | 3 passed | 1 failed (40ms)
+
+error: Test failed
+`;
+
+Deno.test("n3t01: a failed parallel batch attributes per file — the failing file is NAMED, passing files are not tarred, a silent file is unknown", () => {
+  const files = ["tests/a.test.ts", "tests/b.test.ts", "tests/c.test.ts", "tests/died.test.ts"];
+  const attributed = attributeParallelBatchOutput(BATCH_OUT, files);
+  assertEquals(attributed.get("tests/b.test.ts"), "failed", "the failing file is named individually");
+  assertEquals(attributed.get("tests/a.test.ts"), "passed", "a passing file is never tarred by its phase");
+  assertEquals(attributed.get("tests/c.test.ts"), "passed");
+  assertEquals(attributed.get("tests/died.test.ts"), "unknown", "a file with no evidence is unknown, never invented");
+});
+
+Deno.test("n3t01: a failure-section pointer attributes a failure even without a per-test FAILED line", () => {
+  const out = attributeParallelBatchOutput(" ERRORS \n\nsome test => ./tests/x.test.ts:10:2\nerror: Error: boom\n", ["tests/x.test.ts"]);
+  assertEquals(out.get("tests/x.test.ts"), "failed");
+});
+
+Deno.test("n3t01: an all-ok batch attributes every file passed; ignored tests count as the batch's green evidence", () => {
+  const out = attributeParallelBatchOutput(
+    "./tests/a.test.ts => a ok ... ok (1ms)\n./tests/b.test.ts => b skipped ... ignored\nok | 1 passed | 0 failed | 1 ignored\n",
+    ["tests/a.test.ts", "tests/b.test.ts"],
+  );
+  assertEquals(out.get("tests/a.test.ts"), "passed");
+  assertEquals(out.get("tests/b.test.ts"), "passed");
+});
+
+Deno.test("n3t01: a failed row in the ledger blocks certification and names the file (auditSuiteLedger wiring)", () => {
+  const expected = ["tests/a.test.ts", "tests/b.test.ts"];
+  const suites = [
+    { file: "tests/a.test.ts", phase: "parallel", status: "passed" },
+    { file: "tests/b.test.ts", phase: "parallel", status: "failed" },
+  ];
+  const audit = auditSuiteLedger(suites, expected);
+  assertEquals(audit.ok, false, "a named red file blocks certification by itself");
+  assertEquals(audit.bad, [{ file: "tests/b.test.ts", status: "failed" }]);
+  assertEquals(audit.missing, [], "every enumerated file still has a row — resolution, not absence");
+});
+
+
 import { durableDir } from "../scripts/lib/durable-root.mjs";
 
 const ROOT = join(fileURLToPath(import.meta.url), "..", "..");

@@ -25,7 +25,7 @@
 import { fileURLToPath } from "node:url";
 import { CERT_HEAVY_FILES, HEAVY_GATE_FILES, QUARANTINED_HEAVY_FILES, WALL_CLOCK_HEAVY_FILES } from "./test-partition.mjs";
 import { areAllFailuresEnvironmental, combinePhaseExitCodes, ENVIRONMENTAL_REFUSAL_EXIT } from "./lib/environmental-verdict.mjs";
-import { heavyGateCommand, phaseStatusFor } from "./lib/heavy-receipt.mjs";
+import { attributeParallelBatchOutput, heavyGateCommand, phaseStatusFor } from "./lib/heavy-receipt.mjs";
 import {
   DEFAULT_INTERVAL_MS as STEAL_INTERVAL_MS,
   createSampler as createStealSampler,
@@ -88,12 +88,13 @@ export function classifyPhaseExit(code: number, capturedOutput = ""): number {
   return code;
 }
 
-/** One `deno test` child with the tier's shared ceiling. Returns the child's exit code (124 on the bound). */
+/** One `deno test` child with the tier's shared ceiling. Returns the child's exit code (124 on the
+ *  bound) and its captured output (empty when stdio was inherited). */
 async function runPhase(
   label: string,
   files: string[],
   { parallel, timeoutMs, capture }: { parallel: boolean; timeoutMs: number; capture: boolean },
-): Promise<number> {
+): Promise<{ code: number; output: string }> {
   console.log(`\nheavy-gate: ${label} — ${files.length} file(s)${parallel ? " (--parallel)" : " (SERIAL, quiet-window acquirer)"}`);
   for (const f of files) console.log(`  - ${f}`);
   const args = ["test", "-A", "--config", "deno.runner.jsonc"];
@@ -104,7 +105,8 @@ async function runPhase(
     cwd: ROOT,
     env: { ...Deno.env.toObject(), CAP_TEST_RUNNER: "1" },
     // The wall-clock phase is CAPTURED (then echoed) so its refusal marker can be classified without losing
-    // the operator's view; the batch keeps inheriting stdio because it is large and never refused.
+    // the operator's view; the batch is captured too (n3t01): a FAILED batch's per-file attribution is read
+    // from its own output, which only exists here if the output was captured.
     stdout: capture ? "piped" : "inherit",
     stderr: capture ? "piped" : "inherit",
   });
@@ -137,13 +139,13 @@ async function runPhase(
   if (timer) clearTimeout(timer);
   if (timedOut) {
     console.error(`\nheavy-gate: TIMED OUT after ${timeoutMs / 1000}s (${label})`);
-    return 124;
+    return { code: 124, output: captured };
   }
   const verdict = capture ? classifyPhaseExit(status.code, captured) : status.code;
   if (verdict === 0) console.log(`heavy-gate: ${label} GREEN`);
   else if (verdict === ENVIRONMENTAL_REFUSAL_EXIT) console.error(`heavy-gate: ${label} REFUSED environmentally (exit 75)`);
   else console.error(`heavy-gate: ${label} exited ${verdict}`);
-  return verdict;
+  return { code: verdict, output: captured };
 }
 
 export async function runHeavyGate(args = Deno.args): Promise<number> {
@@ -186,20 +188,19 @@ export async function runHeavyGate(args = Deno.args): Promise<number> {
 
   // Each phase is recorded with the files it ran, so the receipt can name every enumerated suite's
   // terminal status instead of a bare count (juubk: a 1-suite probe must never certify 19).
-  const phases: { files: string[]; phase: string; code: number }[] = [];
+  const phases: { files: string[]; phase: string; code: number; output?: string }[] = [];
   if (parallel.length) {
-    phases.push({
-      files: parallel,
-      phase: "parallel",
-      code: await runPhase("PARALLEL batch", parallel, { parallel: true, timeoutMs, capture: false }),
-    });
+    const batch = await runPhase("PARALLEL batch", parallel, { parallel: true, timeoutMs, capture: true });
+    phases.push({ files: parallel, phase: "parallel", code: batch.code, output: batch.output });
   }
   // Wall-clock suites run one at a time, never beside the batch: their assertion is about the box.
+  // n3t01: the loop CONTINUES after a failure — every wall-clock file gets its own run and its own
+  // verdict; only a hard crash or the bound kill stops the tier.
   for (const file of wallClock) {
     phases.push({
       files: [file],
       phase: "wall-clock",
-      code: await runPhase(`WALL-CLOCK ${file}`, [file], { parallel: false, timeoutMs, capture: true }),
+      code: (await runPhase(`WALL-CLOCK ${file}`, [file], { parallel: false, timeoutMs, capture: true })).code,
     });
   }
 
@@ -240,9 +241,16 @@ export async function runHeavyGate(args = Deno.args): Promise<number> {
 
   const codes = phases.map((p) => p.code);
   let rc = codes.length ? combinePhaseExitCodes(...codes) : 0;
-  const suites: { file: string; phase: string; status: string; bead?: string; reason?: string }[] = phases.flatMap((p) =>
-    p.files.map((file) => ({ file, phase: p.phase, status: phaseStatusFor(p.code) }))
-  );
+  const suites: { file: string; phase: string; status: string; bead?: string; reason?: string }[] = phases.flatMap((p) => {
+    // n3t01: a FAILED parallel batch attributes per file from its own captured output — a failing
+    // file is NAMED and a passing file is never tarred by its phase. A green batch, a refusal and a
+    // bound kill keep the phase-wide verdict (all-green certifies; 75/124/137/143 is itself).
+    if (p.phase === "parallel" && phaseStatusFor(p.code) === "failed") {
+      const attributed = attributeParallelBatchOutput(p.output ?? "", p.files);
+      return p.files.map((file) => ({ file, phase: p.phase, status: attributed.get(file) ?? "unknown" }));
+    }
+    return p.files.map((file) => ({ file, phase: p.phase, status: phaseStatusFor(p.code) }));
+  });
   // 8tgnt: a quarantined suite is NAMED in the ledger with the bead and reason that excluded it, and it is not a
   // phase result: it never ran, so it must not be counted as covered and it must not move the exit code. Appended
   // only for the enumerated run — a CLI-named subset records exactly what it ran, and can never certify anyway.
