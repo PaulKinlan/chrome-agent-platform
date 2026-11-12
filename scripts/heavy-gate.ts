@@ -80,6 +80,15 @@ const ANSI_RE = /\x1b\[[0-9;]*[mGKH]/gu;
  * point of the refusal (a box problem must never read as a tree problem) is lost at the last step.
  *
  * Returns 75 when the phase's own output says every failure was environmental; otherwise the code unchanged.
+ *
+ * THE MAPPING (chrome-agent-platform-0i477), so nobody has to rediscover it:
+ *   every failure environmental        -> 75  refusal: requeue, nothing about the tree is claimed
+ *   MIXED (environmental + product)    -> 1   failure: investigate; one refusal never launders a defect
+ *   product failure(s) only            -> 1   failure
+ *   unrecognised error text in batch   -> 1   failure; a module-load death is "unknown" (hjuis), not
+ *                                              a named failure, and it must not soften into a refusal
+ *   bound killed the run (124)         -> 124 unknown, never a pass
+ * Operator-facing copy of this table lives in docs/MERGER-PLAYBOOK.md.
  */
 export function classifyPhaseExit(code: number, capturedOutput = ""): number {
   if (code === 0 || code === ENVIRONMENTAL_REFUSAL_EXIT) return code;

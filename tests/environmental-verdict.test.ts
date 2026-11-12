@@ -244,3 +244,78 @@ Deno.test("erxkj: classifyPhaseExitFromOutput NEVER softens a product red (two-s
   assertEquals(classifyPhaseExitFromOutput(0, REFUSAL_ONLY_OUTPUT).code, 0, "green is untouched");
   assertEquals(classifyPhaseExitFromOutput(124, "timed out").code, 124, "a bound kill is untouched");
 });
+
+// ── chrome-agent-platform-0i477 (2026-11-12): n3t01 made a FAILED BATCH consult
+// areAllFailuresEnvironmental, so an all-environmental batch returns refusal 75 where it
+// returned exit 1. That is defensible — a box that could not measure should refuse rather
+// than fail — but the BOUNDARY is "every failure in the batch is environmental", and a
+// boundary that softens is how a defect gets retried instead of investigated. These legs
+// pin the whole mapping, including the case that was silently wrong.
+Deno.test("0i477: the verdict mapping — all-environmental refuses, MIXED and product failures stay exit 1", () => {
+  const REFUSAL = `\n\nntp-boot-staging: boots ntp.html => ./tests/ntp-boot-staging-timing.test.ts:41:6\n` +
+    `error: QuietWindowRefusedError: ENVIRONMENT: machine is not quiet enough for this gate (waited 181351 ms)\n`;
+  const PRODUCT = `\n\nproduct-suite: asserts something => ./tests/product.test.ts:12:3\n` +
+    `error: AssertionError: Expected 0 long tasks, got 3\n`;
+  // all-environmental -> refusal
+  assertEquals(areAllFailuresEnvironmental(` ERRORS ${REFUSAL}\n FAILURES \n`), true, "all-environmental");
+  // MIXED, both orders -> NOT a refusal (this is where softening would hide a defect)
+  assertEquals(areAllFailuresEnvironmental(` ERRORS ${PRODUCT}${REFUSAL}\n FAILURES \n`), false, "mixed: product then refusal");
+  assertEquals(areAllFailuresEnvironmental(` ERRORS ${REFUSAL}${PRODUCT}\n FAILURES \n`), false, "mixed: refusal then product");
+  // product failure alone -> NOT a refusal
+  assertEquals(areAllFailuresEnvironmental(` ERRORS ${PRODUCT}\n FAILURES \n`), false, "product alone");
+});
+
+Deno.test("0i477: a failure the block splitter does not recognise keeps the batch a FAILURE, even beside a refusal", () => {
+  // The splitter starts a new block only at a `name => path` line, so anything printed
+  // BEFORE the first such line used to be dropped by slice(1) — and a module-load death
+  // (`error: Module not found …`, no arrow) ahead of an environmental refusal therefore
+  // classified as ALL-environmental. Measured before the fix: this returned true, i.e.
+  // classifyPhaseExit turned a tree that could not even LOAD a module into refusal 75,
+  // which an operator requeues instead of investigating. That is the hjuis limitation
+  // (module-load death is 'unknown', not a named failure) meeting the all-environmental
+  // boundary, and the only safe answer is fail closed.
+  const REFUSAL = `\n\nntp-boot-staging: boots ntp.html => ./tests/ntp-boot-staging-timing.test.ts:41:6\n` +
+    `error: QuietWindowRefusedError: ENVIRONMENT: machine is not quiet enough for this gate (waited 181351 ms)\n`;
+  const LOAD_DEATH = `\n\nerror: Module not found "file:///nope.js".\n`;
+  assertEquals(
+    areAllFailuresEnvironmental(` ERRORS ${LOAD_DEATH}${REFUSAL}\n FAILURES \n`),
+    false,
+    "an unrecognised error line ahead of a refusal must NOT be softened into a refusal",
+  );
+  assertEquals(areAllFailuresEnvironmental(` ERRORS ${LOAD_DEATH}\n FAILURES \n`), false, "a load death alone is a failure");
+});
+
+Deno.test("0i477 review: an UNCAUGHT module error beside a refusal stays a FAILURE (real Deno 2.9.7 output)", () => {
+  // The first fix only saw error text BEFORE the first `name => path` header. The review
+  // reproduced the hole on real runner output: a refusal file sorting BEFORE a
+  // top-level-throw file makes Deno print the uncaught block INSIDE the refusal's error text,
+  // with no arrow to start a new block, so it was removed along with the block and the batch
+  // classified environmental. These strings are copied from `deno test -A --no-check
+  // a_refusal.test.ts b_throw.test.ts` on Deno 2.9.7, not hand-written — a fixture I invented
+  // could only ever agree with my own parser. The only edit is the scratch path, rewritten to
+  // file:///repo/ so the fixture carries no literal tmpdir (tests/durable-root.test.ts polices
+  // that, and a test may not smuggle one in as DATA); the header shapes the parser reads are
+  // untouched.
+  const REFUSAL_BLOCK = `
+refuses => ./a_refusal.test.ts:1:6
+error: Error: ENVIRONMENT: machine is not quiet enough for this gate (waited 181351 ms)
+  throw new QuietWindowRefusedError("ENVIRONMENT: machine is not quiet enough for this gate (waited 181351 ms)");
+        ^
+    at file:///repo/a_refusal.test.ts:3:9
+`;
+  const UNCAUGHT_BLOCK = `
+./b_throw.test.ts (uncaught error)
+error: (in promise) Error: module-level boom
+throw new Error("module-level boom");
+      ^
+    at file:///repo/b_throw.test.ts:1:7
+This error was not caught from a test and caused the test runner to fail on the referenced module.
+It most likely originated from a dangling promise, event/timeout handler or top-level code.
+`;
+  // Refusal first (the reviewer's failing order): the uncaught block must NOT be swallowed.
+  assertEquals(areAllFailuresEnvironmental(` ERRORS ${REFUSAL_BLOCK}${UNCAUGHT_BLOCK}\n FAILURES \n`), false);
+  // Uncaught first: already correct before, kept so a future splitter change cannot regress it.
+  assertEquals(areAllFailuresEnvironmental(` ERRORS ${UNCAUGHT_BLOCK}${REFUSAL_BLOCK}\n FAILURES \n`), false);
+  // The refusal on its own is still a refusal — the fix must not make everything a failure.
+  assertEquals(areAllFailuresEnvironmental(` ERRORS ${REFUSAL_BLOCK}\n FAILURES \n`), true);
+});

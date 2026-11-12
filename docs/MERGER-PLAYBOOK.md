@@ -45,6 +45,25 @@ When a test run fails, never guess and never blame ambient load without mechanis
 | **`4vfj` stale selector** | 4 combobox checks fail on `#task-input` | Standalone (`npm run test:a11y`) | Pre-existing selector drift on unmodified main prior to composer-target migration. |
 | **`3nurz` CDP deadline under named builder load** | `waitForServiceWorker: Target.getTargets: deadline exceeded` or CDP evaluate/send deadline (`CdpLoadTimeoutError`, `CdpEvaluateLoadTimeoutError`) | Parallel real-browser / KAT | DevTools CDP socket or worker registration starved by concurrent heavy builders (`chrome-agent-platform-56hfm`). **Discriminator**: Requires contemporaneous host sample naming concurrent active heavy-builder job(s) (`activeBuilderJobs > 0` or non-empty `compilerNames`). On an idle box or suite parallel-phase load alone with zero named builder jobs, it strictly remains `PRODUCT RED` (`exit 1`) and blocks landing. Passes in isolation (`npm run test:file`). |
 
+### What exit 75 MEANS for a failed batch (chrome-agent-platform-0i477)
+
+A refused run and a failed run call for different operator actions: **requeue** versus **investigate**. Since
+`n3t01` a failed heavy-tier batch consults `areAllFailuresEnvironmental` (`scripts/lib/environmental-verdict.mjs`)
+before its verdict is set, so a batch that used to hard-fail can now refuse. That is deliberate — a box that
+could not measure should refuse, not fail — but the boundary is narrow and it is worth reading before acting:
+
+| Batch outcome | Verdict | What the operator does |
+|---|---|---|
+| Every failure in the batch is an environmental refusal | **exit 75** (refusal) | Requeue. Nothing about the tree is claimed; the run certified nothing. |
+| MIXED — at least one environmental failure **and** at least one product failure | **exit 1** (failure) | Investigate. One refusal never launders the product failure beside it; a mixed batch is a product stop. |
+| Product failure(s) only | **exit 1** (failure) | Investigate. |
+| An error the classifier does not recognise (e.g. a module-load death, `error: Module not found …`) beside an environmental refusal | **exit 1** (failure) | Investigate. This is the hjuis limitation: a module-load death is *unknown*, not a named failure, and `0i477` makes it fail closed — unclassified error text anywhere in the batch keeps the batch a failure rather than softening it into a refusal. |
+| Exit 124 (bound killed the run) | **124** | Unknown, not a pass and not a refusal: see the timeout rule below. |
+
+The boundary is pinned by `tests/environmental-verdict.test.ts` (the mapping, the MIXED case in both orders, and
+the unrecognised-error case), so a change that widens "environmental" turns that suite red rather than quietly
+turning a defect into a retry.
+
 ### Non-signature load reds: a narrow, evidence-gated exception (chrome-agent-platform-m9g43)
 
 A failing gate with **no matching named signature** is environmental **only when BOTH** of these independent facts are in the landing bead, tied to the **same exact tree**:
