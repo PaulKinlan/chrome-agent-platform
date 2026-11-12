@@ -12,7 +12,13 @@
 
 import { fileURLToPath } from "node:url";
 import { assert, assertEquals } from "jsr:@std/assert@1";
-import { classifyReadyMarkerTimeout, currentStealFractionSync, runSerialFile, serialFileTimeoutMs } from "../scripts/lib/serial-phase.mjs";
+import {
+  classifyReadyMarkerTimeout,
+  currentCpuStallFractionSync,
+  currentStealFractionSync,
+  runSerialFile,
+  serialFileTimeoutMs,
+} from "../scripts/lib/serial-phase.mjs";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -548,6 +554,7 @@ Deno.test("passes after late marker", () => {});
       readyTimeoutMs: softMs,
       readyLoadPerCpu: 4, // deterministic injected reading, never manufacture system load
       readySteal: 0, // cqxo3: pin the quiet box too, or ambient steal manufactures grace
+      readyStall: 0, // lzccc: same reason for the window — ambient stall would manufacture grace
       stdio: "pipe",
       cwd: ROOT,
     } as Parameters<typeof runSerialFile>[1]);
@@ -594,6 +601,7 @@ Deno.test("xy6n2 falsifier: the DERIVED late-marker window is still a BOUND — 
       readyTimeoutMs: softMs,
       readyLoadPerCpu: 1, // idle: the derived number gets NO grace, so the derivation itself is the bound
       readySteal: 0, // cqxo3: and no steal contention — an ambient stolen box would manufacture grace and rename the refusal
+      readyStall: 0, // lzccc: and no ambient CPU-pressure window either — this leg asserts the BOUND
       stdio: ["ignore", "ignore", "pipe"],
       cwd: ROOT,
     } as Parameters<typeof runSerialFile>[1]);
@@ -655,15 +663,86 @@ Deno.test("passes after late marker", () => {});
   }
 });
 
+Deno.test("lzccc: the CPU-pressure window is read as a fraction, and unmeasurable is NULL not zero", () => {
+  const stat = "some avg10=0.16 avg60=1.64 avg300=3.46 total=137105084653\nfull avg10=0.00 avg60=0.00 avg300=0.01 total=1\n";
+  const readFile = () => stat as unknown as ReturnType<typeof Deno.readTextFileSync>;
+  // float division: compare at 1e-6 rather than exact
+  assertEquals(Math.round((currentCpuStallFractionSync({ readFile } as never) ?? -1) * 1e6), 16400);
+  // The `full` line must not be mistaken for `some`, and a different window is honoured.
+  assertEquals(Math.round((currentCpuStallFractionSync({ readFile, window: "avg300" } as never) ?? -1) * 1e6), 34600);
+  // Absent PSI (non-Linux, old kernel), a missing line, or garbage contributes NO scaling:
+  // "unmeasurable" must stay distinguishable from "measured idle" or the receipt lies.
+  const missing = () => { throw new Error("ENOENT"); };
+  assertEquals(currentCpuStallFractionSync({ readFile: missing } as never), null);
+  assertEquals(currentCpuStallFractionSync({ readFile: (() => "full avg10=9.99\n") as never }), null);
+  assertEquals(currentCpuStallFractionSync({ readFile: (() => "some avg10=nan\n") as never }), null);
+});
+
+Deno.test("lzccc: a contended WINDOW earns the grace even when the 150ms instant reads quiet", () => {
+  // The reviewer's shape: a box that happens to be quiet for the sampled instant but has
+  // been stalling tasks all minute. Pre-fix this classified idle-never-settled — a
+  // strictly-product red for environmental noise — and red the child.
+  const quietInstant = classifyReadyMarkerTimeout({ baseMs: 5_000, loadPerCpu: 1, steal: 0, stall: 0.8 });
+  assertEquals(quietInstant.cause, "loaded");
+  assertEquals(quietInstant.stall, 0.8);
+  assert(quietInstant.hardTimeoutMs > 5_000, `the window must buy grace: ${quietInstant.hardTimeoutMs}`);
+  // Sustained-quiet box that catches one steal burst is still the SAME call (no behaviour lost).
+  assertEquals(classifyReadyMarkerTimeout({ baseMs: 5_000, loadPerCpu: 1, steal: 0.8, stall: 0 }).cause, "loaded");
+  // And a genuinely idle box is still idle: neither signal above the dead band.
+  assertEquals(classifyReadyMarkerTimeout({ baseMs: 5_000, loadPerCpu: 1, steal: 0, stall: 0 }), {
+    cause: "idle-never-settled", loadPerCpu: 1, steal: 0, stall: 0, hardTimeoutMs: 5_000,
+  });
+  // Unmeasurable only when NOTHING could be measured — a null window with a quiet instant
+  // and no loadavg is still unmeasurable (unchanged), but a measured window rescues it.
+  assertEquals(classifyReadyMarkerTimeout({ baseMs: 5_000, loadPerCpu: null, steal: null, stall: null }).cause, "unmeasurable");
+  assertEquals(classifyReadyMarkerTimeout({ baseMs: 5_000, loadPerCpu: null, steal: null, stall: 0.9 }).cause, "loaded");
+});
+
+Deno.test("lzccc: the windowed signal drives the grace end-to-end, and the receipt names it", async () => {
+  // The same late-marker fixture as the cqxo3 steer leg, but with the INSTANT quiet
+  // (steal 0) and the WINDOW contended (stall 0.8): the pre-fix runner classified this
+  // child idle-never-settled and killed it.
+  const tempDir = await Deno.makeTempDir({ dir: durableDir("scratch"), prefix: "cap-stall-grace-" });
+  const readyFile = `${tempDir}/late.marker`;
+  const tempTest = `${tempDir}/late-ready.test.ts`;
+  const bootMs = await measureChildBootMs(tempDir);
+  const softMs = bootMs + 500;
+  const lateMarginMs = 1_500;
+  await Deno.writeTextFile(tempTest, `${selfReapWatchdog(`${tempTest}.runner`)}await new Promise((resolve) => setTimeout(resolve, ${softMs + lateMarginMs}));
+await Deno.writeTextFile(${JSON.stringify(readyFile)}, "ready");
+Deno.test("passes after late marker", () => {});
+`);
+  try {
+    const res = runSerialFile(tempTest, {
+      timeoutMs: 2_000,
+      readyFile,
+      readyTimeoutMs: softMs,
+      readyLoadPerCpu: 1, // idle on loadavg
+      readySteal: 0, // ...and quiet for the sampled instant...
+      readyStall: 0.8, // ...but the kernel says tasks stalled 80% of the last minute
+      stdio: "pipe",
+      cwd: ROOT,
+    } as Parameters<typeof runSerialFile>[1]);
+    assertEquals(res.code, 0, `the stalled-box late marker must survive: ${res.stderr?.toString()}`);
+    assertEquals(res.timedOut, false);
+    const err = res.stderr?.toString() ?? "";
+    assert(err.includes("READY_MARKER_LOADED_GRACE"), `the grace is named: ${err}`);
+    assert(err.includes("stall=0.8"), `the receipt names the WINDOW that earned it: ${err}`);
+    assert(err.includes("steal=0"), `and the quiet instant it did not rest on: ${err}`);
+  } finally {
+    await Deno.remove(tempDir, { recursive: true }).catch(() => {});
+  }
+});
+
 Deno.test("xy6n2: ready timeout classification has an idle bound, measured x4 load cap, and unmeasurable refusal", () => {
   assertEquals(classifyReadyMarkerTimeout({ baseMs: 5_000, loadPerCpu: 1 }),
-    { cause: "idle-never-settled", loadPerCpu: 1, steal: null, hardTimeoutMs: 5_000 });
+    { cause: "idle-never-settled", loadPerCpu: 1, steal: null, stall: null, hardTimeoutMs: 5_000 });
   assertEquals(classifyReadyMarkerTimeout({ baseMs: 5_000, loadPerCpu: 2.5 }),
-    { cause: "loaded", loadPerCpu: 2.5, steal: null, hardTimeoutMs: 12_500 });
+    { cause: "loaded", loadPerCpu: 2.5, steal: null, stall: null, hardTimeoutMs: 12_500 });
   assertEquals(classifyReadyMarkerTimeout({ baseMs: 5_000, loadPerCpu: 99 }),
-    { cause: "loaded", loadPerCpu: 99, steal: null, hardTimeoutMs: 20_000 });
+    { cause: "loaded", loadPerCpu: 99, steal: null, stall: null, hardTimeoutMs: 20_000 });
   assertEquals(classifyReadyMarkerTimeout({ baseMs: 5_000, loadPerCpu: null }),
-    { cause: "unmeasurable", loadPerCpu: null, steal: null, hardTimeoutMs: 5_000 });
+    { cause: "unmeasurable", loadPerCpu: null, steal: null, stall: null, hardTimeoutMs: 5_000 });
 });
 
 Deno.test("cqxo3: steal is contention the loadavg cannot see — a stolen box earns the same bounded grace", () => {
@@ -679,12 +758,12 @@ Deno.test("cqxo3: steal is contention the loadavg cannot see — a stolen box ea
   assertEquals(stolen.steal, 0.647);
   // The dead band keeps a cloud VM idling at 1-2% steal on the idle path.
   assertEquals(classifyReadyMarkerTimeout({ baseMs: 5_000, loadPerCpu: 1, steal: 0.01 }),
-    { cause: "idle-never-settled", loadPerCpu: 1, steal: 0.01, hardTimeoutMs: 5_000 });
+    { cause: "idle-never-settled", loadPerCpu: 1, steal: 0.01, stall: null, hardTimeoutMs: 5_000 });
   // Unmeasurable steal fails closed to the load-only decision, never to idle.
   assertEquals(classifyReadyMarkerTimeout({ baseMs: 5_000, loadPerCpu: 2.5, steal: null }).cause, "loaded");
   // Steal alone (load unmeasurable) is still measurable contention.
   assertEquals(classifyReadyMarkerTimeout({ baseMs: 5_000, loadPerCpu: null, steal: 0.5 }),
-    { cause: "loaded", loadPerCpu: null, steal: 0.5, hardTimeoutMs: 10_000 });
+    { cause: "loaded", loadPerCpu: null, steal: 0.5, stall: null, hardTimeoutMs: 10_000 });
   // The x4 ceiling still bounds the grace under saturated steal.
   assertEquals(classifyReadyMarkerTimeout({ baseMs: 5_000, loadPerCpu: 1, steal: 0.99 }).hardTimeoutMs, 20_000);
   // Max, never product: load x2.5 with steal x2 (S=0.5) grants x2.5, not x5.

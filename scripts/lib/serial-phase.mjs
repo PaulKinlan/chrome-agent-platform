@@ -150,6 +150,16 @@ export const MAX_LOAD_SCALE = 4;
 // every cloud VM idling at 1-2% — noise, not signal.
 export const STEAL_DEAD_BAND = 0.02;
 
+/** The dead band for the WINDOWED stall signal, and it is deliberately not the steal
+ *  band (lzccc). The two measure different windows, so they have very different base
+ *  rates: a 150ms instant that is 2% stolen is unusual, while a ~60s window with 2% of
+ *  task-time stalled is what ordinary gate load looks like — applying the instant's
+ *  band to the minute would grant grace on every run and quietly delete the
+ *  idle-never-settled refusal. 20% of the last minute spent waiting for CPU is
+ *  material contention (the bead's own evidence is 65% avg / 86% peak steal), which is
+ *  the condition the grace exists for. */
+export const STALL_DEAD_BAND = 0.2;
+
 /** Pure: the scale component for a measured steal fraction (null = unmeasurable -> x1). */
 export function stealScaleComponent(steal) {
   if (!Number.isFinite(steal) || steal <= STEAL_DEAD_BAND) return 1;
@@ -224,6 +234,33 @@ export function currentStealFractionSync({ sampleMs = STEAL_SAMPLE_MS, readFile 
     sleepSync(sampleMs);
     const b = stealJiffiesFromStatLine(readFile("/proc/stat", "utf8"));
     return stealFractionFromStatSamples(a, b);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The CPU STALL fraction over the kernel's own 60-SECOND window — /proc/pressure/cpu
+ * `some avg60`, the share of time some task was runnable but got no CPU — as a
+ * fraction 0..1. lzccc: the steal sample above is a 150ms INSTANT, while loadavg is a
+ * ~1-minute average, so a bursty host could read quiet at the soft deadline and be
+ * classified idle-never-settled (a strictly-product red) for a whole 60s wait. PSI
+ * gives the same window loadavg has, for one cheap read and no busy-spin. Null when
+ * PSI is absent or unparseable (the signal contributes nothing and the receipt says
+ * so). `readFile` and `window` are test seams.
+ * @returns {number | null}
+ */
+export function currentCpuStallFractionSync({ readFile = /** @type {typeof readFileSync} */ (readFileSync), window = "avg60" } = {}) {
+  try {
+    const text = readFile("/proc/pressure/cpu", "utf8");
+    if (typeof text !== "string") return null;
+    const someLine = text.split("\n").find((l) => l.startsWith("some "));
+    if (!someLine) return null;
+    const m = new RegExp(`(?:^|\\s)${window}=(\\d+(?:\\.\\d+)?)`).exec(someLine);
+    if (!m) return null;
+    const pct = Number(m[1]);
+    if (!Number.isFinite(pct)) return null;
+    return Math.min(1, Math.max(0, pct / 100));
   } catch {
     return null;
   }
@@ -322,19 +359,32 @@ export function measuredReadyLoad() {
  * verdict treats as strictly product). A descheduled child IS contended: steal
  * above the dead band earns the same bounded grace load earns, through the
  * same max-not-product scale and the same ceiling. No number changed.
- * @param {{ baseMs?: number, loadPerCpu?: number|null, steal?: number|null }} [options]
- * @returns {{ cause: string, loadPerCpu: number|null, steal: number|null, hardTimeoutMs: number }}
+ * @param {{ baseMs?: number, loadPerCpu?: number|null, steal?: number|null, stall?: number|null }} [options]
+ *   `steal` is the 150ms INSTANT sampled at the deadline; `stall` is the kernel's own
+ *   ~60s CPU-pressure window (lzccc). Either one above the dead band means the child was
+ *   not given CPU, which is environmental, so both earn the same bounded grace.
+ * @returns {{ cause: string, loadPerCpu: number|null, steal: number|null, stall: number|null, hardTimeoutMs: number }}
  */
-export function classifyReadyMarkerTimeout({ baseMs, loadPerCpu, steal = null } = {}) {
+export function classifyReadyMarkerTimeout({ baseMs, loadPerCpu, steal = null, stall = null } = {}) {
   const measured = Number.isFinite(loadPerCpu) && loadPerCpu >= 0;
   const loaded = measured && loadPerCpu > 1;
   const stolen = Number.isFinite(steal) && steal > STEAL_DEAD_BAND;
-  const contended = loaded || stolen;
+  // lzccc: the WINDOWED contention signal. A bursty host is contended even when the
+  // single 150ms sample lands in a lull, and a 60s readiness wait is decided by more
+  // than one instant.
+  const stalled = Number.isFinite(stall) && stall > STALL_DEAD_BAND;
+  const contended = loaded || stolen || stalled;
   return {
-    cause: !measured && !stolen ? "unmeasurable" : contended ? "loaded" : "idle-never-settled",
+    cause: !measured && !stolen && !stalled ? "unmeasurable" : contended ? "loaded" : "idle-never-settled",
     loadPerCpu: measured ? loadPerCpu : null,
     steal: Number.isFinite(steal) ? steal : null,
-    hardTimeoutMs: contended ? serialFileTimeoutMs({ base: baseMs, loadPerCpu, steal }) : baseMs,
+    stall: Number.isFinite(stall) ? stall : null,
+    // The SCALE comes from the same signals that decided contention: a contended WINDOW
+    // must buy the same bounded grace the instantaneous steal does, or the verdict says
+    // "loaded" and then kills the child at the soft deadline anyway.
+    hardTimeoutMs: contended
+      ? serialFileTimeoutMs({ base: baseMs, loadPerCpu, steal: Math.max(stolen ? steal : 0, stalled ? stall : 0) || null })
+      : baseMs,
   };
 }
 
@@ -354,7 +404,7 @@ export function defaultSerialTimeoutMs(env = process.env) {
 
 /**
  * @param {string} file
- * @param {{ timeoutMs?: number, readyFile?: string, readyTimeoutMs?: number, readyLoadPerCpu?: number, readySteal?: number, stdio?: import("node:child_process").StdioOptions, cwd?: string, env?: NodeJS.ProcessEnv }} [options]
+ * @param {{ timeoutMs?: number, readyFile?: string, readyTimeoutMs?: number, readyLoadPerCpu?: number, readySteal?: number, readyStall?: number, stdio?: import("node:child_process").StdioOptions, cwd?: string, env?: NodeJS.ProcessEnv }} [options]
  * @returns {{ code: number, timedOut: boolean, error?: Error, stdout?: Buffer|null, stderr?: Buffer|null }}
  */
 export function runSerialFile(file, {
@@ -363,6 +413,7 @@ export function runSerialFile(file, {
   readyTimeoutMs = 60_000,
   readyLoadPerCpu = undefined, // explicit test seam; otherwise measure at the soft deadline
   readySteal = undefined, // explicit test seam (cqxo3); otherwise measured at the soft deadline
+  readyStall = undefined, // explicit test seam (lzccc); otherwise read from PSI at the soft deadline
   stdio = "inherit",
   cwd = undefined,
   env = process.env,
@@ -371,8 +422,8 @@ export function runSerialFile(file, {
   if (targetReadyFile) {
     const runnerScript = fileURLToPath(new URL("serial-runner.mjs", import.meta.url));
     const args = [runnerScript, file, targetReadyFile, String(timeoutMs), String(readyTimeoutMs)];
-    if (readyLoadPerCpu !== undefined || readySteal !== undefined) {
-      args.push(String(readyLoadPerCpu), String(readySteal));
+    if (readyLoadPerCpu !== undefined || readySteal !== undefined || readyStall !== undefined) {
+      args.push(String(readyLoadPerCpu), String(readySteal), String(readyStall));
     }
     const r = spawnSync(process.execPath, args, {
       stdio,
