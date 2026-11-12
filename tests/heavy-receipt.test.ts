@@ -85,6 +85,73 @@ Deno.test("n3t01: an all-ok batch attributes every file passed; ignored tests co
   assertEquals(out.get("tests/b.test.ts"), "passed");
 });
 
+// ── hjuis: module-load deaths and module-graph aborts (recorded Deno 2.9.7 shapes) ──
+
+const MODULE_DEATH_OUT = `./tests/ok.test.ts => ok one ... ok (446µs)
+Uncaught error from ./tests/died.test.ts FAILED
+
+ ERRORS 
+
+./tests/died.test.ts (uncaught error)
+error: (in promise) Error: module-load death
+throw new Error("module-load death");
+      ^
+    at file:///home/repro/tests/died.test.ts:1:7
+This error was not caught from a test and caused the test runner to fail on the referenced module.
+
+ FAILURES 
+
+./tests/died.test.ts (uncaught error)
+
+FAILED | 1 passed | 1 failed (21ms)
+`;
+
+const SYNTAX_ABORT_OUT = `error: SyntaxError: Expression expected
+  |
+1 | Deno.test("broken", () => { const x = ; });
+  |                                       ~
+    at file:///home/repro/tests/syntax.test.ts:1:39
+`;
+
+Deno.test("hjuis: a module-load death is 'failed', never 'unknown' — the uncaught-error shapes are read", () => {
+  // Repro A of the finding: the file IS named by Deno, the parser must read it.
+  const r = attributeParallelBatchOutput(MODULE_DEATH_OUT, ["tests/ok.test.ts", "tests/died.test.ts"]);
+  assertEquals(r.get("tests/died.test.ts"), "failed");
+  assertEquals(r.get("tests/ok.test.ts"), "passed", "the green file is not tarred");
+});
+
+Deno.test("hjuis: a SyntaxError aborts the module graph — the named culprit is 'failed', an unrun file stays 'unknown'", () => {
+  // Repro B: the batch dies before any per-test line; the ONLY evidence is the
+  // SyntaxError block's `at file://…/<file>:l:c` pointer.
+  const r = attributeParallelBatchOutput(SYNTAX_ABORT_OUT, ["tests/ok.test.ts", "tests/syntax.test.ts"]);
+  assertEquals(r.get("tests/syntax.test.ts"), "failed");
+  assertEquals(r.get("tests/ok.test.ts"), "unknown", "an unrun file invents no verdict");
+});
+
+Deno.test("hjuis: a stack reference is NOT failure evidence for the referenced file (over-attribution pin)", () => {
+  // A normal product failure's stack may reference a PASSING file; only the
+  // pointer shapes and a SyntaxError block attribute failures.
+  const out = `./tests/a.test.ts => t ... FAILED (1ms)
+./tests/b.test.ts => u ... ok (1ms)
+
+ ERRORS 
+
+t => ./tests/a.test.ts:3:6
+error: AssertionError: boom
+    at file:///home/x/tests/b.test.ts:9:1
+    at file:///home/x/tests/a.test.ts:3:6
+
+ FAILURES 
+
+t => ./tests/a.test.ts:3:6
+
+FAILED | 1 passed | 1 failed (5ms)
+`;
+  const r = attributeParallelBatchOutput(out, ["tests/a.test.ts", "tests/b.test.ts"]);
+  assertEquals(r.get("tests/a.test.ts"), "failed");
+  assertEquals(r.get("tests/b.test.ts"), "passed", "a file named only in another failure's stack stays passed");
+});
+
 Deno.test("n3t01: a failed row in the ledger blocks certification and names the file (auditSuiteLedger wiring)", () => {
   const expected = ["tests/a.test.ts", "tests/b.test.ts"];
   const suites = [
