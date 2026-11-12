@@ -49,7 +49,7 @@ const Y4LBE_PRODUCT_FIXTURE = `Deno.test("fixture: product failure", () => {
 
 Deno.test("y4lbe: a build-gate run whose serial tier refuses (75) prints REFUSED — never 'FAILED with exit code 75'", async () => {
   const { code, out } = await runBuildGateWithFixture(Y4LBE_REFUSAL_FIXTURE);
-  assertEquals(code, 75, `the refusal exit code is preserved upward (run-tests.mjs re-combines it):\n${out}`);
+  assertEquals(code, 75, `the refusal exit code is preserved upward (b7klv: NOT a run-tests.mjs phase — test:build runs this file directly and gate-full.mjs:158-159 passes the stage code through verbatim):\n${out}`);
   assert(out.includes("REFUSED"), `the lane-facing line names a refusal:\n${out}`);
   assert(!out.includes("FAILED with exit code 75"), `a refusal must never read as FAILED:\n${out}`);
   // d83la (review round 2): the refusal run must emit NO pass-record line at
