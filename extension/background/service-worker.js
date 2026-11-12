@@ -6496,10 +6496,22 @@ async function destructiveActionPolicy() {
 
 /** The owner-approval gate for a script action: the payload binds the exact
  * source (digest) + the hosts the source can reach; the card shows both. */
+/**
+ * The source-bearing disclosure detail for a script approval card: the exact source the owner is
+ * being asked to run, the hosts it fetches, whether that set could not be resolved statically, and
+ * the digest binding it to the payload. ONE definition, because inu5w is the defect that a second
+ * copy creates: create disclosed the hosts and update did not, from the same control.
+ */
+function scriptDisclosureDetail(source) {
+  const text = String(source ?? "");
+  const { hosts, dynamic } = extractFetchHosts(text);
+  return { source: text, hosts, dynamic, sourceDigest: sha256Hex(text) };
+}
+
 async function scriptApprovalGate(context, action, scope, id, source, extra) {
   const target = canonicalOperationTarget("script", { origin: scope, id: String(id ?? "") });
-  const { hosts, dynamic } = extractFetchHosts(source);
-  const sourceDigest = sha256Hex(String(source ?? ""));
+  const disclosure = scriptDisclosureDetail(source);
+  const { hosts, dynamic, sourceDigest } = disclosure;
   let payload;
   try {
     payload = payloadFields([
@@ -6511,12 +6523,7 @@ async function scriptApprovalGate(context, action, scope, id, source, extra) {
       ["dynamic", dynamic],
     ]);
   } catch { return { ok: false, error: `${action} payload is not approvable` }; }
-  return await requireOwnerApproval(context, action, target, payload, {
-    source: String(source ?? ""),
-    hosts,
-    dynamic,
-    sourceDigest,
-  });
+  return await requireOwnerApproval(context, action, target, payload, disclosure);
 }
 
 function payloadStringArray(values) {
@@ -11439,7 +11446,11 @@ const handlers = mergeRouteMaps(
       added: scriptSummary.added, removed: scriptSummary.removed,
       oldLabel: `${scriptName} (current)`, newLabel: `${scriptName} (proposed)`,
     };
-    const gate = await requireOwnerApproval(context, "script.update", target, payload, undefined, stagedScriptDetail);
+    // inu5w: the SAME source-bearing disclosure create shows — the owners of these two routes
+    // must not see different amounts of the same script. The diff above stays as the staged
+    // detail; this is the extracted host list the diff cannot summarise.
+    const disclosure = scriptDisclosureDetail(newSource);
+    const gate = await requireOwnerApproval(context, "script.update", target, payload, disclosure, stagedScriptDetail);
     if (!gate.ok) return gate;
     const patch = {};
     if (name !== undefined) patch.name = name;
