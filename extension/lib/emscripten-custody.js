@@ -46,7 +46,13 @@ function receiptFor({ runId, agentId, bytes, sha256, provenance }) {
 }
 
 /** Input is a sealed, read-only Blob snapshot. Only the two output FILE handles
- * reach a future job; the OPFS root, directory and owner authority do not. */
+ * reach a future job; the OPFS root, directory and owner authority do not.
+ *
+ * 9lptq: the stderr handle is named `unverifiedStderrFile` ON PURPOSE — the
+ * seal/verify discipline (sealEmscriptenOutput / verifyEmscriptenOutputSeal)
+ * binds STDOUT only, so a bare `stderrFile` key would let a caller mistake
+ * diagnostic output for verified output. The handle stays writable (the job
+ * needs it); the NAME carries the contract. */
 export async function allocateEmscriptenJobStreams(options = {}) {
   if (!options || typeof options !== "object" || Object.hasOwn(options, "owner")) {
     fail("emscripten_custody_invalid_identity");
@@ -62,15 +68,17 @@ export async function allocateEmscriptenJobStreams(options = {}) {
     const { stdoutFile, stderrFile } = await openWasmStreamHandles({
       ref: outputRef, owner, allowUnsealedOutput: true, storage,
     });
-    return Object.freeze({ owner, inputRef: input, outputRef, handles: Object.freeze({ inputFile, stdoutFile, stderrFile }) });
+    return Object.freeze({ owner, inputRef: input, outputRef, handles: Object.freeze({ inputFile, stdoutFile, unverifiedStderrFile: stderrFile }) });
   } catch (error) {
     if (outputRef) await discardWasmStream({ ref: outputRef, owner, storage }).catch(() => {});
     throw error;
   }
 }
 
-/** Re-open and independently hash the sealed file in bounded chunks. Neither
- * the caller's digest nor a mutable File/handle is trusted as verification. */
+/** Re-open and independently hash the sealed STDOUT file in bounded chunks. Neither
+ * the caller's digest nor a mutable File/handle is trusted as verification. The
+ * receipt binds stdout only (9lptq): stderr is unverified diagnostic output — see
+ * the `unverifiedStderrFile` name in allocateEmscriptenJobStreams. */
 export async function verifyEmscriptenOutputSeal({ runId, agentId, outputRef, storage } = {}) {
   const owner = emscriptenJobOwner({ runId, agentId });
   const ref = validateWasmStreamRef(outputRef, { kinds: ["stdout"] });
