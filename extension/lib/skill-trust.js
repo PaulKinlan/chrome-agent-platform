@@ -43,6 +43,31 @@ export function mustFenceSkill(skill) {
   return !isTrustedSkill(skill);
 }
 
+/** The sources whose BODY may compose into the agent's system prompt un-fenced.
+ *  g7v3w: this is a different question from isTrustedSkill(), and the difference is
+ *  deliberate. A skill body in the prompt is INSTRUCTIONS, so the ask is "did the owner
+ *  author this?", not "is this imported?". `builtin` = the bundled catalogue (authored in
+ *  this repo); `custom` = a skill the owner created (see the owner-authored leg in
+ *  tests/skills-uncapped.test.ts: "owner content must not be fenced"). Fencing either
+ *  would not harden anything — it would stop the owner's own skill from working. An
+ *  unknown source, or NO source, is not owner-authored and does not get the trust. */
+export const OWNER_AUTHORED_SKILL_SOURCES = new Set(["builtin", "custom"]);
+
+/** May this row's body compose into the prompt as instructions? Positive allowlist,
+ *  with any import signal overriding a trusted label. */
+export function isTrustedSkillForPrompt(skill) {
+  if (!skill || typeof skill !== "object") return false;
+  if (!OWNER_AUTHORED_SKILL_SOURCES.has(String(skill.source ?? ""))) return false;
+  if (skill.untrusted === true) return false;
+  if (String(skill.refId ?? skill.id ?? "").startsWith("imported:")) return false;
+  return true;
+}
+
+/** The inverse for the prompt path — fence unless the row is positively owner-authored. */
+export function mustFenceSkillForPrompt(skill) {
+  return !isTrustedSkillForPrompt(skill);
+}
+
 /** A DIFFERENT question from isTrustedSkill(): was this row installed from the import
  *  store, i.e. does it have an OPFS-backed body that skill_read can fetch? xhr57: the
  *  fence and the read path are separate decisions, and conflating them told the model

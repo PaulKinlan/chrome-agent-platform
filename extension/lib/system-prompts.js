@@ -91,6 +91,7 @@ import { hmacSha256Hex, sha256Hex } from "./pure-hash.js";
 import { hasLoneSurrogates, truncateUtf8, utf8ByteLength } from "./pure-text.js";
 import { kvGet, kvSet, storageAvailable } from "./kv.js";
 import { buildSkillsPrompt } from "./skills.js";
+import { mustFenceSkillForPrompt } from "./skill-trust.js";
 import { RUNTIME_CONTEXT_PLACEHOLDER } from "./runtime-context.js";
 import { isUntrustedToken, renderUntrustedPolicy, UNTRUSTED_POLICY_PLACEHOLDER, fenceUntrustedText, UNTRUSTED_TOKEN_PLACEHOLDER } from "./untrusted-fence.js";
 import { renderRuntimePolicy } from "./runtime-policy.js";
@@ -865,7 +866,14 @@ function renderBoundarySkills(skills, untrustedToken = null) {
     // Imported skill index rows carry `promptBytes` (the body lives in OPFS,
     // not in the row); the marker rule must use it, never an empty body.
     const bodyBytes = Number.isInteger(s?.promptBytes) ? s.promptBytes : body.length;
-    const isImported = s?.source === "imported" || (s?.files && typeof s.files === "object");
+    // g7v3w: FENCE BY DEFAULT, on the same shared predicate as every other skill
+    // surface. The deny-list here rendered name/description/BODY raw for any row whose
+    // source was "custom", an unknown name, or absent — straight into the AGENT SYSTEM
+    // PROMPT, the highest-stakes surface of this family. The catalog emits only
+    // `builtin:` (bundled, authored in this repo — the owner's own skills) and
+    // `imported:` rows (skill-catalog.js:62-65), so the trusted branch is exactly the
+    // allowlist in extension/lib/skill-trust.js and nothing else needs one.
+    const mustFence = mustFenceSkillForPrompt(s);
     // The marker may ONLY be emitted when the body is genuinely retrievable
     // from the body store: `promptBytes` is an INTEGER only when the body was
     // written to OPFS (a fresh install or a successful legacy migration). A
@@ -873,16 +881,16 @@ function renderBoundarySkills(skills, untrustedToken = null) {
     // inline body in `prompt` — composing a skill_read marker there would be a
     // dead loader (the body was never stored), so the full inline body is
     // composed instead (the pre-OPFS behavior).
-    if (isImported && Number.isInteger(s?.promptBytes) && bodyBytes > PROMPT_SKILL_BODY_BUDGET) {
+    if (mustFence && Number.isInteger(s?.promptBytes) && bodyBytes > PROMPT_SKILL_BODY_BUDGET) {
       const marker = (
         `- ${name}: ${desc} (large skill: ${bodyBytes} bytes — the body is NOT composed; ` +
         `call skill_read with skill:"${s?.id ?? ""}" to load SKILL.md or a file on demand)`
       );
       return fence(marker);
     }
-    if (!body.trim()) return isImported ? fence(`- ${name}: ${desc}`) : `- ${name}: ${desc}`;
+    if (!body.trim()) return mustFence ? fence(`- ${name}: ${desc}`) : `- ${name}: ${desc}`;
     const composed = `## Skill: ${name}\n${body}`;
-    return isImported ? fence(composed) : composed;
+    return mustFence ? fence(composed) : composed;
   });
   if (!blocks.length) return "";
   return `## Available skills\n${blocks.join("\n\n")}`;
