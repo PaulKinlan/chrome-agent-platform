@@ -25,8 +25,9 @@
 // WHAT THIS FENCES, and why each leg is load-bearing:
 //   1. The fence's canonical import is the ONLY module under extension/ that exports the predicate
 //      (a second exporter is a second seam the port could mirror). The port's KEEP-IN-SYNC comment
-//      currently cites extension/lib/pure.js, which no longer holds the predicate; correcting that
-//      is a PRODUCT-path edit owing a release note, filed as chrome-agent-platform-y2uw8.
+//      cited extension/lib/pure.js, which no longer holds the predicate; that pointer is now
+//      corrected to pure-trust.js (chrome-agent-platform-y2uw8, landed as a PRODUCT-path edit with
+//      the release note it owes).
 //   2. The port's bundle-path literal IS SERVICE_WORKER_BUNDLE_PATH, imported from that module.
 //   3. The two bodies are the same predicate (structural comparison, above).
 //   4. They agree behaviourally on a table of senders that exercises every refusal.

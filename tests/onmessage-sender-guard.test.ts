@@ -1208,7 +1208,7 @@ Deno.test("behavioral: content-script onRuntimeMessage filters foreign sender an
   // Extract the ported predicate + onRuntimeMessage implementation
   const portMatch = csSource.match(/function isTrustedServiceWorkerSenderPort\([\s\S]*?\n\}/);
   const fnMatch = csSource.match(/function onRuntimeMessage\([\s\S]*?\n\}/);
-  assert(portMatch, "must find isTrustedServiceWorkerSenderPort in content-script.js (chrome-agent-platform-yl0wn: the faithful port of pure.js isTrustedServiceWorkerSender)");
+  assert(portMatch, "must find isTrustedServiceWorkerSenderPort in content-script.js (chrome-agent-platform-yl0wn: the faithful port of pure-trust.js isTrustedServiceWorkerSender)");
   assert(fnMatch, "must find onRuntimeMessage in content-script.js");
   const swUrl = "chrome-extension://cap-extension-id/dist/background/service-worker.js";
   const onRuntimeMessage = new Function(
