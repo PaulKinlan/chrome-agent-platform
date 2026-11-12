@@ -75,7 +75,16 @@ try {
     console.error("[beads-export] on-disk export missing; checking committed snapshot before regeneration");
   }
   const protectedIds = new Set([...committed, ...onDisk]);
-  const candidate = issueIds(args.length ? readFileSync(args[1], "utf8") : await command("bd", ["export", "--all"]), "canonical DB export");
+  // vor46: the candidate is per-MODE — the hook hands the STAGED index copy
+  // (--candidate); the manual path exports the canonical DB. The diagnostics
+  // must name the one actually checked, or a blocked lane goes hunting in
+  // Dolt history for a row its own staged file dropped.
+  const stagedMode = args.length > 0;
+  const candidateLabel = stagedMode ? "the STAGED export you are about to commit" : "the canonical DB export";
+  const candidate = issueIds(
+    stagedMode ? readFileSync(args[1], "utf8") : await command("bd", ["export", "--all"]),
+    stagedMode ? "staged export (--candidate)" : "canonical DB export",
+  );
   const missing = [...protectedIds].filter((id) => !candidate.has(id)).sort();
   // A narrowly recorded, single-command exception lets an owner intentionally
   // delete a reviewed record without disabling the hook for every later commit.
@@ -91,12 +100,14 @@ try {
     }
     console.error(`[beads-export] explicit reconciliation under ${decision}: ${missing.join(", ")}; verify the owner decision recorded on that bead`);
   } else if (missing.length) {
-    console.error(`[beads-export] ${missing.length} committed/on-disk issue ID(s) absent from the canonical DB; refusing to overwrite the export:`);
+    console.error(`[beads-export] ${missing.length} committed/on-disk issue ID(s) absent from ${candidateLabel}; refusing to overwrite the export:`);
     for (const id of missing) console.error(`  ${id}`);
-    console.error("Investigate deletion vs loss in Beads/Dolt history. Import only individually after owner review; never bulk-restore from the passive export.");
+    console.error(stagedMode
+      ? "The staged file is what the hook checks: inspect it (git diff --cached .beads/issues.jsonl), restore the missing row(s) from the canonical DB, and restage."
+      : "Investigate deletion vs loss in Beads/Dolt history. Import only individually after owner review; never bulk-restore from the passive export.");
     process.exitCode = 1;
   } else {
-    console.log(`[beads-export] OK: all ${protectedIds.size} committed/on-disk issue IDs exist in the canonical DB (${candidate.size} IDs).`);
+    console.log(`[beads-export] OK: all ${protectedIds.size} committed/on-disk issue IDs exist in ${stagedMode ? "the staged export" : "the canonical DB"} (${candidate.size} IDs).`);
   }
 } catch (error) {
   console.error(`[beads-export] cannot verify committed IDs: ${error?.message ?? error}`);
