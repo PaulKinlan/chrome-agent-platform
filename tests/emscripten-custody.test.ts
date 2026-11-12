@@ -82,8 +82,9 @@ Deno.test("ltkj.4.3: only sealed input Blob and output handles cross the job bou
   assertEquals(new TextDecoder().decode(await job.handles.inputFile.arrayBuffer()), "unchanged original input");
   assertEquals(typeof job.handles.inputFile.createWritable, "undefined", "input must not carry a writable OPFS handle");
   assertEquals(typeof job.handles.stdoutFile.createWritable, "function");
-  assertEquals(typeof job.handles.stderrFile.createWritable, "function");
-  assertEquals(Object.keys(job.handles).sort(), ["inputFile", "stderrFile", "stdoutFile"]);
+  assertEquals(typeof job.handles.unverifiedStderrFile.createWritable, "function");
+  assertEquals(Object.keys(job.handles).sort(), ["inputFile", "stdoutFile", "unverifiedStderrFile"]);
+  assert(!("stderrFile" in job.handles), "9lptq: the mistakable name is gone — a caller cannot reach for 'stderrFile' and think it verified");
   assertEquals("directory" in job, false, "never hand a job an OPFS directory/root");
   await custody.discardEmscriptenJobOutput({ runId: RUN, agentId: "hub", outputRef: job.outputRef, storage });
   assertEquals((await listWasmStreamEntries({ storage })).length, 1, "original sealed input survives output cleanup");
@@ -236,7 +237,33 @@ Deno.test("ltkj.4.4: durable intent precedes output-directory creation and appen
   assertEquals(intent.outputRef, job.outputRef);
   assertEquals(intent.owner, owner());
   assertEquals(intent.nonpromotable, true);
-  assertEquals(Object.keys(job.handles).sort(), ["inputFile", "stderrFile", "stdoutFile"]);
+  assertEquals(Object.keys(job.handles).sort(), ["inputFile", "stdoutFile", "unverifiedStderrFile"]);
+});
+
+Deno.test("9lptq: the stderr handle is UNVERIFIED by name and by contract — writable for the job, outside the receipt discipline", async () => {
+  const { storage } = memoryStorage();
+  const job = await setup({ storage });
+  // The reviewer's probe: arbitrary bytes written to the stderr handle remain
+  // exactly what they are — unverified diagnostic output, never receipt-bound.
+  const writable = await job.handles.unverifiedStderrFile.createWritable();
+  await writable.write(new TextEncoder().encode("23 arbitrary diagnostic bytes"));
+  await writable.close();
+  const written = await job.handles.unverifiedStderrFile.getFile();
+  assertEquals(new TextDecoder().decode(await written.arrayBuffer()), "23 arbitrary diagnostic bytes");
+  // The seal/verify discipline binds stdout only: seal stdout, verify, and the
+  // result names no stderr — while the 23 stderr bytes exist unsealed.
+  const out = new TextEncoder().encode("ok");
+  const stdoutWritable = await job.handles.stdoutFile.createWritable();
+  await stdoutWritable.write(out);
+  await stdoutWritable.close();
+  const sha256 = await digest(out);
+  await custody.sealEmscriptenOutput({ runId: RUN, agentId: "hub", outputRef: job.outputRef,
+    bytes: out.length, sha256, provenance, storage });
+  const verified = await custody.verifyEmscriptenOutputSeal({ runId: RUN, agentId: "hub", outputRef: job.outputRef, storage });
+  assertEquals(verified.sha256, sha256, "the receipt binds the stdout bytes");
+  assertEquals(verified.bytes, out.length);
+  assert(!("stderr" in verified) && !("stderrBytes" in verified) && !("stderrSha256" in verified),
+    "the verification result names stdout only — there is no stderr claim to mistake");
 });
 
 Deno.test("ltkj.4.4: terminal audit requires matching durable intent, stopped worker and live SW run", async () => {
