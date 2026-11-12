@@ -56,7 +56,43 @@ async function treeVersion(): Promise<string | null> {
   }
 }
 
-export async function main(args = Deno.args): Promise<number> {
+/**
+ * The build tier's verdict for one run (d83la). `record` is the ONLY authority for
+ * writing a PASS record: a refusal or a failure must never license a later skip,
+ * and the pin asserts on this returned shape rather than on where a call sits in
+ * the source (a stray call or a fake printed "PASS record" line outside the guard
+ * is the regression this bead exists to catch).
+ *
+ * y4lbe/b7klv: the returned code is passed through verbatim by
+ * scripts/gate-full.mjs (this tier is NOT a run-tests.mjs phase — package.json's
+ * test:build runs this file directly).
+ */
+export function buildGateVerdict(rc: number): { line: string; record: boolean } {
+  if (rc === 0) return { line: "GREEN", record: true };
+  if (rc === ENVIRONMENTAL_REFUSAL_EXIT) {
+    return { line: `REFUSED (environmental, exit ${ENVIRONMENTAL_REFUSAL_EXIT}) — a re-run on a quiet box, not a product red`, record: false };
+  }
+  return { line: `FAILED with exit code ${rc}`, record: false };
+}
+
+/**
+ * @param {string[]} [args]
+ * @returns {Promise<number>}
+ */
+export async function main(
+  args = Deno.args,
+  deps: {
+    runSerial?: (files: string[], opts: { cwd: string }) => number;
+    resolveTier?: typeof resolveBuildTier;
+    record?: typeof recordBuildTierPass;
+  } = {},
+): Promise<number> {
+  // d83la (round 3): the seams exist so a test can count the RECORDS EMITTED
+  // (data), not the lines printed — 'no pass record on a refusal' is only half
+  // the contract; 'exactly one on a pass' is the half a moved call evades.
+  const runSerial = deps.runSerial ?? runSerialFiles;
+  const resolveTier = deps.resolveTier ?? resolveBuildTier;
+  const record = deps.record ?? recordBuildTierPass;
   const cliFiles = args.filter((a) => !a.startsWith("-"));
   const explicit = cliFiles.length > 0;
   const files = explicit ? cliFiles : [...BUILD_GATE_FILES];
@@ -64,7 +100,7 @@ export async function main(args = Deno.args): Promise<number> {
   // An explicit request names its own files, so it always runs; only the default form is selected.
   const decision = explicit
     ? null
-    : await resolveBuildTier({ root: ROOT, version: await treeVersion(), mode: buildTierMode(Deno.env.toObject()) });
+    : await resolveTier({ root: ROOT, version: await treeVersion(), mode: buildTierMode(Deno.env.toObject()) });
 
   if (decision && !decision.run) {
     console.log(`build-gate: SKIP ${files.length} build-behaviour test(s) — ${decision.reason}`);
@@ -92,23 +128,20 @@ export async function main(args = Deno.args): Promise<number> {
   for (const f of files) {
     console.log(`  - ${f}`);
   }
-  const rc = runSerialFiles(files, { cwd: ROOT });
+  const rc = runSerial(files, { cwd: ROOT });
+  const verdict = buildGateVerdict(rc);
   if (rc === 0) {
     console.log(`\nbuild-gate: ALL ${files.length} BUILD-BEHAVIOUR TESTS GREEN`);
-    if (decision?.key) {
+    // d83la: the ONLY PASS-record call site, guarded by the verdict — a refusal
+    // (record: false) can never reach it, and a second call site or a fake
+    // printed "PASS record" line is pinned red by tests/build-gate-static.test.ts.
+    if (verdict.record && decision?.key) {
       // Only a PASS may record, so a failing tier can never license a later skip.
-      const recorded = await recordBuildTierPass({ key: decision.key, suites: files, exitCode: rc });
+      const recorded = await record({ key: decision.key, suites: files, exitCode: rc });
       console.log(`build-gate: PASS record ${recorded.written ? "written" : `not written (${recorded.reason})`} for input key ${decision.key.slice(0, 12)}`);
     }
-  } else if (rc === ENVIRONMENTAL_REFUSAL_EXIT) {
-    // y4lbe: an environmental refusal is NOT a failure — the tier a lane reads
-    // first must say so, and no PASS is recorded above (a refusal never licenses
-    // a later skip). The returned code is unchanged (b7klv: this tier is NOT a
-    // run-tests.mjs phase — package.json test:build runs this file directly and
-    // scripts/gate-full.mjs:158-159 passes the stage code through verbatim).
-    console.error(`\nbuild-gate: REFUSED (environmental, exit ${ENVIRONMENTAL_REFUSAL_EXIT}) — a re-run on a quiet box, not a product red`);
   } else {
-    console.error(`\nbuild-gate: FAILED with exit code ${rc}`);
+    console.error(`\nbuild-gate: ${verdict.line}`);
   }
   return rc;
 }
