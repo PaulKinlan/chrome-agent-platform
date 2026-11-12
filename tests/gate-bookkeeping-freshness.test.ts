@@ -97,21 +97,16 @@ Deno.test("weights bookkeeping (jw8a6): the committed table equals a fresh deriv
 // harmless. The declared list is the repo's usual shape — a reason and a bead, never a silent hole —
 // and it is self-cleaning: an entry whose file is measured again, or no longer live, reds, so the
 // table empties itself when the digest is next re-cut.
-const UNMEASURED_POPULATION_CHANGES = new Map([
-  // SUITE totals, from the repo's own parser — parseSuiteDurations() in
-  // scripts/lib/parallel-durations.mjs, over the FULL-suite log of tree d70a82dec (799 suites,
-  // 342s, ~/.fleet/checks/<tree>.fast.log). Re-derive rather than trust these literals: fstgo's
-  // first cut copied PER-TEST reporter times here instead of suite totals (the reviewer caught
-  // named-agent-provider-approval-detail declared 0.002s when the suite is 1.33s), which is the
-  // same "a number recorded once and never re-derived" defect this whole file exists for.
-  ["tests/acp-native-install-detect.test.ts", { secs: 0.001555, why: "added after the digest was cut" }],
-  ["tests/gate-bookkeeping-freshness.test.ts", { secs: 0.027874, why: "this guard itself" }],
-  ["tests/impeccable-live-browser-dom-lifecycle.test.ts", { secs: 0.002726, why: "added after the digest" }],
-  ["tests/named-agent-provider-approval-detail.test.ts", { secs: 1.333324, why: "closest to the floor: re-measure before adding a slow leg" }],
-  ["tests/provider-approval-card-gating.test.ts", { secs: 0.355231, why: "added after the digest" }],
-  ["tests/provider-redirect-guard.test.ts", { secs: 0.289708, why: "37fzt redirect guard from the review" }],
-  ["tests/release-note-preflight.test.ts", { secs: 0.733446, why: "added after the digest" }],
-  ["tests/update-test-weights.test.ts", { secs: 0.106, why: "added after the digest" }],
+const UNMEASURED_POPULATION_CHANGES = new Map<string, { secs: number; why: string }>([
+  // EMPTY, and that is the point (re-cut 2026-11-12 on tree 9a6fc7ab184c, the six-bead landing):
+  // every entry here is a self-cleaning exemption that must be DELETED the moment the digest is
+  // re-cut, because a declaration is only valid while it is true. The re-cut measured all of them,
+  // so the guard's own staleness assertion required exactly this edit - which is why the landing
+  // that added the new test files also re-derived the table and emptied this list in the same
+  // commit rather than leaving eight exemptions claiming files were unmeasured after they had
+  // been measured. The mechanics are unchanged: a future file that appears after a digest is cut
+  // gets its own entry with the suite's measured seconds from the repo's parser, and the entry
+  // disappears the next time the digest is re-cut.
 ]);
 
 Deno.test("fstgo: the digest measures the whole live parallel population, or says why not", async () => {
