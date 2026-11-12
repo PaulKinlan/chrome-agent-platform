@@ -426,6 +426,21 @@ Deno.test("redaction: locator rows are two-tier — first-party producers assert
     assertEquals(out[c.key], "[REDACTED]", `${c.locator} (${c.key}) must be redacted`);
   }
 
+  // chrome-agent-platform-961k5: DISCRIMINATING rows. The union assert above
+  // only requires each key to match SECRET_KEY_RE SOMEWHERE — an alternative
+  // added with a key another alternative satisfies passes the union and the
+  // new locator is never exercised (the 961k5 repro: locator "passwd" with key
+  // "password" sails through on the password alternative). Each row's key must
+  // be matched BY THAT ROW'S OWN locator, so every declared alternative owns a
+  // live-shaped case that would fail if the alternative were dropped.
+  for (const c of CASES) {
+    const own = new RegExp(`(?<![a-z0-9])(${c.locator})(?![a-z0-9])`, "i");
+    assert(
+      own.test(c.key),
+      `locator "${c.locator}" has a NON-DISCRIMINATING key "${c.key}" — the key is not matched by this row's own locator (another alternative satisfies it), so dropping the alternative would stay green; pin a key only this locator matches`,
+    );
+  }
+
   // Bidirectional staleness gate (chrome-agent-platform-2o235): the declared
   // locator set is DERIVED from the regex source, not restated. Dropping an
   // alternative fails its row; adding one without a row fails here; a stale
