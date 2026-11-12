@@ -195,3 +195,88 @@ Deno.test("every catalogue default/suggested id is priced (positive input/output
     }
   }
 });
+
+// ── chrome-agent-platform-8rzmy (2026-11-12): the Settings probe was the last
+// credentialed egress with no guard. It fetched a caller-supplied baseURL with the
+// browser's DEFAULT redirect policy and no private-host predicate, while carrying the
+// stored provider key in headers — so a public redirector, or a model-authored provider
+// record naming a LAN host, could move the key. These four legs fence it, and each one
+// reds if its half of the fix is removed.
+
+Deno.test("8rzmy: a redirect hop toward loopback/metadata is refused BEFORE it is issued, and the key never reaches it", async () => {
+  const realFetch = globalThis.fetch;
+  const calls: string[] = [];
+  globalThis.fetch = async (url: any) => {
+    calls.push(String(url));
+    // The public endpoint answers a redirect to the cloud metadata address — the
+    // classic SSRF pivot. With redirect:"follow" the browser would walk it, and the
+    // key would arrive with no code of ours having seen a hop.
+    return new Response(null, { status: 302, headers: { location: "http://169.254.169.254/latest/meta-data/" } });
+  };
+  try {
+    const ids = await fetchLiveModels("openai", { baseURL: "https://api.example.com/v1", apiKey: "sk-secret" });
+    assertEquals(ids, [], "a refused redirect yields no models");
+    assertEquals(calls, ["https://api.example.com/v1/models"], "the private hop is never issued");
+    assert(!calls.some((u) => u.includes("169.254.169.254")), `the metadata host must never be fetched: ${JSON.stringify(calls)}`);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+Deno.test("8rzmy: a cross-origin redirect hop carries no provider credential", async () => {
+  const realFetch = globalThis.fetch;
+  const seen: Array<{ url: string; auth: string; gkey: string }> = [];
+  globalThis.fetch = async (url: any, init: any) => {
+    const headers = init?.headers ?? {};
+    seen.push({ url: String(url), auth: String(headers.Authorization ?? ""), gkey: String(headers["x-goog-api-key"] ?? "") });
+    if (seen.length === 1) {
+      return new Response(null, { status: 307, headers: { location: "https://mirror.example.net/v1/models" } });
+    }
+    return new Response(JSON.stringify({ data: [{ id: "gpt-5.6-luna" }] }), { status: 200 });
+  };
+  try {
+    const ids = await fetchLiveModels("openai", { baseURL: "https://api.example.com/v1", apiKey: "sk-secret" });
+    assertEquals(ids, ["gpt-5.6-luna"]);
+    assertEquals(seen.length, 2, "the public hop IS followed");
+    assertEquals(seen[0].auth, "Bearer sk-secret", "the configured origin gets the key");
+    assertEquals(seen[1].auth, "", "a cross-origin hop drops it, as the browser would");
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+Deno.test("8rzmy: a KEYED probe at a private destination is never issued at all", async () => {
+  const realFetch = globalThis.fetch;
+  const calls: string[] = [];
+  globalThis.fetch = async (url: any) => {
+    calls.push(String(url));
+    return new Response(JSON.stringify({ data: [{ id: "llama3" }] }), { status: 200 });
+  };
+  try {
+    for (const baseURL of ["http://127.0.0.1:11434/v1", "http://192.168.1.9:1234/v1", "http://[::1]:8080/v1", "http://localhost:1234/v1"]) {
+      const ids = await fetchLiveModels("openai-compatible", { baseURL, apiKey: "sk-secret" });
+      assertEquals(ids, [], `a key must not be sent to ${baseURL}`);
+    }
+    assertEquals(calls, [], "no request carrying a key is issued to a private destination");
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+Deno.test("8rzmy: a KEYLESS probe at loopback still lists — the ollama/lm-studio presets must keep working", async () => {
+  const realFetch = globalThis.fetch;
+  const calls: string[] = [];
+  globalThis.fetch = async (url: any, init: any) => {
+    calls.push(String(url));
+    assertEquals(init?.headers?.Authorization, undefined, "a keyless probe carries no credential header");
+    return new Response(JSON.stringify({ data: [{ id: "llama3.2" }] }), { status: 200 });
+  };
+  try {
+    // needsKey:false in the Settings presets, so refreshLiveModels passes an empty key.
+    const ids = await fetchLiveModels("ollama", { baseURL: "http://localhost:11434/v1", apiKey: "" });
+    assertEquals(ids, ["llama3.2"], "the owner's own local endpoint still lists its models");
+    assertEquals(calls, ["http://localhost:11434/v1/models"]);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});

@@ -17,6 +17,8 @@
 // function and it never throws into the UI (any failure → []).
 
 import { safeProviderError } from "./pure-redact.js";
+import { checkFetchTarget } from "./fetch-policy.js";
+import { fetchProviderWithGuardedRedirects } from "./provider-redirect-guard.js";
 
 import { capLog } from "./cap-log.js";
 
@@ -181,10 +183,43 @@ export async function fetchLiveModels(providerId, { baseURL, apiKey, signal } = 
   } else if (key) {
     headers.Authorization = `Bearer ${key}`;
   }
+  // 8rzmy: this probe is a CREDENTIALED EGRESS and was the last one without a guard.
+  // `baseURL` reaches it from a provider record (owner-typed in Settings, but the record
+  // can be model-authored — the closed awaom class), and `headers` above may carry the
+  // stored key. Two rules, both reusing the sibling predicate rather than inventing one:
+  //
+  //   1. A CREDENTIAL IS NEVER SENT TO A PRIVATE DESTINATION. checkFetchTarget is the same
+  //      SSRF predicate every other egress surface pays (fetch-policy.js); the sibling
+  //      seams (37fzt, dux7j, o4e3w, 15zzc, z7i3m) apply it to hops and to model-authored
+  //      destinations. A KEYLESS probe to a loopback/RFC1918 host stays allowed on
+  //      purpose: ollama and LM Studio presets live there and list models with no key, and
+  //      refusing them would break the owner's own local setup while protecting nothing —
+  //      there is no secret to move. The refusal is about the secret, not the address.
+  //   2. Every hop is guarded (fetchProviderWithGuardedRedirects): redirects are forced to
+  //      "manual", an uninspectable opaqueredirect is refused fail-closed, each Location is
+  //      validated BEFORE its request is issued, and a cross-origin hop drops the
+  //      credential headers exactly as the browser would. Before this, a public redirector
+  //      baseURL could carry the stored key to loopback/metadata inside one fetch() with the
+  //      browser's default redirect:"follow" — the guard discovered nothing because it was
+  //      never consulted.
+  const destination = checkFetchTarget(url);
+  if (!destination.ok) {
+    if (key) {
+      catalogLog.warn(
+        `live model list not fetched: the destination is ${destination.errorCode === "forbidden_host" ? "a private, loopback or link-local host" : `unusable (${destination.error})`} ` +
+        `and this probe would carry the provider key — private destinations are owner-only and never receive a credential`,
+      );
+      return [];
+    }
+    if (destination.errorCode !== "forbidden_host") {
+      catalogLog.warn(`live model list not fetched: ${safeProviderError(destination.error)}`);
+      return [];
+    }
+  }
   try {
     const allIds = [];
     for (let page = 0; page < 100 && url; page++) {
-      const res = await fetch(url, { method: "GET", headers, signal: controller.signal });
+      const res = await fetchProviderWithGuardedRedirects(url, { method: "GET", headers, signal: controller.signal });
       if (!res.ok) return page === 0 ? [] : [...new Set(allIds)].sort(newestFirst);
       const json = await res.json();
       allIds.push(...extract(json));
