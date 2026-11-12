@@ -146,7 +146,11 @@ Deno.test("ea2qv: a failed run reports the FAILURE, not a selection omission, fo
     omitted: [], // the suite was NOT omitted — it ran
     runExitCode: 1,
   });
-  assertEquals(failed.status, "unmapped");
+  // 03eht: the STATUS is now its own word. "unmapped" put this row in the fleet's unmapped list,
+  // so a failed run rendered as "COVERAGE WARNING: N unmapped changed file(s)" and pointed the
+  // reader at the selector instead of the failure — the same misdirection ea2qv fixed in the
+  // REASON while leaving it in the status.
+  assertEquals(failed.status, "run-failed");
   assertEquals(failed.executed_suites, []);
   assertStringIncludes(failed.reason, "run failed, rc=1");
   assertStringIncludes(failed.reason, "no selection omission is claimed");
@@ -199,7 +203,8 @@ Deno.test("7w5k1: a failed FULL run names the failure, and a deferred suite keep
   }) as { fileMapping?: Array<{ file: string, status: string, reason: string, executed_suites: string[] }> } | null;
   const rows = fields?.fileMapping ?? [];
   const sw = rows.find((row) => row.file === "extension/background/service-worker.js");
-  assertEquals(sw?.status, "unmapped");
+  // 03eht: the status word changed (unmapped -> run-failed); the reason this leg pins did not.
+  assertEquals(sw?.status, "run-failed");
   assertStringIncludes(sw?.reason ?? "", "run failed, rc=1");
   assert(
     !(sw?.reason ?? "").includes("not executed"),
@@ -223,7 +228,8 @@ Deno.test("7w5k1: a FAILED full run names failure, not a selection omission, in 
   });
   const rows = (fields as { fileMapping?: Array<{file: string; status: string; reason: string}> } | null)?.fileMapping ?? [];
   assertEquals(rows.length, 1);
-  assertEquals(rows[0].status, "unmapped");
+  // 03eht: same reason, its own status — a failed run is not a coverage gap.
+  assertEquals(rows[0].status, "run-failed");
   assertStringIncludes(rows[0].reason, "executed suites not attributable (run failed, rc=1)");
   assert(!rows[0].reason.includes("not executed"), "a failed run must not read as a selection omission");
 });
@@ -342,4 +348,35 @@ Deno.test("4iyck: the ledger reports the dedicated guard a runbook change actual
   const unguarded = explainChangedFileMapping({ changed: ["docs/UNGUARDED-NOTES.md"], executedSuites: [] });
   assertEquals(unguarded[0].status, "not-applicable");
   assertStringIncludes(unguarded[0].reason, "passive content with NO dedicated guard");
+});
+
+Deno.test("03eht: a failed run's unattributable files are disclosed OUTSIDE the unmapped list", () => {
+  // The fleet reads the `unmapped` LIST (fleet-check turns it into COVERAGE WARNING); the rows are
+  // for humans. A failed run must therefore be absent from that list and still fully disclosed.
+  const [row] = explainChangedFileMapping({
+    changed: ["extension/lib/script-host.js"],
+    candidates: { "extension/lib/script-host.js": ["tests/script-host.test.ts"] },
+    executedSuites: [],
+    runExitCode: 1,
+  });
+  assertEquals(row.status, "run-failed");
+  const lines = emitGateLedger({
+    manifest: { tier: "fast", graph: "PARTIAL", executed: 0, failed: 1, rc: 1 },
+    unmapped: [],
+    fileMapping: [row],
+    log: () => {},
+  });
+  assertEquals(lines.some((line: string) => line.startsWith("fast-gate: unmapped:")), false,
+    `a failed run must not raise the unmapped warning: ${lines.join(" | ")}`);
+  assertEquals(lines.some((line: string) => line.startsWith("fast-gate: run-failed: extension/lib/script-host.js")), true,
+    `the file must still be named on its own line: ${lines.join(" | ")}`);
+  assert(lines.some((line: string) => line.startsWith("fast-gate: run-failed-reason:")), "and with its reason");
+  // A GREEN run is untouched: the same file, attributable, is mapped.
+  const [ok] = explainChangedFileMapping({
+    changed: ["extension/lib/script-host.js"],
+    candidates: { "extension/lib/script-host.js": ["tests/script-host.test.ts"] },
+    executedSuites: ["tests/script-host.test.ts"],
+    runExitCode: 0,
+  });
+  assertEquals(ok.status, "mapped");
 });
