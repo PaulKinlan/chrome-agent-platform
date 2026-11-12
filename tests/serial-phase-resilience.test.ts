@@ -716,24 +716,30 @@ Deno.test("lzccc: a WINDOWED stolen wait earns the grace end-to-end, from counte
   const lateMarginMs = 1_500;
   const statLine = (stealJiffies: number, idleJiffies: number) =>
     `cpu  0 0 0 ${idleJiffies} 0 0 0 ${stealJiffies} 0 0\n`;
-  // Start: a quiet box. The child then spends the wait "stolen": ~90% of the jiffies it
-  // elapsed went to hypervisor steal while the guest idle counter barely moved.
-  //
-  // 6qnjf: the jump is deliberately LARGE, and that is a correctness requirement, not a
-  // preference. The hard bound is timeoutMs * max(loadRatio, 1/(1-steal)), capped at x4, so
-  // the grace this fixture earns is what must cover the child's COLD BOOT plus the late
-  // marker. With a ~65% steal jump the bound was 3184ms while the fixture needed
-  // boot+2000ms — on a fast boot that passed, and on a slow one (measured: boot ≈1300ms) it
-  // blew the bound and the runner killed a child the grace had already been granted for. A
-  // ~90% jump saturates the x4 cap (8000ms for a 2000ms base), so the window no longer
-  // depends on how fast the box boots.
+  // Start: a quiet box. During the wait the counters jump to ~90% steal, which is what the
+  // runner must see as a WINDOW rather than as an instant.
   await Deno.writeTextFile(statFile, statLine(0, 0));
-  // The runner samples the counters BEFORE the wait and AT the soft deadline, so the fixture
-  // must move them inside that window — writing them after the deadline would prove nothing.
-  // The write is the fixture's FIRST statement (no await before it): a write placed after a
-  // delay races the child's own compile, and the sample then lands too early (measured).
-  await Deno.writeTextFile(tempTest, `${selfReapWatchdog(`${tempTest}.runner`)}await Deno.writeTextFile(${JSON.stringify(statFile)}, ${JSON.stringify(statLine(9000, 1000))});
-await new Promise((resolve) => setTimeout(resolve, ${softMs + lateMarginMs}));
+  // 6qnjf (and reviewer finding w0dsa, which corrected my first attempt): the COUNTERS ARE
+  // ADVANCED BY THE TEST, NOT BY THE CHILD. My first fix made the child's jump bigger, and that
+  // could not work: the child is still COLD-BOOTING at the soft deadline on a loaded box, so
+  // the stat file is untouched, the windowed measurement finds no delta, and the runner falls
+  // back to the host's INSTANT steal — 0.3719 in the failing gate log, which is exactly
+  // 2000 * 1/(1-0.3719) = 3184ms, the bound that killed it. (A 65% fixture jump would have
+  // given 5714ms, not 3184ms — so the gate log itself proves the fixture's jump was never read.
+  // The reviewer's arithmetic, and they were right; mine was wrong.)
+  //
+  // A detached `sleep` writing the file is independent of deno's boot, so the window always
+  // exists: the delay is far below softMs, and the write lands long before the deadline the
+  // runner samples at. The child's own job is only to be LATE.
+  const advance = new Deno.Command("sh", {
+    // NB: the payload is a shell SINGLE-QUOTED literal, not JSON.stringify — JSON quoting would
+    // put literal quotes and a literal backslash-n into the file, the parser would reject the
+    // line, and the leg would fail with steal=0 while looking like a runner fault (measured).
+    args: ["-c", `sleep 0.2; printf '%s\\n' '${statLine(9000, 1000).trim()}' > ${JSON.stringify(statFile)}`],
+    stdout: "null",
+    stderr: "null",
+  }).spawn();
+  await Deno.writeTextFile(tempTest, `${selfReapWatchdog(`${tempTest}.runner`)}await new Promise((resolve) => setTimeout(resolve, ${softMs + lateMarginMs}));
 await Deno.writeTextFile(${JSON.stringify(readyFile)}, "ready");
 Deno.test("passes after late marker", () => {});
 `);
@@ -755,6 +761,7 @@ Deno.test("passes after late marker", () => {});
     assert(named, `the receipt names the steal it measured: ${err}`);
     assert(Number(named[1]) > 0.4, `the named steal must be the WINDOW's, not an instant: ${err}`);
   } finally {
+    await advance.status.catch(() => {});
     await Deno.remove(tempDir, { recursive: true }).catch(() => {});
   }
 });
