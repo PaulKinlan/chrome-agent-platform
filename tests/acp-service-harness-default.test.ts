@@ -117,6 +117,26 @@ Deno.test("acp:install: the bridge line carries the resolved harness (the per-co
 // so the case cannot be written in-process.
 const BRIDGE = join(ROOT, "scripts", "acp-bridge.ts");
 
+// chrome-agent-platform-6i9df: the child deno must reuse the PARENT's module
+// cache. These cases deliberately override HOME (a machine with/without
+// ~/journal), and Deno derives its cache from HOME when DENO_DIR is unset — so
+// a bare HOME override silently moved the child to a cold cache, and every run
+// fetched scripts/acp-bridge.ts's jsr.io imports from the network. When the
+// fetch blipped, the child printed no JSON and the failure surfaced as a bogus
+// equality diff (`undefined != <path>`). Resolve the parent's effective cache
+// dir from the REAL environment and hand it to the child explicitly, so the
+// HOME the test invents cannot move the cache.
+function parentDenoDir(): string {
+  const fromEnv = Deno.env.get("DENO_DIR");
+  if (fromEnv) return fromEnv;
+  const home = Deno.env.get("HOME") ?? "";
+  if (Deno.build.os === "darwin") return join(home, "Library", "Caches", "deno");
+  if (Deno.build.os === "windows") {
+    return join(Deno.env.get("LOCALAPPDATA") ?? join(home, "AppData", "Local"), "deno");
+  }
+  return join(Deno.env.get("XDG_CACHE_HOME") ?? join(home, ".cache"), "deno");
+}
+
 async function hostDefaultsFor(home: string, makeJournal: boolean, frame: object | null, hostCwd?: string) {
   await Deno.mkdir(home, { recursive: true });
   if (makeJournal) await Deno.mkdir(join(home, "journal"), { recursive: true });
@@ -129,14 +149,26 @@ async function hostDefaultsFor(home: string, makeJournal: boolean, frame: object
     stdin: "piped",
     stdout: "piped",
     stderr: "piped",
-    env: { ...Deno.env.toObject(), HOME: home },
+    env: { ...Deno.env.toObject(), HOME: home, DENO_DIR: parentDenoDir() },
   }).spawn();
   const writer = child.stdin.getWriter();
   await writer.write(new TextEncoder().encode(script));
   await writer.close();
   const out = await child.output();
   const text = new TextDecoder().decode(out.stdout).trim().split("\n").pop() ?? "";
-  try { return JSON.parse(text); } catch { return { parseError: text, stderr: new TextDecoder().decode(out.stderr).slice(0, 300) }; }
+  const stderr = new TextDecoder().decode(out.stderr).trim();
+  // The stdout parse is a HARD precondition (6i9df): a child that died before
+  // printing JSON (spawn failure, cold cache + unreachable jsr.io) must say so
+  // with its own stderr, never surface downstream as an equality diff between
+  // undefined and the expected value.
+  if (out.code !== 0) {
+    throw new Error(`child failed (exit ${out.code}): ${stderr.slice(0, 500) || "(no stderr)"}`);
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error(`child failed: stdout did not parse as JSON (last line: ${JSON.stringify(text)}); stderr: ${stderr.slice(0, 500)}`);
+  }
 }
 
 Deno.test("acp-bridge: a session with no cwd gets NOTHING invented when $HOME/journal does not exist", async () => {
@@ -225,6 +257,10 @@ Deno.test("acp-bridge drive: the client's missing cwd is warned about once and r
     env: {
       HOME: home,
       PATH: Deno.env.get("PATH") ?? "",
+      // 6i9df: same cold-cache mechanism as hostDefaultsFor — without the
+      // parent's DENO_DIR this child fetched acp-bridge.ts's jsr.io imports
+      // from the network on every run.
+      DENO_DIR: parentDenoDir(),
       CAP_ACP_FIXTURE_LOG: log,
     },
     stdout: "null",
