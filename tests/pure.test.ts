@@ -9,6 +9,7 @@ import { z } from "npm:zod@3";
 import { canonicalOrigin } from "../extension/lib/memory.js";
 import {
   authorizeToolReport,
+  isOwnExtensionSender,
   discoveredOnly,
   fnv1a,
   KNOWN_TOOL_SECRET_ARGS,
@@ -832,4 +833,20 @@ Deno.test("normalizeDurableToolResult: isolates array conversion failure to that
   assertEquals(normalized.permissionRequirement?.permissions, []);
   assertEquals(normalized.permissionRequirement?.grantOrigins, ["https://example.com"]);
   assertEquals(normalized.permissionRequirement?.grantGlobal, true);
+});
+
+Deno.test("ypz31: isOwnExtensionSender truth table — the enforcement predicate weakens loudly", () => {
+  const RUNTIME = "cac6c-runtime-probe";
+  // own id: the only admitting shape.
+  assertEquals(isOwnExtensionSender({ id: RUNTIME }, RUNTIME), true);
+  // foreign id present: refused (Mutant B — 'sender.id === runtimeId -> true' — reds HERE).
+  assertEquals(isOwnExtensionSender({ id: "foreign-extension-id" }, RUNTIME), false);
+  // absent id: refused (the r4 probe's shape).
+  assertEquals(isOwnExtensionSender({ url: "https://hostile.example/page.html" }, RUNTIME), false);
+  // empty runtime id: nothing can be own.
+  assertEquals(isOwnExtensionSender({ id: RUNTIME }, ""), false);
+  // non-string runtime id: refused.
+  assertEquals(isOwnExtensionSender({ id: RUNTIME }, undefined), false);
+  // non-string sender id: refused.
+  assertEquals(isOwnExtensionSender({ id: 42 }, RUNTIME), false);
 });
