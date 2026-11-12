@@ -36,6 +36,7 @@ import {
   untrustedClose,
   fenceUntrustedText,
 } from "./untrusted-fence.js";
+import { mustFenceSkill } from "./skill-trust.js";
 
 export const PROMOTION_BUDGET = 600; // max rendered characters
 export const PROMOTION_TOP_N = 4; // max promoted skills
@@ -97,15 +98,6 @@ export function compareRelevance(a, b) {
   return ia < ib ? -1 : ia > ib ? 1 : 0;
 }
 
-/** Is a catalog row an IMPORTED (remote, untrusted) skill? skillCatalog rows
- * carry `source: "imported"`; synthetic/test rows carry a source-qualified
- * `imported:` refId. Everything else is owner-authored/trusted. */
-function isImportedSkill(skill) {
-  if (!skill || typeof skill !== "object") return false;
-  if (skill?.source === "imported") return true;
-  return String(skill?.refId ?? skill?.id ?? "").startsWith("imported:");
-}
-
 /** Shorten untrusted inner text (never splitting a UTF-16 surrogate pair — a
  * lone surrogate would decode to U+FFFD) and mark the cut with an ellipsis. */
 function fitInner(inner, maxChars) {
@@ -128,7 +120,11 @@ function promotionRow(skill, token, budget, headingLen, instrLen) {
   const rawId = String(skill?.id ?? refId);
   const name = String(skill?.name ?? refId);
   const desc = String(skill?.description ?? "").trim();
-  const imported = isImportedSkill(skill);
+  // v9yc8: FENCE BY DEFAULT. The old isImportedSkill was a deny-list — a row whose
+  // source was "custom", unknown, or absent rendered name/description raw in the
+  // promotion section, outside any boundary, straight into the system prompt.
+  // Trust now comes from the one shared predicate (extension/lib/skill-trust.js).
+  const imported = mustFenceSkill(skill);
   const guidance = imported
     ? `adopt with /skill:${refId} or read it now via skill_read(skill:"${rawId}")`
     : `adopt with /skill:${refId}`;
@@ -181,7 +177,7 @@ export function promoteSkills({ task, catalog, adoptedIds = new Set(), untrusted
   // The skill_read read path is IMPORTED-only: promise it only when a promoted
   // row is imported (recomputed after budget trims so a popped imported row
   // can never leave a promise behind).
-  let instructions = top.some(({ skill }) => isImportedSkill(skill))
+  let instructions = top.some(({ skill }) => mustFenceSkill(skill))
     ? 'Adopt one by writing /skill:<id> in your next message (its full body composes for this run), or read an imported skill on demand via skill_read(skill:"<id>") without adopting.'
     : "Adopt one by writing /skill:<id> in your next message (its full body composes for this run).";
   const rows = top.map(({ skill }) => promotionRow(skill, token, budget, heading.length, instructions.length));

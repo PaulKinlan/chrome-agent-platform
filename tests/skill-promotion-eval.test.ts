@@ -28,11 +28,11 @@ function fakeMemory() {
 // A catalog shaped like skillCatalog() rows (name/description/refId) — a few
 // on-demand built-ins + one imported skill, mirroring the real recipe set.
 const CATALOG = [
-  { id: "tab-hygiene", refId: "builtin:tab-hygiene", name: "Tab hygiene", description: "Find duplicate/stale tabs and close or group them." },
-  { id: "page-summary", refId: "builtin:page-summary", name: "Summarise this page", description: "Read the active tab and give a tight summary." },
+  { id: "tab-hygiene", refId: "builtin:tab-hygiene", name: "Tab hygiene", description: "Find duplicate/stale tabs and close or group them.", source: "builtin" },
+  { id: "page-summary", refId: "builtin:page-summary", name: "Summarise this page", description: "Read the active tab and give a tight summary.", source: "builtin" },
   { id: "browser-testing", refId: "imported:browser-testing", name: "Browser testing", description: "Control the browser: open tabs, navigate, click, capture screenshots." },
-  { id: "save-quote", refId: "builtin:save-quote", name: "Save quote", description: "Save selected text as a quote with source attribution." },
-  { id: "link-collector", refId: "builtin:link-collector", name: "Collect links", description: "Gather the outbound links from the active page." },
+  { id: "save-quote", refId: "builtin:save-quote", name: "Save quote", description: "Save selected text as a quote with source attribution.", source: "builtin" },
+  { id: "link-collector", refId: "builtin:link-collector", name: "Collect links", description: "Gather the outbound links from the active page.", source: "builtin" },
 ];
 
 // The run seam composes exactly the way the agent boundary does: the baseline
@@ -142,6 +142,7 @@ Deno.test("eval: a task naming many skills stays within the char budget", () => 
   const many = Array.from({ length: 40 }, (_, i) => ({
     id: `skill-${i}`,
     refId: `builtin:skill-${i}`,
+    source: "builtin",
     name: `Skill number ${i}`,
     description: `Handle concern ${i}: tabs, browser, screenshots, links, quotes, reading.`,
   }));
