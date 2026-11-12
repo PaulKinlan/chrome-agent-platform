@@ -23,8 +23,13 @@ erased. Hooks are installed in the *shared* Git directory,
 not in each worktree; where they are not installed, run this command manually
 before manually refreshing `.beads/issues.jsonl`.
 
-For a missing ID, preserve the original Git ref and JSON line as evidence;
-check `bd show`, `bd history`, `bd restore`, the Dolt history and related issue
+For a missing ID, first check WHICH candidate the checker compared against: under
+the pre-commit hook the candidate is the STAGED `.beads/issues.jsonl` — the ID is
+usually still present in the canonical DB, so start with the staged file itself
+(`git diff --cached .beads/issues.jsonl`), restore the missing row(s), and restage.
+Only when the checker ran manually (no `--candidate`) is the candidate the canonical
+DB: then preserve the original Git ref and JSON line as evidence; check `bd show`,
+`bd history`, `bd restore`, the Dolt history and related issue
 references. Ask the issue owner whether it was deliberately deleted/retired.
 Only after that decision should an individual record be recovered using
 `bd import <single-record.jsonl>` and confirmed with `bd show` and

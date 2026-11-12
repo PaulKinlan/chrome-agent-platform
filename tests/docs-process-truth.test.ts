@@ -226,3 +226,13 @@ Deno.test("w56b: the AGENTS.md worktree recipe names every setup step a fresh wo
     last = at;
   }
 });
+
+Deno.test("xert2: the beads-export doc routes a missing ID by mode — staged file under the hook, Dolt history only on the manual path", () => {
+  const doc = read("docs/BEADS-EXPORT-DIVERGENCE.md");
+  assert(doc.includes("the candidate is the STAGED `.beads/issues.jsonl`"),
+    "the doc must name the staged candidate for the hook path");
+  assert(doc.includes("git diff --cached .beads/issues.jsonl"),
+    "the doc's hook-path remedy is the staged file, not Dolt history");
+  assert(doc.includes("Only when the checker ran manually"),
+    "the Dolt-history guidance must be scoped to the manual path");
+});

@@ -335,3 +335,31 @@ Deno.test("nabuw / o3i89: buffer overflow triggers reachable capacity errors wit
   assert(foundArchiveBufferConstant, "scripts/package-archive.mjs must declare MAX_ARCHIVE_BUFFER_BYTES");
 });
 
+
+Deno.test("vor46: in --candidate (hook) mode the refusal names the STAGED export and sends the lane to its staged file, never to Dolt history", async () => {
+  const repo = await scratchRepo(BIG_EXPORT);
+  try {
+    // The staged candidate drops the committed ID — the reviewer's repro shape.
+    const stagedCandidate = path.join(repo.root, "staged.jsonl");
+    const kept = BIG_EXPORT.split("\n").filter((line) => !line.includes(DROPPED_ID)).join("\n");
+    await writeFile(stagedCandidate, kept);
+    const result = spawnSync("node", [CHECKER, "--candidate", stagedCandidate], {
+      cwd: path.join(repo.root, "checkout"),
+      env: { PATH: Deno.env.get("PATH") ?? "", HOME: repo.root, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" },
+      encoding: "utf8",
+    });
+    assertEquals(result.status, 1, `staged-mode refusal expected, got stdout: ${result.stdout}`);
+    assertStringIncludes(result.stderr, "absent from the STAGED export you are about to commit",
+      "the diagnostic names the candidate actually checked");
+    assertStringIncludes(result.stderr, "git diff --cached",
+      "the guidance sends the lane to its staged file");
+    assert(!result.stderr.includes("Dolt history"),
+      "the Dolt-history guidance is manual-mode only — the ID is present in the canonical DB");
+    assertStringIncludes(result.stderr, "refusing the commit (nothing is overwritten)",
+      "xert2: hook mode refuses the COMMIT — no export is overwritten");
+    assert(!result.stderr.includes("refusing to overwrite the export"),
+      "xert2: the overwrite remedy belongs to the manual path only");
+  } finally {
+    await repo.cleanup();
+  }
+});
