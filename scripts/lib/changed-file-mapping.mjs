@@ -126,6 +126,14 @@ export const DEDICATED_FILE_GUARDS = Object.freeze({
     // polices, and three consecutive sw.js deltas never selected it.
     "tests/onmessage-sender-guard.test.ts",
   ]),
+  "scripts/lib/serial-runner.mjs": Object.freeze([
+    // lzccc: the readiness/grace runner is a CLI that spawnSync-EXECUTES at import time
+    // (it spawns `deno test` from its own top-level statements), so no suite can import it
+    // — importing would run a test file. Its guard is therefore invisible to the static
+    // reverse map, and the gate reported it as an unmapped changed file on the lzccc delta.
+    "tests/serial-phase-resilience.test.ts",
+    "tests/serial-phase-timeout.test.ts",
+  ]),
   "extension/lib/script-host.js": Object.freeze([
     // The egress-confinement journey imports script-host dynamically INSIDE a test body,
     // so the static reverse map cannot see it either (a detection gap filed as ff920).
