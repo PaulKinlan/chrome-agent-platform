@@ -226,18 +226,24 @@ export function phaseStatusFor(exitCode) {
 
 const BATCH_ANSI_RE = /\x1b\[[0-9;]*[mGKH]/gu;
 
+const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
 /**
  * Per-file attribution for a FAILED `deno test --parallel` batch (chrome-agent-platform-n3t01).
  *
  * Deno 2.x prints one line per test under --parallel, prefixed with the file:
  *   `./tests/x.test.ts => some test ... ok (439µs)`   /   `... FAILED (977µs)`
  * and the ERRORS/FAILURES sections carry `<name> => ./tests/x.test.ts:line:col`. Both shapes are
- * read, so a file is:
- *   - "failed"  — a FAILED test line or a failure-section pointer names it;
+ * read, plus (chrome-agent-platform-hjuis) Deno's module-death shapes, so a file is:
+ *   - "failed"  — a FAILED test line, a failure-section pointer, a
+ *                 `./<file> (uncaught error)` section entry, or the
+ *                 `at file://…/<file>:l:c` pointer of a `error: SyntaxError` block (the ONLY
+ *                 evidence a module-graph abort leaves);
  *   - "passed"  — its tests reported ok/ignored and none failed (the same evidence a GREEN batch
  *                 certifies with);
  *   - "unknown" — no evidence either way (a worker that died before reporting leaves none, and
- *                 inventing a verdict would be the tarring this bead removes).
+ *                 inventing a verdict would be the tarring this bead removes). A stack reference
+ *                 inside another failure's error body is NOT evidence for the referenced file.
  * Pure and dependency-free so the unit test can pin it against recorded batch output.
  *
  * @param {string} output the captured batch stdout+stderr
@@ -256,7 +262,33 @@ export function attributeParallelBatchOutput(output, files) {
       continue;
     }
     const failurePointer = /=> \.\/(.+?\.test\.ts):\d+:\d+/.exec(line);
-    if (failurePointer) sawFail.add(failurePointer[1]);
+    if (failurePointer) {
+      sawFail.add(failurePointer[1]);
+      continue;
+    }
+    // hjuis (repro A): a module-load death prints no per-test line at all —
+    // Deno names the file in the ERRORS/FAILURES uncaught-error entry instead
+    // (the `Uncaught error from ./<file> FAILED` banner always co-occurs with
+    // it, so the banner is not a separate shape: a mutant removing it is not
+    // killable, which the drill proved).
+    const uncaughtSection = /^\.\/(.+?\.test\.ts) \(uncaught error\)/.exec(line);
+    if (uncaughtSection) sawFail.add(uncaughtSection[1]);
+  }
+  // hjuis (repro B): a SyntaxError aborts the module graph before any per-test
+  // line exists; the ONLY evidence is the error block's `at file://…/<file>:l:c`
+  // pointer. The block boundary is the next `error:` header, and a ref counts
+  // only when its path ENDS with a batch file's repo-relative name — so a stack
+  // reference inside a NORMAL failure's error body never attributes the
+  // referenced file, and an unrun file invents no verdict.
+  const syntaxBlocks = clean.split(/\n(?=error: )/).filter((b) => b.startsWith("error: SyntaxError"));
+  if (syntaxBlocks.length > 0) {
+    const refs = syntaxBlocks.flatMap((b) => [...b.matchAll(/file:\/\/\S+/g)].map((m) => m[0]));
+    for (const file of files) {
+      const key = String(file).replace(/^\.\//, "");
+      if (sawFail.has(key)) continue;
+      const tail = new RegExp(`/${escapeRegExp(key)}:\\d+:\\d+$`);
+      if (refs.some((r) => tail.test(r))) sawFail.add(key);
+    }
   }
   const out = new Map();
   for (const file of files) {
