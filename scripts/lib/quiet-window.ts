@@ -1046,18 +1046,25 @@ export function isCdpEvaluateTimeout(message: string): boolean {
  * worker never answered. Every lane that read "fleet load" and re-ran wasted a
  * run, and the defect stayed hidden.
  *
- * So the verdict now has three causes, and only one of them is environmental:
+ * So the verdict has four causes, and only two of them are environmental:
  *   - `loaded`             the box WAS over threshold. Environmental (exit 75),
  *                          re-running is the right response.
- *   - `idle-never-settled` the box was measurably quiet. NOT environmental: a
+ *   - `idle-never-settled` the box was measurably quiet — INCLUDING positive
+ *                          evidence on the steal axis. NOT environmental: a
  *                          round trip never settled, which is a product red
  *                          (exit 1). Never call this fleet load.
  *   - `unmeasurable`       /proc could not be read. Fails CLOSED to
  *                          environmental, per this file's contract: an
  *                          unmeasurable box is never assumed quiet — but the
  *                          reason says "unmeasurable", never "load".
+ *   - `unattributable`     (zen14) steal was above the bound or NOT MEASURED.
+ *                          Stolen vCPU time stretches every wall clock while
+ *                          leaving load average and our process list untouched
+ *                          (fbg7i measured 50-96% steal on an "otherwise idle"
+ *                          box), so "no named job of ours" cannot certify quiet.
+ *                          Environmental (exit 75), never a product red.
  */
-export type EvaluateTimeoutCause = "loaded" | "idle-never-settled" | "unmeasurable";
+export type EvaluateTimeoutCause = "loaded" | "idle-never-settled" | "unmeasurable" | "unattributable";
 
 export interface EvaluateTimeoutVerdict {
   cause: EvaluateTimeoutCause;
@@ -1132,9 +1139,12 @@ export function hasNamedHeavyJob(sample: LoadSample | null): boolean {
  * alone from the test suite's own parallel phase is NOT an environmental signature.
  * A CDP timeout under load is classified as an environmental refusal ONLY when the
  * sample carries contemporaneous evidence of a NAMED heavy builder job
- * (activeBuilderJobs > 0 or non-empty compilerNames).
- * On an idle box, or under parallel test runner load with zero named builder jobs,
- * it is classified as a PRODUCT RED (environmental: false).
+ * (activeBuilderJobs > 0 or non-empty compilerNames) — or, since chrome-agent-platform-zen14,
+ * when the steal axis cannot certify quiet: host CPU steal above CAP_QUIET_MAX_STEAL_PCT,
+ * or steal UNMEASURED, yields `unattributable` (environmental, exit 75), because stolen
+ * vCPU time is invisible to load average and to the named-job scan. Only with steal
+ * measured AND below the bound is an idle box, or parallel-runner load with zero named
+ * builder jobs, classified as a PRODUCT RED (environmental: false).
  */
 export function classifyCdpTimeout(
   sample: LoadSample | null,
@@ -1161,6 +1171,25 @@ export function classifyCdpTimeout(
       cause: "loaded",
       environmental: true,
       reason: `cdp operation exceeded the budget under named heavy builder load (${reasons.join("; ")})`,
+      environment,
+      sample,
+    };
+  }
+
+  // zen14: PRODUCT RED requires POSITIVE quiet evidence on the steal axis.
+  // Hypervisor-stolen CPU stretches every task's wall clock without moving the
+  // load average or this host's process list (fbg7i measured 50-96% steal on a
+  // VM that was otherwise idle all night), so "zero named heavy-builder jobs"
+  // cannot certify a quiet box on its own. Steal above the bound — or steal
+  // UNMEASURED — makes the verdict unattributable: a re-run, never a product
+  // red and never a load claim.
+  if (typeof sample.stealPct !== "number" || sample.stealPct > spec.maxStealPct) {
+    return {
+      cause: "unattributable",
+      environmental: true,
+      reason: typeof sample.stealPct === "number"
+        ? `cdp operation exceeded the budget while host CPU steal measured ${sample.stealPct.toFixed(0)}% (> ${spec.maxStealPct}% bound) — stolen vCPU time is invisible to load average and to the named-job scan, so this is UNATTRIBUTABLE, not a product red (zen14)`
+        : `cdp operation exceeded the budget with zero concurrent named heavy-builder jobs, but host CPU steal was NOT MEASURED — without it, the named-job scan cannot certify a quiet box, so this is UNATTRIBUTABLE, not a product red (zen14)`,
       environment,
       sample,
     };
