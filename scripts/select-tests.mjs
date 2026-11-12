@@ -838,7 +838,9 @@ export function planLockfileDelta(changed = [], options = {}) {
 // repo's own CAP_QUIET_MAX_LOAD_PER_CORE=0.35 — so selecting one here does not test the page, it
 // samples the neighbours: the run ends in an environmental refusal (exit 75), the fleet's per-commit
 // gate has no refusal verdict, and the landing costs a retry until a run happens to land on a quiet
-// moment (observed: 3 refusals + 2 passes for one tip on 2026-10-18).
+// moment (observed: 3 refusals + 2 passes for one tip on 2026-10-18). (0b8tk: since erxkj the
+// SUBSET PROCESS resolves the refusal as exit 75 — the still-true statement is about the FLEET
+// verdict layer, which has no REFUSED state and files rc 75 as FAIL.)
 //
 // These suites stay in the heavy tier (`npm run test:heavy`, nightly `npm run test:all`) and in the
 // FULL suite's partition. What is withdrawn here is a load-dependent VERDICT, not the assertion —
@@ -1032,7 +1034,14 @@ export function runPhase(files, flags, label, timeoutMs = null) {
     // erxkj: the phase output is CAPTURED (and teed through unchanged) so a
     // non-zero exit can be classified like the full tier (scripts/run-tests.mjs):
     // a phase whose every failure is a verified environmental refusal resolves
-    // 75 — a refusal is a re-run, never a product red on the fast gate.
+    // 75 from THIS process. Scope honesty (0b8tk): the fleet layer does not yet
+    // distinguish the refusal — fleet-check records any non-zero rc as state
+    // FAIL and caches it as deterministic (fleet/bin/fleet-check:682), so the
+    // operator-visible retry cost is unchanged until the fleet learns a REFUSED
+    // state (fleet-defect filed). What this change buys today: the run's own
+    // log and exit code carry the refusal, so a direct `npm run gate:fast` and
+    // any consumer that distinguishes 75 see it, and the fleet fix is a
+    // one-line case arm away from the behaviour the logs already describe.
     const child = spawn("deno", ["test", "-A", "--config", "deno.runner.jsonc", ...flags, ...files], {
       stdio: ["inherit", "pipe", "pipe"],
       cwd: ROOT,
