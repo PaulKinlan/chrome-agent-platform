@@ -126,8 +126,13 @@ written only AFTER lock acquisition, so the kill guidance names the holder
 and can never point at a waiting lane.
 
 The reference hooks are tracked in `scripts/git-hooks/`: `pre-commit`
-refreshes `.beads/issues.jsonl` into the checkout being committed;
-`post-commit` pushes the Dolt data but NEVER stamps lane commits. The merger
+NEVER regenerates or stages `.beads/issues.jsonl` — a lane commit carries only
+what its author staged (chrome-agent-platform-xcffx, coord 2026-11-12). It
+refuses a conflict-marked export (on disk or staged), passes a replay through
+untouched, and validates a DELIBERATELY staged export change against the vf69
+divergence guard. The export is refreshed once per landing by the merger
+(chrome-agent-platform-jztvo). `post-commit` pushes the Dolt data but NEVER
+stamps lane commits. The merger
 runs `node scripts/bump-version.mjs patch --landing --from <candidate-sha>`
 for each user-facing candidate on the union before committing it. Install both once,
 from the primary checkout — hooks live in the common `.git/hooks`, so one
@@ -178,12 +183,14 @@ the union once per batch with `node scripts/bump-version.mjs patch --landing --f
   `bd link <new-id> <current-id> --type discovered-from`; hard ordering gets
   `bd link <blocked-id> <blocker-id>` (or `bd dep add <blocked-id> --blocked-by <blocker-id>`). The dependency graph — not
   a human dispatcher — decides what is workable next.
-- `.beads/issues.jsonl` is a passive export, not the tracker. Before a manual
-  re-export, run `node scripts/check-beads-export-divergence.mjs` **from the
-  worktree being committed**: it compares committed and on-disk issue IDs with
-  the canonical `bd export --all` and fails if any would disappear. The reference
-  pre-commit hook checks its candidate export before replacing the file, but hooks may not
-  be installed in the shared git directory. A missing ID is an investigation,
+- `.beads/issues.jsonl` is a passive export, not the tracker. Lane commits do
+  not carry it (xcffx): to refresh it deliberately, run
+  `node scripts/check-beads-export-divergence.mjs` **from the worktree being
+  committed** — it compares committed and on-disk issue IDs with the canonical
+  `bd export --all` and fails if any would disappear — then
+  `bd export --all > .beads/issues.jsonl` and stage it as its OWN labelled
+  commit (`chore(beads): tracker export`); the pre-commit hook validates the
+  staged candidate the same way. A missing ID is an investigation,
   **not** permission to bulk-import the stale export into the authoritative DB.
   For an intentional deletion, the project coordinator records the exact IDs and
   decision on a bead, then uses the single-command exact-ID reconciliation

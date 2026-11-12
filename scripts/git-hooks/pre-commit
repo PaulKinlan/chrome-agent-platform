@@ -1,6 +1,5 @@
 #!/bin/sh
-# Reference pre-commit hook: refresh .beads/issues.jsonl (the passive tracker
-# export) so every commit carries the tracker state it was made against.
+# Reference pre-commit hook for the beads tracker export (.beads/issues.jsonl).
 # Install with (from the primary checkout — hooks live only in the common
 # .git/hooks, so one install serves every linked worktree):
 #   cp scripts/git-hooks/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
@@ -13,25 +12,28 @@
 # staged the primary's on-disk file into the worktree's index while the
 # worktree's own copy stayed stale. Work from `.`; never locate the repo via $0.
 #
-# chrome-agent-platform-xcffx: the hook does NOT stage the export while git is
-# replaying commits (rebase/merge/cherry-pick/revert — see in_replay below), so a
-# replayed commit keeps the content it was authored with, and it REFUSES a
-# conflict-marked export in every mode. Ordinary commits still refresh and stage it:
-# a passive export that never rides a commit goes stale and the divergence check then
-# has nothing current to compare.
-#
-# The export lands in a temp file first: `bd export > file` truncates the file
-# before bd starts, so a failing bd would have staged an EMPTY export. A failed
-# or empty export leaves the committed file alone and says so. A successful
-# export that drops a committed issue ID blocks the commit for manual review.
+# chrome-agent-platform-xcffx (the tracker-export contract, coord 2026-11-12):
+# a lane commit carries ONLY what its author staged. This hook NEVER regenerates
+# or stages the export on its own: force-staging it into every ordinary commit
+# baked tracker churn into authored commits (three review rounds spent on a file
+# the author did not intend to change; 6i9df FAILed review on that churn alone),
+# and the baked-in diff is what a rebase then conflicts on at patch-apply, one
+# step before any hook can run. The export is refreshed once per landing by the
+# merger (chrome-agent-platform-jztvo). What remains here, in every mode:
+#  1. A GIT CONFLICT MARKER never rides a commit, on disk or staged (iaccg/g1a09).
+#  2. A REPLAY (rebase/merge/cherry-pick/revert) passes through untouched, so a
+#     replayed commit keeps the content it was authored with.
+#  3. An author who STAGES an export change deliberately gets it validated: the
+#     staged candidate must not silently drop a committed or on-disk issue ID
+#     (vf69), and the hook recommends its own labelled commit.
 [ -d .beads ] || exit 0
 
 # xcffx: a GIT CONFLICT MARKER never rides in a commit, whatever path staged it.
 # The export is generated, so a marker in it can only mean a conflicted merge was
 # resolved without regenerating — and committing it hands every other lane a beads
 # export that parses as garbage (iaccg: a FAIL caused by exactly that). Checked
-# BEFORE any refresh and in every mode, because the modes that skip the refresh are
-# the ones most likely to commit a stale, conflicted file.
+# first and in every mode: a replayed or author-staged conflicted file must be
+# refused before anything else can ride it into history.
 has_markers() {
   grep -Eq '^(<<<<<<< |>>>>>>> |=======$)' "$1" 2>/dev/null
 }
@@ -59,16 +61,12 @@ index_has_markers() {
 }
 index_has_markers && refuse_markers "the STAGED copy of .beads/issues.jsonl (the git index — what this commit would carry)"
 
-# xcffx: during a REPLAY git owns the commit's content, so the hook must not rewrite it.
-# The export describes the DB as it is NOW; staging it while git replays an old commit
-# stamps TODAY's tracker state into a HISTORICAL commit — the replayed commit then says
-# it was made against a tracker state that did not exist yet, and every replay adds
-# export churn the author never authored. Skipping the refresh during replay does NOT
-# stop a rebase conflicting on this file: that conflict happens one step earlier, when
-# git applies the export diff baked into the ORIGINAL commit (measured rebasing z7i3m
-# onto main: 3 commits -> 3 .beads/issues.jsonl conflicts, all at patch-apply, none of
-# them produced by this hook). Removing the baked-in churn is a change to what a lane
-# commit CONTAINS, which is a tracker-contract decision (xcffx residual), not a hook fix.
+# xcffx: during a REPLAY git owns the commit's content, so the hook must not
+# inspect beyond the marker guards. A rebase conflict on .beads/issues.jsonl
+# happens at patch-apply, one step before any hook runs (measured rebasing z7i3m
+# onto main: 3 commits -> 3 conflicts on that file, none produced by this hook) —
+# and with the export no longer baked into lane commits at all (the contract
+# above), that conflict class disappears as branches stop carrying the churn.
 in_replay() {
   for state in rebase-merge rebase-apply MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD; do
     p=$(git rev-parse --git-path "$state" 2>/dev/null) || continue
@@ -82,25 +80,29 @@ if in_replay; then
   exit 0
 fi
 
-# The hook is shared across worktrees, including older branches that predate
-# this checker. Without it (or Node), preserve the old export rather than
-# silently replacing it or blocking every commit on that branch.
+# xcffx: nothing below regenerates or stages anything. The export rides a commit
+# only when the author staged it deliberately; otherwise the commit contains
+# exactly the files the author changed — nothing else.
+git diff --cached --quiet -- .beads/issues.jsonl && exit 0
+
+# The author staged an export change. Validate the STAGED candidate — the commit
+# carries the index, not the working tree (g1a09) — so a staged export cannot
+# silently drop a committed or on-disk issue ID (vf69). Older worktrees without
+# the checker (or without Node) commit the staged export unvalidated rather than
+# being blocked: nothing is ever overwritten here, so there is nothing to erase.
 if [ ! -f scripts/check-beads-export-divergence.mjs ] || ! command -v node >/dev/null 2>&1; then
-  echo "[pre-commit] divergence check unavailable — committing without refreshing .beads/issues.jsonl" >&2
+  echo "[pre-commit] divergence check unavailable — committing the staged export UNVALIDATED" >&2
   exit 0
 fi
 tmp=".beads/.issues.jsonl.$$.tmp"
-err="$tmp.err"
-trap 'rm -f "$tmp" "$err"' EXIT
-if bd export --all > "$tmp" 2> "$err" && [ -s "$tmp" ]; then
-  has_markers "$tmp" && refuse_markers "the freshly exported .beads/issues.jsonl"
-  # A passive export can be stale, but overwriting it must not silently erase
-  # the last visible copy of an issue missing from the canonical DB (vf69).
-  node scripts/check-beads-export-divergence.mjs --candidate "$tmp" || exit 1
-  mv -f "$tmp" .beads/issues.jsonl
-  git add .beads/issues.jsonl
-else
-  echo "[pre-commit] bd export failed or empty — committing without refreshing .beads/issues.jsonl" >&2
-  [ -s "$err" ] && cat "$err" >&2
+trap 'rm -f "$tmp"' EXIT
+git show ":.beads/issues.jsonl" > "$tmp"
+node scripts/check-beads-export-divergence.mjs --candidate "$tmp" || exit 1
+# The labelled-commit shape is a reviewer contract (xcffx acceptance): an export
+# riding alongside authored files makes the diff reviewable only by trusting it.
+if [ "$(git diff --cached --name-only | grep -vc '^\.beads/issues\.jsonl$')" -gt 0 ]; then
+  echo "[pre-commit] NOTE: .beads/issues.jsonl rides this commit alongside authored files." >&2
+  echo "[pre-commit] Prefer its own labelled commit (chore(beads): tracker export) so a reviewer" >&2
+  echo "[pre-commit] can ignore a known machine-generated path (xcffx / chrome-agent-platform-jztvo)." >&2
 fi
 exit 0
