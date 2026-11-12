@@ -716,14 +716,23 @@ Deno.test("lzccc: a WINDOWED stolen wait earns the grace end-to-end, from counte
   const lateMarginMs = 1_500;
   const statLine = (stealJiffies: number, idleJiffies: number) =>
     `cpu  0 0 0 ${idleJiffies} 0 0 0 ${stealJiffies} 0 0\n`;
-  // Start: a quiet box. The child then spends the wait "stolen": ~65% of the jiffies it
+  // Start: a quiet box. The child then spends the wait "stolen": ~90% of the jiffies it
   // elapsed went to hypervisor steal while the guest idle counter barely moved.
+  //
+  // 6qnjf: the jump is deliberately LARGE, and that is a correctness requirement, not a
+  // preference. The hard bound is timeoutMs * max(loadRatio, 1/(1-steal)), capped at x4, so
+  // the grace this fixture earns is what must cover the child's COLD BOOT plus the late
+  // marker. With a ~65% steal jump the bound was 3184ms while the fixture needed
+  // boot+2000ms — on a fast boot that passed, and on a slow one (measured: boot ≈1300ms) it
+  // blew the bound and the runner killed a child the grace had already been granted for. A
+  // ~90% jump saturates the x4 cap (8000ms for a 2000ms base), so the window no longer
+  // depends on how fast the box boots.
   await Deno.writeTextFile(statFile, statLine(0, 0));
   // The runner samples the counters BEFORE the wait and AT the soft deadline, so the fixture
   // must move them inside that window — writing them after the deadline would prove nothing.
   // The write is the fixture's FIRST statement (no await before it): a write placed after a
   // delay races the child's own compile, and the sample then lands too early (measured).
-  await Deno.writeTextFile(tempTest, `${selfReapWatchdog(`${tempTest}.runner`)}await Deno.writeTextFile(${JSON.stringify(statFile)}, ${JSON.stringify(statLine(3900, 2100))});
+  await Deno.writeTextFile(tempTest, `${selfReapWatchdog(`${tempTest}.runner`)}await Deno.writeTextFile(${JSON.stringify(statFile)}, ${JSON.stringify(statLine(9000, 1000))});
 await new Promise((resolve) => setTimeout(resolve, ${softMs + lateMarginMs}));
 await Deno.writeTextFile(${JSON.stringify(readyFile)}, "ready");
 Deno.test("passes after late marker", () => {});
