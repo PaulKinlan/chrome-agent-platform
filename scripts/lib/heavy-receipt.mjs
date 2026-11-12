@@ -209,10 +209,12 @@ export function describeReceiptCoverage(receipt) {
 /**
  * Classify one phase's exit code into a per-suite terminal status.
  *
- * The parallel batch reports one code for the whole phase, so its files share the phase's verdict:
- * a batch that failed names EVERY file in it as `failed` rather than inventing per-file attribution
- * it does not have. That is deliberately conservative — only an all-green batch certifies, and a
- * refusal (75) or a bound kill is recorded as itself, never as a pass.
+ * Used for the wall-clock phase (one file per child, so the code IS the file's) and for a GREEN
+ * parallel batch (one all-green code certifies every file in it). A FAILED parallel batch does NOT
+ * share its verdict across files: chrome-agent-platform-n3t01 attributes per file from the batch's
+ * own output (attributeParallelBatchOutput), so a failing file is named individually and a passing
+ * file is never tarred by its phase. A refusal (75) or a bound kill is still recorded as itself for
+ * every file — never as a pass.
  */
 export function phaseStatusFor(exitCode) {
   if (exitCode === 0) return "passed";
@@ -220,6 +222,50 @@ export function phaseStatusFor(exitCode) {
   if (exitCode === 124 || exitCode === 137 || exitCode === 143) return "killed";
   if (Number.isFinite(exitCode) && exitCode > 0) return "failed";
   return "unknown";
+}
+
+const BATCH_ANSI_RE = /\x1b\[[0-9;]*[mGKH]/gu;
+
+/**
+ * Per-file attribution for a FAILED `deno test --parallel` batch (chrome-agent-platform-n3t01).
+ *
+ * Deno 2.x prints one line per test under --parallel, prefixed with the file:
+ *   `./tests/x.test.ts => some test ... ok (439µs)`   /   `... FAILED (977µs)`
+ * and the ERRORS/FAILURES sections carry `<name> => ./tests/x.test.ts:line:col`. Both shapes are
+ * read, so a file is:
+ *   - "failed"  — a FAILED test line or a failure-section pointer names it;
+ *   - "passed"  — its tests reported ok/ignored and none failed (the same evidence a GREEN batch
+ *                 certifies with);
+ *   - "unknown" — no evidence either way (a worker that died before reporting leaves none, and
+ *                 inventing a verdict would be the tarring this bead removes).
+ * Pure and dependency-free so the unit test can pin it against recorded batch output.
+ *
+ * @param {string} output the captured batch stdout+stderr
+ * @param {string[]} files the batch's file list (repo-relative, no "./")
+ * @returns {Map<string, "passed"|"failed"|"unknown">}
+ */
+export function attributeParallelBatchOutput(output, files) {
+  const clean = String(output ?? "").replace(BATCH_ANSI_RE, "");
+  const sawPass = new Set();
+  const sawFail = new Set();
+  for (const line of clean.split("\n")) {
+    const perTest = /^\.\/(.+?\.test\.ts) => /.exec(line);
+    if (perTest) {
+      if (/\bFAILED( \(|$)/.test(line)) sawFail.add(perTest[1]);
+      else if (/\b(ok|ignored)( \(|$)/.test(line)) sawPass.add(perTest[1]);
+      continue;
+    }
+    const failurePointer = /=> \.\/(.+?\.test\.ts):\d+:\d+/.exec(line);
+    if (failurePointer) sawFail.add(failurePointer[1]);
+  }
+  const out = new Map();
+  for (const file of files) {
+    const key = String(file).replace(/^\.\//, "");
+    if (sawFail.has(key)) out.set(file, "failed");
+    else if (sawPass.has(key)) out.set(file, "passed");
+    else out.set(file, "unknown");
+  }
+  return out;
 }
 
 function readJsonIfPresent(path) {
