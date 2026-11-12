@@ -728,14 +728,24 @@ Deno.test("lzccc: a WINDOWED stolen wait earns the grace end-to-end, from counte
   // given 5714ms, not 3184ms — so the gate log itself proves the fixture's jump was never read.
   // The reviewer's arithmetic, and they were right; mine was wrong.)
   //
-  // A detached `sleep` writing the file is independent of deno's boot, so the window always
-  // exists: the delay is far below softMs, and the write lands long before the deadline the
-  // runner samples at. The child's own job is only to be LATE.
+  // The counters are advanced by a detached WRITER from this process, not by the cold-booting
+  // child (the child's whole job is to be LATE). But a single jump has its own race, which
+  // rev-6qnjf2 caught: if this process is descheduled for longer than the jump's delay before
+  // runSerialFile takes its START sample, both samples see the jumped values, the delta is zero
+  // and the leg fails exactly like the original bug (reproduced at 600ms).
+  //
+  // So the writer RAMPS: it keeps increasing the counters every 100ms for far longer than the
+  // soft deadline. Whatever moment the runner samples, the pair straddles growth, and the growth
+  // is overwhelmingly steal (~300 steal jiffies per 305 total => ~98%). No schedule of this
+  // process can put both samples on the same value.
   const advance = new Deno.Command("sh", {
     // NB: the payload is a shell SINGLE-QUOTED literal, not JSON.stringify — JSON quoting would
-    // put literal quotes and a literal backslash-n into the file, the parser would reject the
-    // line, and the leg would fail with steal=0 while looking like a runner fault (measured).
-    args: ["-c", `sleep 0.2; printf '%s\\n' '${statLine(9000, 1000).trim()}' > ${JSON.stringify(statFile)}`],
+    // put literal quotes and a literal backslash-n into the stat file, the parser would reject
+    // the line, and the leg would fail with steal=0 while looking like a runner fault (measured).
+    args: ["-c", `i=0; while [ $i -le 120 ]; do
+      printf 'cpu  0 0 0 %s 0 0 0 %s 0 0\\n' "$((i*5))" "$((i*300))" > ${JSON.stringify(statFile)}
+      i=$((i+1)); sleep 0.1
+    done`],
     stdout: "null",
     stderr: "null",
   }).spawn();
