@@ -216,9 +216,10 @@ export function recordRefusal(
  *
  * @param {{ readFile?: (p: string) => string, exists?: (p: string) => boolean }} io
  * @param {string} path
+ * @param {{ since?: number|null }} [options] epoch-ms lower bound; rows older or untimed are excluded
  * @returns {Array<{suite: string, refusals: number}>}
  */
-export function refusalsFromLedger({ readFile, exists } = {}, path) {
+export function refusalsFromLedger({ readFile, exists } = {}, path, { since = null } = {}) {
   try {
     if (typeof exists === "function" && !exists(path)) return [];
     const text = String(typeof readFile === "function" ? readFile(path) : "");
@@ -228,6 +229,14 @@ export function refusalsFromLedger({ readFile, exists } = {}, path) {
       try {
         const row = JSON.parse(line);
         if (typeof row?.suite === "string" && row.suite.trim()) {
+          // dqk0e: the ledger is append-only across runs, so a row from a PREVIOUS run must not
+          // declare a suite unmeasured on a run where it never refused — the reviewer reproduced
+          // exactly that (a bound ledger made two clean runs report a suite as unmeasured). `since`
+          // scopes the answer to this run; the total count is still available for condition (3).
+          if (since) {
+            const at = Date.parse(String(row?.at ?? ""));
+            if (!Number.isFinite(at) || at < since) continue;
+          }
           counts.set(row.suite, (counts.get(row.suite) ?? 0) + 1);
         }
       } catch { /* a torn line names no suite: never guess one */ }
@@ -236,4 +245,21 @@ export function refusalsFromLedger({ readFile, exists } = {}, path) {
   } catch {
     return [];
   }
+}
+
+/**
+ * Leave with the environmental refusal AFTER cleaning up. `Deno.exit()` does not run `finally`
+ * blocks, so exiting from inside a test body leaks the Chrome process, its profile and any server the
+ * suite opened (rev-j5xbi2 measured exactly that). Callers pass the cleanup they would otherwise
+ * leave to `finally`; it runs first, then the receipt is printed and the process leaves with 75.
+ *
+ * @param {{ receipt: string, cleanup?: () => unknown, exit?: (code: number) => never }} args
+ * @returns {Promise<never>}
+ */
+export async function exitWithRefusal({ receipt, cleanup = null, exit = (code) => Deno.exit(code) }) {
+  try {
+    await cleanup?.();
+  } catch { /* a failing cleanup must not turn a refusal into a red */ }
+  if (receipt) console.error(receipt);
+  return exit(ENVIRONMENTAL_REFUSAL_EXIT);
 }

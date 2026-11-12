@@ -23,6 +23,7 @@ import { currentLoadPerCpu, currentStealFractionSync, serialFileTimeoutMs } from
 import {
   browserReadyTimeoutMs,
   countRefusals,
+  exitWithRefusal,
   currentAbsoluteLoad,
   ENVIRONMENTAL_REFUSAL_EXIT,
   recordRefusal,
@@ -137,8 +138,16 @@ Deno.test({
         });
         if (refusal) {
           recordRefusal(ledgerIo, refusalLedger, "tests/sandbox-egress-confinement.test.ts");
-          console.error(refusal.receipt);
-          Deno.exit(ENVIRONMENTAL_REFUSAL_EXIT);
+          // rev-j5xbi2: Deno.exit() does NOT run finally blocks, so exiting here leaked the Chrome
+          // process, its profile and the local server. exitWithRefusal runs the cleanup the finally
+          // below would do, then leaves with 75 — a refusal must not be a resource leak.
+          await exitWithRefusal({
+            receipt: refusal.receipt,
+            cleanup: async () => {
+              if (chromeInstance) await teardownChrome(chromeInstance.proc, profile);
+              await server.shutdown();
+            },
+          });
         }
       }
       assert(sw, "Service worker must be running");

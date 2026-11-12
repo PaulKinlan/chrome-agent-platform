@@ -1179,3 +1179,22 @@ Deno.test("j5xbi refusal (round trip): a REAL ledger file, written by the suite 
     await Deno.remove(dir, { recursive: true }).catch(() => {});
   }
 });
+
+Deno.test("j5xbi refusal (dqk0e): a row from a PREVIOUS run cannot declare a suite unmeasured now", () => {
+  // rev-j5xbi3 bound a ledger from an earlier run and got two clean runs reporting the suite as
+  // unmeasured. The ledger is append-only for condition (3)'s cross-run count, so the READ must be
+  // scoped to this run or condition (4) starts lying in the safe-looking direction (claiming a hole
+  // that is not there), which is just as corrosive as hiding one.
+  const old = JSON.stringify({ suite: "tests/mic-shadow-host-journey.test.ts", at: "2026-11-12T09:00:00.000Z" });
+  const fresh = JSON.stringify({ suite: "tests/g09i-sidebar-tab.test.ts", at: "2026-11-12T12:00:00.000Z" });
+  const io = { readFile: () => `${old}\n${fresh}\n`, exists: () => true };
+  const since = Date.parse("2026-11-12T11:30:00.000Z");
+  assertEquals(refusalsFromLedger(io, "ledger.jsonl", { since }), [
+    { suite: "tests/g09i-sidebar-tab.test.ts", refusals: 1 },
+  ], "only this run's refusals may be declared");
+  // Unscoped, the whole history is available — that is what condition (3)'s repeated-refusal count needs.
+  assertEquals(refusalsFromLedger(io, "ledger.jsonl").length, 2);
+  // A row with no parseable timestamp is excluded when a scope is given: we cannot prove it is ours.
+  const untimed = JSON.stringify({ suite: "tests/agent-share-import.test.ts" });
+  assertEquals(refusalsFromLedger({ readFile: () => untimed, exists: () => true }, "l", { since }), []);
+});

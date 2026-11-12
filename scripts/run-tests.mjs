@@ -62,9 +62,16 @@ const PARALLEL_READY_TIMEOUT_MS = Number(process.env.CAP_PARALLEL_READY_TIMEOUT_
  * it exists for, and durableDir() creates a DIRECTORY, so the first version's path could never be
  * appended to at all (EISDIR, swallowed). The env var is an override; the default is the suites' path.
  */
+const RUN_STARTED_AT = Date.now() - 1000; // 1s of slack for a child that starts just before us
+
 function refusedBrowserSuites() {
   const path = process.env.CAP_BROWSER_REFUSAL_LEDGER || join(durableDir("browser-harness"), "refusals.jsonl");
-  return refusalsFromLedger({ readFile: (p) => readFileSync(p, "utf8"), exists: existsSync }, path);
+  // dqk0e: scope to THIS run. The ledger is append-only, so a row from a previous run would
+  // otherwise declare a suite unmeasured on a run where it never refused (the reviewer bound a
+  // ledger and got two clean runs reporting a suite unmeasured). The process start is the boundary.
+  return refusalsFromLedger({ readFile: (p) => readFileSync(p, "utf8"), exists: existsSync }, path, {
+    since: RUN_STARTED_AT,
+  });
 }
 
 function runParallel(files, phase = "parallel phase", durationsOut = null, killedOut = null, neverRanOut = null) {
