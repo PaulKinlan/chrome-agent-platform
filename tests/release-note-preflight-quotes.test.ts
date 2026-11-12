@@ -24,9 +24,8 @@
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
-import { copyFile, mkdir, mkdtemp, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { durableDir } from "../scripts/lib/durable-root.mjs";
 import * as acorn from "npm:acorn@8";
 import { classifyCommit } from "../scripts/check-release-note-preflight.mjs";
 
@@ -174,24 +173,25 @@ Deno.test("vggt7: the filter refusal quotes the LANDING sentence, not the hook's
  * bump-version's actual stderr.
  */
 async function landingRefusal(body: string): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), "cap-vggt7-"));
-  await mkdir(join(dir, "scripts", "lib"), { recursive: true });
-  await mkdir(join(dir, "extension", "options"), { recursive: true });
-  await copyFile(join(ROOT, "scripts", "bump-version.mjs"), join(dir, "scripts", "bump-version.mjs"));
-  await copyFile(join(ROOT, "scripts", "lib", "release-note.mjs"), join(dir, "scripts", "lib", "release-note.mjs"));
-  await copyFile(
+  // durable-root convention: scratch lives under the durable evidence root, never /tmp.
+  const dir = await Deno.makeTempDir({ dir: durableDir("scratch"), prefix: "cap-vggt7-" });
+  await Deno.mkdir(join(dir, "scripts", "lib"), { recursive: true });
+  await Deno.mkdir(join(dir, "extension", "options"), { recursive: true });
+  await Deno.copyFile(join(ROOT, "scripts", "bump-version.mjs"), join(dir, "scripts", "bump-version.mjs"));
+  await Deno.copyFile(join(ROOT, "scripts", "lib", "release-note.mjs"), join(dir, "scripts", "lib", "release-note.mjs"));
+  await Deno.copyFile(
     join(ROOT, "extension", "options", "changelog-filter.js"),
     join(dir, "extension", "options", "changelog-filter.js"),
   );
-  await writeFile(join(dir, "package.json"), JSON.stringify({ name: "t", version: "1.2.3" }, null, 2));
-  await writeFile(join(dir, "package-lock.json"), JSON.stringify({ name: "t", version: "1.2.3", packages: { "": { name: "t", version: "1.2.3" } } }, null, 2));
-  await writeFile(join(dir, "extension", "manifest.json"), JSON.stringify({ manifest_version: 3, version: "1.2.3" }, null, 2));
+  await Deno.writeTextFile(join(dir, "package.json"), JSON.stringify({ name: "t", version: "1.2.3" }, null, 2));
+  await Deno.writeTextFile(join(dir, "package-lock.json"), JSON.stringify({ name: "t", version: "1.2.3", packages: { "": { name: "t", version: "1.2.3" } } }, null, 2));
+  await Deno.writeTextFile(join(dir, "extension", "manifest.json"), JSON.stringify({ manifest_version: 3, version: "1.2.3" }, null, 2));
   const git = (...args: string[]) =>
     spawnSync("git", ["-c", "user.email=t@example.test", "-c", "user.name=t", ...args], { cwd: dir, encoding: "utf8" });
   git("init", "-q");
   git("add", "-A");
   git("commit", "-q", "-m", "base");
-  await writeFile(join(dir, "extension", "x.js"), "// change\n");
+  await Deno.writeTextFile(join(dir, "extension", "x.js"), "// change\n");
   git("add", "-A");
   git("commit", "-q", "-m", `change\n\n${body}`);
   const sha = git("rev-parse", "HEAD").stdout.trim();
@@ -199,7 +199,9 @@ async function landingRefusal(body: string): Promise<string> {
     cwd: dir,
     encoding: "utf8",
   });
-  return `${run.stdout}\n${run.stderr}`;
+  const output = `${run.stdout}\n${run.stderr}`;
+  await Deno.remove(dir, { recursive: true }).catch(() => {});
+  return output;
 }
 
 Deno.test("erfi7: each refusal is EMITTED by a real bump-version landing run, not merely written in it", async () => {
