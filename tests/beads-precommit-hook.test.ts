@@ -57,7 +57,7 @@ for a in "$@"; do [ "$a" = "--path" ] && { echo "Error: unknown flag: --path" >&
 printf '%s' "$FAKE_BD_OUT"
 `;
 
-type Opts = { fail?: boolean; empty?: boolean; out?: string; checkManual?: boolean; missingGuardScript?: boolean; onDiskExtra?: boolean; diskMissing?: boolean; diskEmpty?: boolean; approved?: string; decision?: string; requireAll?: boolean; commitIn?: "worktree" | "primary"; sequencer?: "rebase-merge" | "rebase-apply" | "MERGE_HEAD" | "CHERRY_PICK_HEAD"; diskMarked?: boolean; indexMarked?: boolean; stagedOut?: string; onlyExport?: boolean };
+type Opts = { fail?: boolean; empty?: boolean; out?: string; checkManual?: boolean; missingGuardScript?: boolean; onDiskExtra?: boolean; diskMissing?: boolean; diskEmpty?: boolean; approved?: string; decision?: string; requireAll?: boolean; commitIn?: "worktree" | "primary"; sequencer?: "rebase-merge" | "rebase-apply" | "MERGE_HEAD" | "CHERRY_PICK_HEAD"; diskMarked?: boolean; indexMarked?: boolean; stagedOut?: string; stagedDelete?: boolean; onlyExport?: boolean };
 
 async function scenario(hookText: string, opts: Opts = {}) {
   const root = await mkdtemp(path.join(tmpdir(), "cap-ufrr-"));
@@ -126,6 +126,12 @@ async function scenario(hookText: string, opts: Opts = {}) {
       // way the export rides a commit now).
       await writeFile(path.join(where, ".beads", "issues.jsonl"), opts.stagedOut);
       ok(git(where, "add", ".beads/issues.jsonl"), "stage the export change");
+    }
+    if (opts.stagedDelete) {
+      // 23mbo: `git rm --cached` stages a DELETION while the disk copy stays —
+      // there is no staged content to validate, which is exactly the shape the
+      // hook must name rather than feed `git show :path` a missing index entry.
+      ok(git(where, "rm", "-q", "--cached", ".beads/issues.jsonl"), "stage the export deletion");
     }
     // Disk-state mutations come AFTER any staged export, so the on-disk copy can
     // differ from the staged one (a disk-only ID beside a staged candidate).
@@ -286,6 +292,20 @@ Deno.test("xcffx: an export riding alongside authored files commits but is NOTED
   assertEquals(s.worktreeFiles, [".beads/issues.jsonl", "change.txt"]);
   assert(/NOTE: .beads\/issues.jsonl rides this commit alongside authored files/.test(s.commit.stderr), `the note names the preferred shape: ${s.commit.stderr}`);
   assert(/chore\(beads\): tracker export/.test(s.commit.stderr), `the note names the label: ${s.commit.stderr}`);
+});
+
+Deno.test("23mbo: a staged DELETION of the export is refused BY NAME — no raw git fatal, no 'no issue IDs' misdirection", async () => {
+  // Reviewer repro (rev of 5a7b5d050): git rm --cached .beads/issues.jsonl + an
+  // authored file. Before this fix the hook's unguarded `git show :path` failed
+  // raw ('fatal: ambiguous argument') and fed the checker an EMPTY temp file,
+  // which then blamed the canonical DB ('no issue IDs') instead of the staged
+  // deletion.
+  const s = await scenario(await referenceHook(), { stagedDelete: true });
+  assert(s.commit.status !== 0, "a staged deletion must block (fail-closed)");
+  assert(s.commit.stderr.includes("staged as DELETED"), `the refusal names the staged deletion: ${s.commit.stderr}`);
+  assert(!s.commit.stderr.includes("no issue IDs"), `must not blame the canonical DB: ${s.commit.stderr}`);
+  assert(!s.commit.stderr.includes("fatal:"), `no raw git fatal leaks to the author: ${s.commit.stderr}`);
+  assertEquals(s.worktreeHead, BASE, "nothing was committed");
 });
 
 Deno.test("vf69: a staged export that silently drops a committed issue is refused, naming the ID", async () => {
