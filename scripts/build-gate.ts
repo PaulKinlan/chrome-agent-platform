@@ -103,8 +103,9 @@ export async function main(args = Deno.args): Promise<number> {
   } else if (rc === ENVIRONMENTAL_REFUSAL_EXIT) {
     // y4lbe: an environmental refusal is NOT a failure — the tier a lane reads
     // first must say so, and no PASS is recorded above (a refusal never licenses
-    // a later skip). The returned code is unchanged: run-tests.mjs re-combines it
-    // through combinePhaseExitCodes, which already treats 75 as a refusal.
+    // a later skip). The returned code is unchanged (b7klv: this tier is NOT a
+    // run-tests.mjs phase — package.json test:build runs this file directly and
+    // scripts/gate-full.mjs:158-159 passes the stage code through verbatim).
     console.error(`\nbuild-gate: REFUSED (environmental, exit ${ENVIRONMENTAL_REFUSAL_EXIT}) — a re-run on a quiet box, not a product red`);
   } else {
     console.error(`\nbuild-gate: FAILED with exit code ${rc}`);
