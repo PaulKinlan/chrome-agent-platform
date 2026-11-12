@@ -73,7 +73,8 @@ Deno.test("etdn: resolveSkillContext maps refs to the FULL skill records from th
 Deno.test("etdn: the payload builder prepends a delimited skill block and keeps the owner's text", () => {
   const task = "check which cookie tools exist";
   const out = buildPromptWithSkillContext(task, [
-    { refId: "builtin:page-summary", name: "Page summary", description: "summarise", prompt: "Summarise the page." },
+    // 2ol0n: the row must POSITIVELY name a trusted source to render its metadata raw.
+    { refId: "builtin:page-summary", name: "Page summary", description: "summarise", prompt: "Summarise the page.", source: "builtin" },
   ]);
   assertStringIncludes(out, "<cap-skills>");
   assertStringIncludes(out, '<cap-skill ref="builtin:page-summary" name="Page summary">');

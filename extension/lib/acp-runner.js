@@ -38,6 +38,13 @@ export function extractSkillRefs(text) {
   return out;
 }
 
+/** The ONLY skill sources whose metadata may render raw (2ol0n).
+ *  `builtin` = the bundled onDemandSkills catalogue, authored in this repo.
+ *  Anything else — `imported`, `custom`, an unknown name, or NO source at all —
+ *  is fenced. Adding a source here is a claim that its metadata cannot carry
+ *  natural language, so it belongs in a reviewed diff, not in a default. */
+const TRUSTED_SKILL_SOURCES = new Set(["builtin"]);
+
 /** Resolve /skill: references against the Chrome skill store (ONE skill.list
  *  read; rows are the full records — prompt body included). Unknown refs are
  *  skipped. `runtimeSend` is injectable for tests. */
@@ -59,7 +66,11 @@ export async function resolveSkillContext(text, { runtimeSend = null } = {}) {
       name: r.name ?? r.id,
       description: r.description ?? "",
       prompt: r.prompt ?? "",
-      source: r.source ?? "builtin",
+      // 2ol0n: NOT `?? "builtin"`. A row whose source cannot be named is not
+      // positively builtin, and defaulting the unknown case to the TRUSTED
+      // source is how a future catalog source would silently inherit raw
+      // metadata rendering. Unknown stays unknown; the fence decides below.
+      source: typeof r.source === "string" ? r.source : "",
       untrusted: r.untrusted ?? false,
       fenced: r.fenced ?? false,
     }));
@@ -81,12 +92,22 @@ export function buildPromptWithSkillContext(task, skills, runToken = null) {
   if (!list.length) return String(task ?? "");
   const token = typeof runToken === "string" && runToken ? runToken : UNTRUSTED_TOKEN_PLACEHOLDER;
   const block = list.map((s) => {
-    const isImported = s.source === "imported" || s.untrusted === true || String(s.refId ?? "").startsWith("imported:");
+    // 2ol0n: fail CLOSED. The three import signals were a deny-list — a row whose
+    // source was "custom", unknown, or absent rendered ref/name/description RAW,
+    // including inside the <cap-skill ref="…" name="…"> attributes, so a future
+    // catalog source inherited interpolation by saying nothing. Trust is now
+    // POSITIVE: the row must name a source on the allowlist AND carry no import
+    // signal. Everything else is fenced as data.
+    const mustFence = !(
+      TRUSTED_SKILL_SOURCES.has(String(s.source ?? "")) &&
+      s.untrusted !== true &&
+      !String(s.refId ?? "").startsWith("imported:")
+    );
     const promptText = String(s.prompt ?? "");
-    const safePrompt = isImported && promptText && !isWellFormedFenceWithToken(promptText, token)
+    const safePrompt = mustFence && promptText && !isWellFormedFenceWithToken(promptText, token)
       ? wrapUntrustedContent(promptText, token)
       : promptText;
-    if (isImported) {
+    if (mustFence) {
       const meta = [`refId: ${String(s.refId ?? "")}`, `name: ${String(s.name ?? "")}`];
       if (s.description) meta.push(`description: ${String(s.description)}`);
       return (
