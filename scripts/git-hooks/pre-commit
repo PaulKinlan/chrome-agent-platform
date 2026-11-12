@@ -85,6 +85,20 @@ fi
 # exactly the files the author changed — nothing else.
 git diff --cached --quiet -- .beads/issues.jsonl && exit 0
 
+# 23mbo: a staged DELETION is a change too, but there is no staged content to
+# validate — an unguarded `git show :path` fails raw ('fatal: ambiguous
+# argument') and feeds the checker an EMPTY temp file, which then blames the
+# canonical DB ('no issue IDs') instead of the author's staged deletion.
+# Refuse by name instead. Fail-closed: a deliberate removal of the tracker
+# export is a decision, not a keystroke, so it goes through --no-verify with
+# the decision named, like the conflict-marker path above.
+if ! git diff --cached --diff-filter=D --quiet -- .beads/issues.jsonl; then
+  echo "[pre-commit] REFUSED: .beads/issues.jsonl is staged as DELETED —" >&2
+  echo "[pre-commit] restore it (git checkout HEAD -- .beads/issues.jsonl) or land the deletion" >&2
+  echo "[pre-commit] deliberately with --no-verify and a named decision bead (23mbo)." >&2
+  exit 1
+fi
+
 # The author staged an export change. Validate the STAGED candidate — the commit
 # carries the index, not the working tree (g1a09) — so a staged export cannot
 # silently drop a committed or on-disk issue ID (vf69). Older worktrees without
