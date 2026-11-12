@@ -69,8 +69,8 @@ export function classifyCommit({ files, body }, filter = { explainUserFacingEntr
         reason:
           `product change with no Release-note trailer (${product.slice(0, 3).join(", ")}` +
           `${product.length > 3 ? ", …" : ""}). bump-version refuses the landing: ` +
-          `"candidate has no Release-note trailer". A user-visible change owes one ` +
-          `sentence about what the user gets.`,
+          `"candidate <sha> has no Release-note trailer; pass --internal <sha> explicitly if ` +
+          `it is internal-only". A user-visible change owes one sentence about what the user gets.`,
       };
     }
     return { ok: true };
@@ -101,7 +101,7 @@ export function classifyCommit({ files, body }, filter = { explainUserFacingEntr
         reason:
           `Release-note trailer "${note.slice(0, 72)}" is rejected by the project's ` +
           `user-facing filter: ${verdict.why} (offending word: "${verdict.token}"). ` +
-          `bump-version refuses the landing: "note is not user-facing".`,
+          `bump-version refuses the landing: "landing note is empty or not user-facing".`,
       };
     }
   }
