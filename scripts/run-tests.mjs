@@ -28,6 +28,8 @@ import { resolve as resolvePath } from "node:path";
 import { BUILD_GATE, BUILD_GATE_FILES, BUILD_GATE_REASONS, HEAVY_GATE, HEAVY_GATE_FILES, HEAVY_GATE_REASONS, READ_ONLY_DIST, SERIAL, partition } from "./test-partition.mjs";
 import { announce, runReadOnlyDistBatch, runSerialFiles, runSerialLanes } from "./lib/serial-phase.mjs";
 import { ALWAYS_ON } from "./select-tests.mjs";
+import { durableDir } from "./lib/durable-root.mjs";
+import { join } from "node:path";
 import { concurrencyNotice } from "./lib/chrome-slot-bound.mjs";
 import {
   certificationGaps,
@@ -59,8 +61,12 @@ const PARALLEL_READY_TIMEOUT_MS = Number(process.env.CAP_PARALLEL_READY_TIMEOUT_
  */
 function refusedBrowserSuites() {
   try {
-    const path = process.env.CAP_BROWSER_REFUSAL_LEDGER;
-    if (!path || !existsSync(path)) return [];
+    // j5xbi: the ledger path must be the SAME one the suites write. Reading only an env var that
+    // nothing sets made the receipt silent in exactly the case it exists for (coord asked precisely
+    // this: an unmeasured suite invisible in the artefact a reviewer reads). So the default is the
+    // suites' own durable path, and the env var is an override rather than the only route.
+    const path = process.env.CAP_BROWSER_REFUSAL_LEDGER || join(durableDir("browser-harness"), "refusals.jsonl");
+    if (!existsSync(path)) return [];
     const counts = new Map();
     for (const line of readFileSync(path, "utf8").split("\n")) {
       if (!line.trim()) continue;

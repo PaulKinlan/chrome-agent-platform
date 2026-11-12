@@ -34,7 +34,11 @@ import { durableDir } from "../scripts/lib/durable-root.mjs";
 
 // j5xbi: the running per-suite refusal count lives in the evidence dir, so a permanently broken
 // suite cannot hide behind a permanently loaded neighbour across gates.
-const refusalLedger = Deno.env.get("CAP_BROWSER_REFUSAL_LEDGER") ?? durableDir("browser-harness-refusals.jsonl");
+// NB: durableDir() CREATES A DIRECTORY, so it cannot be the ledger FILE itself — appending to it
+// raises EISDIR, which the ledger's best-effort catch swallowed, and the count silently stayed 0
+// (this is the same shape rev-j5xbi measured as refusal-with-persistentCount=0). The ledger is a
+// file INSIDE a durable dir.
+const refusalLedger = Deno.env.get("CAP_BROWSER_REFUSAL_LEDGER") ?? `${durableDir("browser-harness")}/refusals.jsonl`;
 const ledgerIo = {
   readFile: (path: string) => readFileSync(path, "utf8"),
   writeFile: (path: string, text: string) => appendFileSync(path, text),
