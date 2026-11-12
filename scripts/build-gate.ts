@@ -40,6 +40,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runSerialFiles } from "./lib/serial-phase.mjs";
+import { ENVIRONMENTAL_REFUSAL_EXIT } from "./lib/environmental-verdict.mjs";
 import { BUILD_GATE_FILES } from "./test-partition.mjs";
 import { buildTierMode, recordBuildTierPass, resolveBuildTier } from "./lib/build-tier-inputs.mjs";
 
@@ -99,6 +100,12 @@ export async function main(args = Deno.args): Promise<number> {
       const recorded = await recordBuildTierPass({ key: decision.key, suites: files, exitCode: rc });
       console.log(`build-gate: PASS record ${recorded.written ? "written" : `not written (${recorded.reason})`} for input key ${decision.key.slice(0, 12)}`);
     }
+  } else if (rc === ENVIRONMENTAL_REFUSAL_EXIT) {
+    // y4lbe: an environmental refusal is NOT a failure — the tier a lane reads
+    // first must say so, and no PASS is recorded above (a refusal never licenses
+    // a later skip). The returned code is unchanged: run-tests.mjs re-combines it
+    // through combinePhaseExitCodes, which already treats 75 as a refusal.
+    console.error(`\nbuild-gate: REFUSED (environmental, exit ${ENVIRONMENTAL_REFUSAL_EXIT}) — a re-run on a quiet box, not a product red`);
   } else {
     console.error(`\nbuild-gate: FAILED with exit code ${rc}`);
   }
