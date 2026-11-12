@@ -243,6 +243,7 @@ Deno.test("erxkj: classifyPhaseExitFromOutput NEVER softens a product red (two-s
   assertEquals(classifyPhaseExitFromOutput(1, noSummary).code, 1, "a refusal marker without a FAILED summary keeps the raw code");
   assertEquals(classifyPhaseExitFromOutput(0, REFUSAL_ONLY_OUTPUT).code, 0, "green is untouched");
   assertEquals(classifyPhaseExitFromOutput(124, "timed out").code, 124, "a bound kill is untouched");
+});
 
 // ── chrome-agent-platform-0i477 (2026-11-12): n3t01 made a FAILED BATCH consult
 // areAllFailuresEnvironmental, so an all-environmental batch returns refusal 75 where it
@@ -282,4 +283,39 @@ Deno.test("0i477: a failure the block splitter does not recognise keeps the batc
     "an unrecognised error line ahead of a refusal must NOT be softened into a refusal",
   );
   assertEquals(areAllFailuresEnvironmental(` ERRORS ${LOAD_DEATH}\n FAILURES \n`), false, "a load death alone is a failure");
+});
+
+Deno.test("0i477 review: an UNCAUGHT module error beside a refusal stays a FAILURE (real Deno 2.9.7 output)", () => {
+  // The first fix only saw error text BEFORE the first `name => path` header. The review
+  // reproduced the hole on real runner output: a refusal file sorting BEFORE a
+  // top-level-throw file makes Deno print the uncaught block INSIDE the refusal's error text,
+  // with no arrow to start a new block, so it was removed along with the block and the batch
+  // classified environmental. These strings are copied from `deno test -A --no-check
+  // a_refusal.test.ts b_throw.test.ts` on Deno 2.9.7, not hand-written — a fixture I invented
+  // could only ever agree with my own parser. The only edit is the scratch path, rewritten to
+  // file:///repo/ so the fixture carries no literal tmpdir (tests/durable-root.test.ts polices
+  // that, and a test may not smuggle one in as DATA); the header shapes the parser reads are
+  // untouched.
+  const REFUSAL_BLOCK = `
+refuses => ./a_refusal.test.ts:1:6
+error: Error: ENVIRONMENT: machine is not quiet enough for this gate (waited 181351 ms)
+  throw new QuietWindowRefusedError("ENVIRONMENT: machine is not quiet enough for this gate (waited 181351 ms)");
+        ^
+    at file:///repo/a_refusal.test.ts:3:9
+`;
+  const UNCAUGHT_BLOCK = `
+./b_throw.test.ts (uncaught error)
+error: (in promise) Error: module-level boom
+throw new Error("module-level boom");
+      ^
+    at file:///repo/b_throw.test.ts:1:7
+This error was not caught from a test and caused the test runner to fail on the referenced module.
+It most likely originated from a dangling promise, event/timeout handler or top-level code.
+`;
+  // Refusal first (the reviewer's failing order): the uncaught block must NOT be swallowed.
+  assertEquals(areAllFailuresEnvironmental(` ERRORS ${REFUSAL_BLOCK}${UNCAUGHT_BLOCK}\n FAILURES \n`), false);
+  // Uncaught first: already correct before, kept so a future splitter change cannot regress it.
+  assertEquals(areAllFailuresEnvironmental(` ERRORS ${UNCAUGHT_BLOCK}${REFUSAL_BLOCK}\n FAILURES \n`), false);
+  // The refusal on its own is still a refusal — the fix must not make everything a failure.
+  assertEquals(areAllFailuresEnvironmental(` ERRORS ${REFUSAL_BLOCK}\n FAILURES \n`), true);
 });

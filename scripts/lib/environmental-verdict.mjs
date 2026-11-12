@@ -9,6 +9,39 @@ export const ENVIRONMENTAL_REFUSAL_EXIT = 75;
 export const ENVIRONMENTAL_REFUSAL_MARKER = "CAP_ENVIRONMENTAL_REFUSAL";
 
 /**
+ * Split the ERRORS section into one block per failure header. Both Deno header shapes count
+ * (see the call site); anything before the first header is the preamble.
+ * @param {string} errorsText
+ * @returns {string[]}
+ */
+export function splitErrorBlocks(errorsText) {
+  const isHeader = (line) => /=>\s*\S+:\d+/.test(line) || /\(uncaught error\)\s*$/.test(line);
+  const blocks = [];
+  let current = null;
+  for (const line of String(errorsText ?? "").split("\n")) {
+    if (isHeader(line)) {
+      if (current) blocks.push(current.join("\n"));
+      current = [line];
+      continue;
+    }
+    if (current) current.push(line);
+  }
+  if (current) blocks.push(current.join("\n"));
+  return blocks;
+}
+
+/**
+ * The number of error lines in a block. MORE THAN ONE means something else's text was glued
+ * into it (the review's shape, and the reason this is counted rather than assumed): a single
+ * failure prints one `error:` line, so a second one is an unclassified failure in disguise.
+ * @param {string} block
+ * @returns {number}
+ */
+function errorLineCount(block) {
+  return (String(block).match(/^\s*error:/gm) ?? []).length;
+}
+
+/**
  * Inspects clean error output from a test process to check if all failures are environmental refusals.
  *
  * @param {string} cleanOutput - Error output with ANSI color codes stripped
@@ -23,11 +56,22 @@ export function areAllFailuresEnvironmental(cleanOutput) {
     ? cleanOutput.slice(errorsIndex, failuresIndex)
     : cleanOutput.slice(errorsIndex);
 
-  // Each failure in Deno test error output starts with "\n\n<test_name> =>" or "\n<test_name> =>"
-  const errorBlocks = errorsText.split(/\n+(?=[^\s\n].*?=>\s*)/).slice(1);
+  // Each failure in Deno test error output starts with a HEADER line. There are TWO header
+  // shapes, and only the first was recognised before chrome-agent-platform-0i477's review:
+  //   "<test_name> => <path>:<line>:<col>"   a failing test
+  //   "./<file>.test.ts (uncaught error)"    a module-level throw / unhandled rejection
+  // The second carries no `=>`, so an uncaught error printed after a refusal was glued into
+  // the refusal's block and removed WITH it by the leftover check — the batch classified
+  // environmental, and a tree with a top-level throw came back as retryable refusal 75. The
+  // verdict also flipped with filename sort order, which is the tell that this was a parsing
+  // accident and not a judgement. Measured on REAL Deno 2.9.7 output, not on a hand-written
+  // fixture (the review supplied that; a fixture I wrote could agree with my own parser).
+  const errorBlocks = splitErrorBlocks(errorsText);
   if (errorBlocks.length === 0) return false;
 
   for (const block of errorBlocks) {
+    // 0i477 review: a block carrying two error lines has swallowed a second failure.
+    if (errorLineCount(block) > 1) return false;
     // Separate test heading (<test_name> => <path>) from the actual error body
     // so a test with QuietWindowRefusedError in its name does not falsely classify product errors.
     const arrowIdx = block.indexOf("=>");
