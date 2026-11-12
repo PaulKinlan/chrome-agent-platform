@@ -18,7 +18,7 @@
 
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { promoteSkills } from "../extension/lib/skill-promotion.js";
-import { isTrustedSkill, mustFenceSkill, TRUSTED_SKILL_SOURCES } from "../extension/lib/skill-trust.js";
+import { isImportedSkill, isTrustedSkill, mustFenceSkill, TRUSTED_SKILL_SOURCES } from "../extension/lib/skill-trust.js";
 
 // A usable run token is plain alphanumeric (untrusted-fence.js TOKEN_RE); anything else
 // renders the placeholder, which would make a fence assertion pass for the wrong reason.
@@ -63,6 +63,35 @@ Deno.test("v9yc8: an import signal overrides a builtin source label", () => {
     const out = promote(hostileRow(extra));
     assert(out.includes(`<<<UNTRUSTED run:${TOKEN}>>>`), `${JSON.stringify(extra)} must be fenced`);
   }
+});
+
+Deno.test("xhr57: fencing and read availability are SEPARATE decisions", () => {
+  // The promotion section promises skill_read only where an imported OPFS body exists.
+  // Fencing an unknown-source row must not hand it that promise: telling the model to
+  // call skill_read(skill:"custom-one") on a row with no imported body is a promise the
+  // platform cannot keep. This is the leg my v9yc8 falsifications could not reach —
+  // both directions I tested were about the fence, and neither asked what it PROMISES.
+  const custom = promote(hostileRow({ source: "custom" }));
+  assert(custom.includes(`<<<UNTRUSTED run:${TOKEN}>>>`), "an unknown source is fenced");
+  assert(!custom.includes('skill_read(skill:"custom-one")'), `no read promise for a fenced, unimported row: ${custom}`);
+  assert(!custom.includes("read an imported skill on demand"), "and the global guidance must not advertise it either");
+
+  const imported = promote(hostileRow({ source: "imported", refId: "imported:one", id: "one" }));
+  assert(imported.includes(`<<<UNTRUSTED run:${TOKEN}>>>`), "an imported row is fenced");
+  assert(imported.includes('skill_read(skill:"one")'), `an imported row keeps its read path: ${imported}`);
+  assert(imported.includes("read an imported skill on demand"), "and the global guidance names it");
+
+  const builtin = promote(hostileRow({ source: "builtin", refId: "builtin:one", id: "one" }));
+  assert(!builtin.includes("<<<UNTRUSTED"), "a builtin row is not fenced");
+  assert(!builtin.includes("skill_read"), "and is not advertised as readable either");
+
+  // The three answers are independent by construction.
+  assertEquals(isImportedSkill({ source: "custom" }), false);
+  assertEquals(mustFenceSkill({ source: "custom" }), true);
+  assertEquals(isImportedSkill({ source: "imported" }), true);
+  assertEquals(mustFenceSkill({ source: "imported" }), true);
+  assertEquals(isImportedSkill({ source: "builtin" }), false);
+  assertEquals(mustFenceSkill({ source: "builtin" }), false);
 });
 
 Deno.test("v9yc8: the shared predicate is the single answer, and it fails closed", () => {

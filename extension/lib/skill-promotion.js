@@ -36,7 +36,7 @@ import {
   untrustedClose,
   fenceUntrustedText,
 } from "./untrusted-fence.js";
-import { mustFenceSkill } from "./skill-trust.js";
+import { isImportedSkill, mustFenceSkill } from "./skill-trust.js";
 
 export const PROMOTION_BUDGET = 600; // max rendered characters
 export const PROMOTION_TOP_N = 4; // max promoted skills
@@ -120,27 +120,29 @@ function promotionRow(skill, token, budget, headingLen, instrLen) {
   const rawId = String(skill?.id ?? refId);
   const name = String(skill?.name ?? refId);
   const desc = String(skill?.description ?? "").trim();
-  // v9yc8: FENCE BY DEFAULT. The old isImportedSkill was a deny-list — a row whose
-  // source was "custom", unknown, or absent rendered name/description raw in the
-  // promotion section, outside any boundary, straight into the system prompt.
-  // Trust now comes from the one shared predicate (extension/lib/skill-trust.js).
-  const imported = mustFenceSkill(skill);
-  const guidance = imported
+  // v9yc8: FENCE BY DEFAULT — the boundary comes from mustFenceSkill(), not from
+  // "does this row look imported" (that deny-list rendered unknown sources raw).
+  // xhr57: and the FENCE IS NOT THE READ PATH. skill_read fetches an imported OPFS
+  // body, which an unknown-source row does not have, so the promise is gated on
+  // isImportedSkill() separately: a row can be fenced AND unreadable.
+  const fenced = mustFenceSkill(skill);
+  const readable = isImportedSkill(skill);
+  const guidance = readable
     ? `adopt with /skill:${refId} or read it now via skill_read(skill:"${rawId}")`
     : `adopt with /skill:${refId}`;
-  if (imported) {
+  if (fenced) {
     const open = untrustedOpen(token);
     const close = untrustedClose(token);
     // row = open + "\n" + inner + "\n" + close + "\n- " + guidance, and the
     // section = heading + "\n" + row + "\n" + instructions.
     const innerMax = budget - headingLen - instrLen - 2 - open.length - close.length - guidance.length - 5;
     const inner = fitInner(`${name} — ${desc}`, innerMax);
-    return { text: `${open}\n${inner}\n${close}\n- ${guidance}`, imported: true };
+    return { text: `${open}\n${inner}\n${close}\n- ${guidance}`, imported: readable };
   }
   // row = "- " + inner + " (" + guidance + ")"
   const innerMax = budget - headingLen - instrLen - 2 - guidance.length - 5;
   const inner = fitInner(`${name} — ${desc}`, innerMax);
-  return { text: `- ${inner} (${guidance})`, imported: false };
+  return { text: `- ${inner} (${guidance})`, imported: readable };
 }
 
 /**

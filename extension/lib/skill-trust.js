@@ -42,3 +42,15 @@ export function isTrustedSkill(skill) {
 export function mustFenceSkill(skill) {
   return !isTrustedSkill(skill);
 }
+
+/** A DIFFERENT question from isTrustedSkill(): was this row installed from the import
+ *  store, i.e. does it have an OPFS-backed body that skill_read can fetch? xhr57: the
+ *  fence and the read path are separate decisions, and conflating them told the model
+ *  to call skill_read on rows with no imported body. The three answers are independent:
+ *  builtin = trusted and unreadable-by-skill_read; imported = fenced AND readable;
+ *  unknown source = fenced but NOT readable. */
+export function isImportedSkill(skill) {
+  if (!skill || typeof skill !== "object") return false;
+  if (skill.source === "imported") return true;
+  return String(skill.refId ?? skill.id ?? "").startsWith("imported:");
+}
