@@ -62,6 +62,10 @@ export const FLEET_MANIFEST_GRAPHS = ["FULL", "PARTIAL", "INCOMPLETE"];
 export const LOCKFILE_DELTA_PREFIX = "lockfile-delta: ";
 export const GATE_UNMAPPED_PREFIX = "fast-gate: unmapped: ";
 
+/** `fast-gate: run-failed: a b c` (03eht) — attribution unavailable because the RUN failed.
+ *  Deliberately NOT the unmapped line: that one raises the fleet's COVERAGE WARNING. */
+export const GATE_RUN_FAILED_PREFIX = "fast-gate: run-failed: ";
+
 /** xpmke: a file the selector refused ON PURPOSE (its own machinery, an uncertifiable
  *  lockfile delta) is not an unmapped GAP. It gets its own line so the fleet's coverage
  *  warning stops firing on files no lane can act on — and so a genuine gap stays loud and
@@ -151,7 +155,16 @@ export function explainChangedFileMapping({ changed = [], candidates = {}, execu
     if (failedRun && reachable.length > omittedReason.length) {
       return {
         file,
-        status: "unmapped",
+        // 03eht: its OWN status, not "unmapped". The reason below has said "no selection omission
+        // is claimed" since ea2qv, but the STATUS WORD still put the row in the unmapped list, so
+        // fleet-check rendered "COVERAGE WARNING: N unmapped changed file(s)" and told the lane to
+        // go looking for a mapping hole when the tree had simply failed a test. Two readers in two
+        // days chased the selector instead of the failure, and tonight a third (this lane) wrote
+        // "the unmapped lines are the expected shape of a dead run" in a bead comment to stop the
+        // next reader doing the same. Disclosed, not withheld: the file and the reason are printed
+        // on the run-failed line; what changes is that a failed run stops masquerading as a
+        // coverage hole.
+        status: "run-failed",
         executed_suites: [],
         reason:
           `executed suites not attributable (run failed, rc=${String(runExitCode)}) — see the failure; ` +
@@ -284,7 +297,10 @@ export function formatGateManifest({
       // holding, not a coverage gap. It is additive to the vocabulary: the fleet reads the
       // `unmapped` LIST, not these rows (verified: no fleet consumer reads file_mapping), and
       // keeping the two words apart is what makes that list trustworthy.
-      if (!row.file || !["mapped", "unmapped", "fail-closed", "not-applicable"].includes(row.status) || !row.reason?.trim() ||
+      // 03eht: "run-failed" joins the vocabulary for the ea2qv case — a changed file whose
+      // inspecting suites cannot be attributed because the RUN failed, which is not a coverage
+      // gap and must not raise the fleet's unmapped warning.
+      if (!row.file || !["mapped", "unmapped", "fail-closed", "not-applicable", "run-failed"].includes(row.status) || !row.reason?.trim() ||
           (row.status === "mapped" && !row.executed_suites?.length) ||
           (row.status !== "mapped" && row.executed_suites?.length)) {
         throw new Error(`gate manifest: invalid reasoned changed-file placement: ${JSON.stringify(row)}`);
@@ -506,6 +522,12 @@ export function formatGateUnmapped(files = []) {
   return list.length ? GATE_UNMAPPED_PREFIX + list.join(" ") : null;
 }
 
+/** `fast-gate: run-failed: a b c` — null when there is nothing to report. */
+export function formatGateRunFailed(files = []) {
+  const list = normalizeSuiteList(files);
+  return list.length ? GATE_RUN_FAILED_PREFIX + list.join(" ") : null;
+}
+
 /** `fast-gate: fail-closed: a b c` — null when there is nothing to report. */
 export function formatGateFailedClosed(files = []) {
   const list = normalizeSuiteList(files);
@@ -543,6 +565,12 @@ export function emitGateLedger({ manifest = null, unmapped = [], fileMapping = [
   for (const row of missing) lines.push(`fast-gate: unmapped-reason: ${JSON.stringify({ file: row.file, reason: row.reason })}`);
   // xpmke: refused-by-policy files are disclosed, but on their own line, so the fleet's
   // `unmapped` list (the one that raises a COVERAGE WARNING) keeps only real gaps.
+  // 03eht: a failed run's unattributable files are disclosed on their OWN line for the same
+  // reason policy refusals are — the unmapped line must keep meaning "a real coverage gap".
+  const runFailed = fileMapping.filter((row) => row.status === "run-failed");
+  const runFailedLine = formatGateRunFailed(runFailed.map((row) => row.file));
+  if (runFailedLine) lines.push(runFailedLine);
+  for (const row of runFailed) lines.push(`fast-gate: run-failed-reason: ${JSON.stringify({ file: row.file, reason: row.reason })}`);
   const closed = fileMapping.filter((row) => row.status === "fail-closed");
   const closedLine = formatGateFailedClosed(closed.map((row) => row.file));
   if (closedLine) lines.push(closedLine);
