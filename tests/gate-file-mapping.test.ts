@@ -319,3 +319,27 @@ Deno.test("xpmke: a fail-closed row is a valid reasoned placement, and still nee
     "an unstated reason is still refused, whatever the status",
   );
 });
+
+// ── chrome-agent-platform-4iyck (28hwd/qnci3): a PASSIVE content file that owns a DEDICATED guard
+// is not "not-applicable". The selector forces the guard in when the document changes (h346c), so a
+// ledger row saying "no executable suite required" describes a run that never happened while hiding
+// one that did — the silent-skip shape the bead exists to remove. The complementary direction is
+// pinned too: a passive file with NO guard keeps not-applicable and must SAY that nothing reads it,
+// so a document carrying claims a reader relies on is visibly unguarded rather than quietly exempt.
+Deno.test("4iyck: the ledger reports the dedicated guard a runbook change actually ran", () => {
+  const playbook = "docs/MERGER-PLAYBOOK.md";
+  const guard = "tests/runbook-sync-commands.test.ts";
+  const rows = explainChangedFileMapping({ changed: [playbook], executedSuites: [guard] });
+  assertEquals(rows.map((r: { status: string }) => r.status), ["mapped"]);
+  assertEquals(rows[0].executed_suites, [guard]);
+
+  // Declared but not executed is a GAP, and it keeps the closed status vocabulary.
+  const notRun = explainChangedFileMapping({ changed: [playbook], executedSuites: [] });
+  assertEquals(notRun[0].status, "unmapped");
+  assertStringIncludes(notRun[0].reason, guard);
+
+  // The unguarded direction: a passive document nobody reads says so, and it is not "mapped".
+  const unguarded = explainChangedFileMapping({ changed: ["docs/UNGUARDED-NOTES.md"], executedSuites: [] });
+  assertEquals(unguarded[0].status, "not-applicable");
+  assertStringIncludes(unguarded[0].reason, "passive content with NO dedicated guard");
+});
