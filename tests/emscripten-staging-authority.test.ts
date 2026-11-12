@@ -1,6 +1,6 @@
 // x9r8k: SW may inspect staging evidence but cannot promote, seal or delete it.
 // @ts-nocheck
-import { assertEquals, assertRejects } from "jsr:@std/assert@1";
+import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
 import { emscriptenJobOwner } from "../extension/lib/emscripten-custody.js";
 import { createEmscriptenSwIntent } from "../extension/lib/emscripten-sw-intent.js";
 import { createEmscriptenHostEvidence } from "../extension/lib/emscripten-host-evidence.js";
@@ -198,4 +198,30 @@ Deno.test("x9r8k: missing intent, SW restart or cancellation refuse without publ
   let calls = 0;
   await code(() => verify(fixture, { isLive: () => ++calls === 1 }), "emscripten_run_not_live");
   assertEquals(fixture.deletions, 0);
+});
+
+// ── 95o2n: the staging browser harness must seal with the SAME v2 owner the stage path derives ──
+// ko4h6 re-keyed emscriptenJobOwner to the length-prefixed v2 codec, but the
+// harness (scripts/emscripten-staging-browser.ts) kept writing the legacy
+// 'agent:<run>:|hub' string into authority.json — so validateSealedWasmStream
+// refused the harness's OWN sealed input (emscripten_stage_input_unavailable).
+// The harness is a top-level browser script (importing it launches Chrome), so
+// the pin is a source pin: the codec derivation must be in the source, and the
+// legacy shape must not be.
+
+Deno.test("95o2n: the harness owner is codec-derived, never the legacy ':|' shape", async () => {
+  const src = await Deno.readTextFile(new URL("../scripts/emscripten-staging-browser.ts", import.meta.url));
+  // The CODE must not build the legacy owner (a comment may still NAME it — the
+  // explanation is the documentation); pin the construction pattern, not the text.
+  assert(!/["']agent:["']\s*\+/.test(src), "the legacy 'agent:' + … owner construction must not survive in the harness");
+  assert(
+    src.includes("emscriptenJobOwner"),
+    "the harness must derive the sealed owner through emscriptenJobOwner (the v2 codec the stage path uses)",
+  );
+  // The defect itself, stated positively: for the harness's fixture tuple the
+  // codec output and the legacy string are DIFFERENT — that is why the old
+  // harness refused its own sealed input.
+  const codecOwner = emscriptenJobOwner({ runId: "exec_browser_stage_123456", agentId: "hub" });
+  const legacyOwner = "agent:" + "exec_browser_stage_123456" + ":|hub";
+  assert(codecOwner !== legacyOwner, "the re-keyed owner differs from the legacy shape (else this pin tests nothing)");
 });
