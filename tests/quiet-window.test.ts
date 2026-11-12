@@ -871,7 +871,7 @@ Deno.test("9t1p: an IDLE box is NOT fleet load — it is a product red that says
 
 Deno.test("56hfm / lckla: classifyCdpTimeout requires contemporaneous named heavy-builder job for environmental refusal", () => {
   // 1. Suite's own parallel-phase load (load/core 0.89) with ZERO named heavy-builder jobs
-  // MUST strictly remain PRODUCT RED (cause: "idle-never-settled", environmental: false).
+  // and steal measurably LOW (zen14: the positive quiet evidence) stays PRODUCT RED.
   const suiteParallelLoadOnly = sample({
     load1: 12.5,
     load5: 8.2,
@@ -883,6 +883,7 @@ Deno.test("56hfm / lckla: classifyCdpTimeout requires contemporaneous named heav
     activeCompilers: 0,
     activeCompilerNames: [],
     activeBuilderJobs: 0,
+    stealPct: 0,
   });
   assertEquals(hasNamedHeavyJob(suiteParallelLoadOnly), false);
   const v1 = classifyCdpTimeout(suiteParallelLoadOnly, resolveSpec(SPEC));
@@ -911,7 +912,7 @@ Deno.test("56hfm / lckla: classifyCdpTimeout requires contemporaneous named heav
   assertEquals(v2.environmental, true, "load with named heavy-builder jobs qualifies as environmental refusal");
   assert(v2.reason.includes("under named heavy builder load"), v2.reason);
 
-  // 3. Idle box with zero compilers stays product red.
+  // 3. Idle box with zero compilers and measurably-low steal stays product red.
   const idle = sample({
     load1: 0.20,
     load5: 0.15,
@@ -922,6 +923,7 @@ Deno.test("56hfm / lckla: classifyCdpTimeout requires contemporaneous named heav
     activeCompilers: 0,
     activeCompilerNames: [],
     activeBuilderJobs: 0,
+    stealPct: 0,
   });
   assertEquals(hasNamedHeavyJob(idle), false);
   const v3 = classifyCdpTimeout(idle, resolveSpec(SPEC));
@@ -937,6 +939,60 @@ Deno.test("56hfm / lckla: classifyCdpTimeout requires contemporaneous named heav
   const v4 = classifyCdpTimeout(unmeasurable, resolveSpec(SPEC));
   assertEquals(v4.cause, "unmeasurable");
   assertEquals(v4.environmental, true);
+});
+
+Deno.test("zen14: PRODUCT RED stands on measurably-low steal; only steal ABOVE the bound is UNATTRIBUTABLE", () => {
+  const quietShape = {
+    load1: 4.4,
+    load5: 4.0,
+    load15: 3.5,
+    cores: 16,
+    loadPerCore: 0.28,
+    compilers: 0,
+    compilerNames: [],
+    activeCompilers: 0,
+    activeCompilerNames: [],
+    activeBuilderJobs: 0,
+  };
+  // 1. The bead's own measured shape: an "otherwise idle" VM under 63% hypervisor
+  //    steal. The old selector printed PRODUCT RED here; it must be UNATTRIBUTABLE.
+  const stolen = classifyCdpTimeout(sample({ ...quietShape, stealPct: 63 }), resolveSpec(SPEC));
+  assertEquals(stolen.cause, "unattributable");
+  assertEquals(stolen.environmental, true, "stolen vCPU time is a re-run, never a product red");
+  assert(stolen.reason.includes("UNATTRIBUTABLE"), stolen.reason);
+  assert(stolen.reason.includes("steal"), `names the cause: ${stolen.reason}`);
+  assert(stolen.reason.includes("63%"), `carries the measurement: ${stolen.reason}`);
+
+  // 2. Steal UNMEASURED (null — the no-/proc shape, chrome-agent-platform-91i40) is NOT a
+  //    refusal: a genuine failure must never read as retryable, so the product red STANDS
+  //    and the named limitation rides in the reason (review round 1: the first cut
+  //    reclassified this as a retryable refusal — a softening, the mirror of reporting an
+  //    unmeasurable run as a pass).
+  const unmeasured = classifyCdpTimeout(sample({ ...quietShape, stealPct: null }), resolveSpec(SPEC));
+  assertEquals(unmeasured.cause, "idle-never-settled");
+  assertEquals(unmeasured.environmental, false, "unmeasured steal stays a PRODUCT red, never a refusal");
+  assert(unmeasured.reason.includes("preserving PRODUCT RED"), unmeasured.reason);
+  assert(unmeasured.reason.includes("91i40"), `names the no-/proc limitation: ${unmeasured.reason}`);
+
+  // 3. Steal measured BELOW the bound is the positive quiet evidence: product red preserved.
+  const provablyQuiet = classifyCdpTimeout(sample({ ...quietShape, stealPct: 4 }), resolveSpec(SPEC));
+  assertEquals(provablyQuiet.cause, "idle-never-settled");
+  assertEquals(provablyQuiet.environmental, false, "measured-low steal + zero named jobs stays a product red");
+
+  // 4. A named heavy-builder job still wins over the steal arm (the load claim is stronger).
+  const namedAndStolen = classifyCdpTimeout(
+    sample({ ...quietShape, stealPct: 63, compilers: 1, compilerNames: ["cargo"], activeCompilers: 1, activeCompilerNames: ["rustc"], activeBuilderJobs: 1 }),
+    resolveSpec(SPEC),
+  );
+  assertEquals(namedAndStolen.cause, "loaded");
+  assertEquals(namedAndStolen.environmental, true);
+
+  // 5. The report shape: unattributable takes exit 75 WITH the refusal marker (an
+  //    aggregator re-runs it) and never prints PRODUCT RED.
+  const report = evaluateTimeoutReport(stolen);
+  assertEquals(report.exitCode, 75);
+  assert(report.line.includes("CAP_ENVIRONMENTAL_REFUSAL"), report.line);
+  assert(!report.line.includes("PRODUCT RED"), report.line);
 });
 
 Deno.test("9t1p: an UNMEASURABLE box fails CLOSED to environmental, but never claims load", () => {
