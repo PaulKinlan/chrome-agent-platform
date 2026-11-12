@@ -3,7 +3,7 @@
 const P = "extension/wasm/";
 export const BUNDLED_INVENTORY = Object.freeze({
  "schemaVersion": 1,
- "release": "0.3.747",
+ "release": "0.3.748",
  "signer": {
   "lane": "bundled",
   "keyId": "cap-bundled-release"

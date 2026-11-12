@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.3.748] — 2026-11-12
+- A skill whose source the extension does not recognise can no longer put its text into the agent's system prompt — only the skills the extension bundles, or the ones you wrote, can.
+- The in-page trust check now cites the module that actually defines it, so a future change to the service-worker check is made in the right place instead of copied from a stale reference.
+
 ## [0.3.747] — 2026-11-12
 - The live model list in Settings no longer sends your provider key anywhere it could be redirected to a private address, and it can never send the key to a private, loopback or link-local host.
 
