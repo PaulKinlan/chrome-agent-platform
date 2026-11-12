@@ -49,44 +49,63 @@ const RUNBOOKS = [
 ];
 
 const WRAPPER = "scripts/bd-sync-bound.sh";
-/** How far a prescription's justification may sit from the command itself: a fenced block's comment
- *  header, or the paragraph right around it. Wide enough for prose, narrow enough that a runbook
- *  cannot cite the wrapper once at the top and prescribe the raw command a screenful later. */
-const NEARBY_LINES = 6;
 
 /** A line that reads as a COMMAND a lane would run: line-initial, after an optional list marker,
- *  fence, or code span. `bd dolt push` mid-sentence is a mention, not a prescription. */
+ *  fence, or code span. `bd dolt push` mid-sentence is a mention, not a prescription — which is
+ *  what keeps the explanatory prose ("a lane that runs `bd dolt push` directly steps outside the
+ *  bound") legal while the command it warns about is not.
+ *
+ *  THERE IS NO "NEARBY WRAPPER" ESCAPE (chrome-agent-platform-fjddh). The first cut accepted a raw
+ *  prescription whenever `scripts/bd-sync-bound.sh` appeared within six lines, so a single warning
+ *  sentence above a bare `bd dolt push` certified the very command it warned about — the review
+ *  reproduced it with two lines. ROUTING IS A PROPERTY OF THE COMMAND, not of its neighbourhood:
+ *  a prescription of the raw push is a violation, full stop, because the command that runs is the
+ *  one on that line and nothing else on the page changes what it does. */
 const RAW_PRESCRIPTION_RE = /^\s*(?:[-*+]\s+)?(?:`{1,2})?bd\s+dolt\s+push\b/;
+
+/** The wrapper used as a command is what a runbook should prescribe. Kept for the message only:
+ *  the point of the guard is that the RAW form never appears as an instruction. */
+const WRAPPED_PRESCRIPTION_RE = /^\s*(?:[-*+]\s+)?(?:`{1,2})?scripts\/bd-sync-bound\.sh\s+push\b/;
 
 function lines(src: string): string[] {
   return src.split("\n");
 }
 
-/** Every prescription of the raw push and whether the same command site names the wrapper. */
-export function findRawPushPrescriptions(src: string): { line: number; text: string; wrapped: boolean }[] {
-  const all = lines(src);
-  const out: { line: number; text: string; wrapped: boolean }[] = [];
-  all.forEach((text, i) => {
+/** Every raw-push prescription in `src`, with its line number. A non-empty result is a violation. */
+export function findRawPushPrescriptions(src: string): { line: number; text: string }[] {
+  const out: { line: number; text: string }[] = [];
+  lines(src).forEach((text, i) => {
     if (!RAW_PRESCRIPTION_RE.test(text)) return;
-    const from = Math.max(0, i - NEARBY_LINES);
-    const to = Math.min(all.length, i + NEARBY_LINES + 1);
-    const nearby = all.slice(from, to).join("\n");
-    out.push({ line: i + 1, text: text.trim(), wrapped: nearby.includes(WRAPPER) });
+    out.push({ line: i + 1, text: text.trim() });
+  });
+  return out;
+}
+
+/** The wrapper prescriptions, so the guard can also prove the runbooks still TELL a lane what to
+ *  run instead. A doc that drops the raw command by dropping the sync instruction entirely would
+ *  otherwise pass leg 1 vacuously. */
+export function findWrappedPushPrescriptions(src: string): { line: number; text: string }[] {
+  const out: { line: number; text: string }[] = [];
+  lines(src).forEach((text, i) => {
+    if (!WRAPPED_PRESCRIPTION_RE.test(text)) return;
+    out.push({ line: i + 1, text: text.trim() });
   });
   return out;
 }
 
 Deno.test("28hwd: no project-owned runbook prescribes an unbounded raw `bd dolt push`", async () => {
   const offences: string[] = [];
+  let wrappedPrescriptions = 0;
   for (const rel of RUNBOOKS) {
     const src = await Deno.readTextFile(path.join(ROOT, rel)).catch(() => null);
     assert(src !== null, `the project-owned runbook ${rel} must exist (it is part of this guard's subject set)`);
+    wrappedPrescriptions += findWrappedPushPrescriptions(src).length;
     for (const found of findRawPushPrescriptions(src)) {
-      if (found.wrapped) continue;
       offences.push(
-        `${rel}:${found.line} prescribes \`${found.text}\` with no reference to ${WRAPPER} within ` +
-          `${NEARBY_LINES} lines — an unbounded push holds the fleet bd-sync lock and the dolt DB ` +
-          `until it finishes (measured 25+ min, chrome-agent-platform-qhuf2)`,
+        `${rel}:${found.line} prescribes \`${found.text}\` — an unbounded push holds the fleet ` +
+          `bd-sync lock and the dolt DB until it finishes (measured 25+ min, chrome-agent-platform-qhuf2). ` +
+          `A wrapper mentioned nearby does not change which command runs: prescribe ` +
+          `\`${WRAPPER} push\``,
       );
     }
   }
@@ -94,6 +113,14 @@ Deno.test("28hwd: no project-owned runbook prescribes an unbounded raw `bd dolt 
     offences,
     [],
     `raw bounded-sync prescriptions found (route them through ${WRAPPER} push):\n${offences.join("\n")}`,
+  );
+  // Not vacuous: the set must still TELL a lane the bounded command to run instead. A runbook that
+  // silently drops the sync instruction entirely would satisfy leg 1 while leaving a lane to invent
+  // the raw command itself.
+  assert(
+    wrappedPrescriptions > 0,
+    `at least one runbook must still prescribe \`${WRAPPER} push\` as a command — dropping the sync ` +
+      `instruction is not the same as routing it`,
   );
 });
 
