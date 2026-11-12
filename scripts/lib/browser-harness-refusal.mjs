@@ -25,6 +25,40 @@
 //  4. DECLARE THE HOLE — the receipt names each refused suite individually as UNMEASURED, so the tier
 //     ledger can list them per landing instead of folding them into a pass.
 
+import { loadavg } from "node:os";
+import { MAX_LOAD_SCALE, stealScaleComponent } from "./serial-phase.mjs";
+
+const loadAvg = () => loadavg()[0];
+
+/** The machine's current ABSOLUTE 1-minute load (1 when it cannot be read). */
+export function currentAbsoluteLoad() {
+  try {
+    const load = loadAvg();
+    return Number.isFinite(load) && load > 1 ? Number(load) : 1;
+  } catch {
+    return 1;
+  }
+}
+
+/**
+ * A REAL-BROWSER readiness wait is a deadline like any other, so it scales with measured contention.
+ *
+ * ABSOLUTE load, not load per CPU, and that distinction was measured: on this 8-CPU box at absolute
+ * load 9.8 the per-CPU reading is 1.22 — a factor that rounds almost to one while five browser
+ * suites were reddening on one gate. Same reasoning as kzy5x for the cold-boot grace: what makes a
+ * browser start slowly is how many runnable tasks contend. The ceiling is MAX_LOAD_SCALE (x4), shared
+ * with serialFileTimeoutMs so the repo cannot hold two answers to "how slow may this machine make us".
+ *
+ * @param {{ base?: number, load?: number|null, loadPerCpu?: number|null, steal?: number|null }} [options]
+ * @returns {number}
+ */
+export function browserReadyTimeoutMs({ base = 10_000, load = null, loadPerCpu = null, steal = null } = {}) {
+  const absolute = Number.isFinite(load) && Number(load) > 1 ? Number(load) : 1;
+  const perCpu = Number.isFinite(loadPerCpu) && Number(loadPerCpu) > 1 ? Number(loadPerCpu) : 1;
+  const scale = Math.min(Math.max(absolute, perCpu, stealScaleComponent(steal)), MAX_LOAD_SCALE);
+  return Math.round(base * scale);
+}
+
 /** Exit code the gate reads as "environmental refusal, requeue" (erxkj). */
 export const ENVIRONMENTAL_REFUSAL_EXIT = 75;
 

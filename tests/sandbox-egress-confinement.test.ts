@@ -19,6 +19,25 @@ import { captureSnapshotWithRetry } from "../scripts/lib/load-retry.ts";
 import { launchChrome, openCdp, computeUnpackedExtensionId, resolveChromiumBinaryReport, teardownChrome } from "../scripts/lib/chrome-launch.ts";
 import { chromeProfileDir } from "../scripts/lib/chrome-profile-dir.ts";
 import { STORE_SANDBOX_CSP } from "../scripts/store-target-policy.mjs";
+import { currentLoadPerCpu, currentStealFractionSync, serialFileTimeoutMs } from "../scripts/lib/serial-phase.mjs";
+import {
+  browserReadyTimeoutMs,
+  countRefusals,
+  currentAbsoluteLoad,
+  ENVIRONMENTAL_REFUSAL_EXIT,
+  recordRefusal,
+  refuseIfStarved,
+} from "../scripts/lib/browser-harness-refusal.mjs";
+import { readFileSync, appendFileSync } from "node:fs";
+import { durableDir } from "../scripts/lib/durable-root.mjs";
+
+// j5xbi: the running per-suite refusal count lives in the evidence dir, so a permanently broken
+// suite cannot hide behind a permanently loaded neighbour across gates.
+const refusalLedger = durableDir("browser-harness-refusals.jsonl");
+const ledgerIo = {
+  readFile: (path: string) => readFileSync(path, "utf8"),
+  writeFile: (path: string, text: string) => appendFileSync(path, text),
+};
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url)).replace(/\/$/, "");
 const EXT = `${ROOT}/extension`;
