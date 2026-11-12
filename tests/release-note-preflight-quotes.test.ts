@@ -23,6 +23,7 @@
 
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { fileURLToPath } from "node:url";
+import * as acorn from "npm:acorn@8";
 import { classifyCommit } from "../scripts/check-release-note-preflight.mjs";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
@@ -62,6 +63,38 @@ function quotedRefusal(reason: string): string {
   return m[1];
 }
 
+/**
+ * The refusals bump-version EMITS — the argument text of its `console.error(...)` calls, not the
+ * file's raw bytes. qm0pv: a source-substring check greened a mutant that replaced
+ * `console.error("[bump-version] ERROR: …")` with `void ("[bump-version] ERROR: …")` — the sentence
+ * was still in the file, and no longer printed. What is emitted is the claim a quote makes, so the
+ * comparison is against call arguments.
+ */
+function emittedRefusals(source: string): string {
+  const ast = acorn.parse(source, { ecmaVersion: "latest", sourceType: "module" });
+  const calls: string[] = [];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const walk = (node: any) => {
+    if (!node || typeof node !== "object") return;
+    if (Array.isArray(node)) return node.forEach(walk);
+    if (
+      node.type === "CallExpression" &&
+      node.callee?.type === "MemberExpression" &&
+      node.callee.object?.name === "console" &&
+      node.callee.property?.name === "error"
+    ) {
+      calls.push(source.slice(node.start, node.end));
+    }
+    for (const key of Object.keys(node)) {
+      if (key === "start" || key === "end" || key === "loc") continue;
+      walk(node[key]);
+    }
+  };
+  walk(ast);
+  assert(calls.length >= 3, `bump-version must still print its refusals through console.error; found ${calls.length} call(s)`);
+  return normalise(calls.join("\n"));
+}
+
 function assertPrintedByBumpVersion(quote: string, bumpVersion: string, context: string) {
   const missing = staticSegments(quote).filter((segment) => !bumpVersion.includes(segment));
   assertEquals(
@@ -74,7 +107,7 @@ function assertPrintedByBumpVersion(quote: string, bumpVersion: string, context:
 }
 
 Deno.test("vggt7: each refusal classifyCommit prints is a sentence bump-version actually emits", async () => {
-  const bumpVersion = normalise(await Deno.readTextFile(BUMP_VERSION));
+  const bumpVersion = emittedRefusals(await Deno.readTextFile(BUMP_VERSION));
 
   const cases: Array<{ what: string; commit: { files: string[]; body: string } }> = [
     // No trailer at all on a product path.
@@ -105,7 +138,7 @@ Deno.test("vggt7: each refusal classifyCommit prints is a sentence bump-version 
 
 Deno.test("vggt7: no claim in the pre-flight is left unchecked, including unreachable branches", async () => {
   const preflight = await Deno.readTextFile(PREFLIGHT);
-  const bumpVersion = normalise(await Deno.readTextFile(BUMP_VERSION));
+  const bumpVersion = emittedRefusals(await Deno.readTextFile(BUMP_VERSION));
 
   // A claim often spans a JS string concatenation, so the gap between the claim
   // and its quote crosses backtick/`+` boundaries: match it, do not parse it.
