@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.750] — 2026-11-12
+- Extension modules were reorganized so shared helpers live in one place; ids, credential redaction and hashing behave exactly as before.
+
 ## [0.3.749] — 2026-11-12
 - WebMCP tools from a web page now have their names delimited when shown to the model, and a tool whose name cannot be dispatched is refused with a clear error instead of failing confusingly later.
 
