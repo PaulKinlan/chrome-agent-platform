@@ -1479,10 +1479,19 @@ export function reachableModulesFrom(reverse) {
 /** Exported as a testable seam: this is the ONLY place the plan's verdict becomes the manifest's
  *  `selection_covers_delta`, and the two directions (mapped subset vs fail-closed full) must not
  *  drift apart (chrome-agent-platform-fhh50). */
-export function fileMappingContextForPlan(plan) {
+export function fileMappingContextForPlan(plan, tables = { dedicated: DEDICATED_FILE_GUARDS, html: HTML_EXPORT_ENTRY_GUARDS }) {
   const candidates = Object.fromEntries(plan.changed.map((file) => [
     file,
-    testCandidatesForChanged([file], plan.reverse, plan.mapped.filter((entry) => entry.file === file)),
+    // xycyl: the ledger asks "did an inspecting suite RUN for this file", and a
+    // dedicated guard IS one — but the candidates used to come from the import graph
+    // alone, so a file whose guard exists precisely because it has no import edge (a CLI
+    // that executes at import time, a guard that reads its subject as TEXT, a guard that
+    // spawns a subprocess) was selected, ran, and still reported as an unmapped gap. That
+    // is the one thing this table is for, so its guards are part of the candidate set.
+    [
+      ...testCandidatesForChanged([file], plan.reverse, plan.mapped.filter((entry) => entry.file === file)),
+      ...guardsForChangedFile(file, tables),
+    ],
   ]));
   return {
     changed: plan.changed,
