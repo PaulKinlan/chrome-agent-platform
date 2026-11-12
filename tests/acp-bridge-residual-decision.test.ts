@@ -28,8 +28,8 @@ Deno.test("ACP local bind-race residual is named, reversible, and separate from 
     assert(!model.includes(outdated), `THREAT_MODEL.md must not retain stale ACP pin ${outdated}`);
   }
   for (const anchor of [
-    "scripts/acp-bridge.ts:52", "scripts/acp-bridge.ts:203-208",
-    "scripts/acp-bridge.ts:859-867",
+    "scripts/acp-bridge.ts:53", "scripts/acp-bridge.ts:214-225",
+    "scripts/acp-bridge.ts:1113-1121",
   ]) {
     assert(model.includes(anchor), `THREAT_MODEL.md must retain current ACP pin ${anchor}`);
   }

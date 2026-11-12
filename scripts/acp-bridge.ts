@@ -56,11 +56,17 @@ const HOST = normalizeLoopbackHost(String(args.host || "127.0.0.1"));
 
 /**
  * Explicit opt-out: `--allow-anonymous-loopback` makes the LOOPBACK WebSocket
- * bridge tokenless ON PURPOSE (Paul, 2026-10-07). The default is unchanged —
- * auth is still required on every upgrade unless this flag is set. It is
- * LOOPBACK-ONLY: a non-loopback bind refuses to start (fail-closed checks in
- * the CLI entry below and inside createAcpServer), never silently anonymous on
- * a routable address. See docs/ACP-INTEGRATION-RESEARCH.md "Origin scope".
+ * bridge tokenless ON PURPOSE (Paul, 2026-10-07) for ORIGINLESS clients only
+ * (chrome-agent-platform-ks4on): a local process sends no Origin, so tokenless
+ * access is scoped to local processes. A browser page ALWAYS sends an Origin
+ * it cannot remove, and an extension origin is ANY installed extension — a
+ * third-party supply-chain surface, not the operator's local process — so an
+ * Origin-bearing request still authenticates with the shared secret. The
+ * default is unchanged — auth is required on every upgrade unless this flag is
+ * set. The flag is LOOPBACK-ONLY: a non-loopback bind refuses to start
+ * (fail-closed checks in the CLI entry below and inside createAcpServer),
+ * never silently anonymous on a routable address. See
+ * docs/ACP-INTEGRATION-RESEARCH.md "Origin scope".
  */
 const ALLOW_ANONYMOUS_LOOPBACK = Boolean(args["allow-anonymous-loopback"]);
 
@@ -184,12 +190,12 @@ export function readOrCreateToken(path: string): string {
  * explicit `--allow-anonymous-loopback` opt-out (Paul, 2026-10-07): it is
  * loopback-only, fail-closed on a non-loopback bind, and loudly logged. */
 const TOKEN_FILE = String(args["token-file"] ?? "").trim() || defaultTokenFile();
-// Anonymous loopback opts out of the token ENTIRELY: nothing is generated or
-// read (so no confusing token file appears), and an explicit --token/--token-file
-// is ignored — the operator chose tokenless local access on purpose.
-const TOKEN = ALLOW_ANONYMOUS_LOOPBACK
-  ? ""
-  : (String(args.token ?? "") || readOrCreateToken(TOKEN_FILE));
+// ks4on: the token is resolved even under --allow-anonymous-loopback. The
+// opt-out makes ORIGINLESS (local-process) connections tokenless; a browser
+// page always sends an Origin it cannot remove, so an extension page — ANY
+// installed extension is a supply-chain surface, not the operator's local
+// process — still authenticates with this secret.
+const TOKEN = String(args.token ?? "") || readOrCreateToken(TOKEN_FILE);
 
 /**
  * May this request drive the harness? Both guards run, in this order:
@@ -199,14 +205,20 @@ const TOKEN = ALLOW_ANONYMOUS_LOOPBACK
  *  2. jsjy's shared secret: EVERY upgrade must carry `?token=…`, loopback
  *     included, because a local process sends no Origin and would otherwise be
  *     admitted by guard 1. The ONE deliberate exception is
- *     `--allow-anonymous-loopback` (Paul, 2026-10-07): loopback-only, so any
- *     LOCAL process may drive the harness without a token — never a web origin,
- *     and never on a routable bind (which refuses to start).
+ *     `--allow-anonymous-loopback` (Paul, 2026-10-07; scoped by ks4on):
+ *     loopback-only and ORIGINLESS-only, so any LOCAL process may drive the
+ *     harness without a token — but an Origin-bearing request (a browser page,
+ *     including ANY installed extension) still authenticates, and a routable
+ *     bind refuses to start.
  */
 function originAllowed(origin: string | null): boolean {
   if (!origin) return true; // local script client
   const normalized = origin.replace(/\/$/, "");
   if (ALLOWED_ORIGINS.some((p) => p.replace(/\/$/, "") === normalized)) return true;
+  // ks4on residual (THREAT_MODEL.md INV-14): this scheme-prefix admission is
+  // extension-ID-agnostic — any installed extension's pages pass THIS gate.
+  // Authorization never rests on it: Origin-bearing requests always carry the
+  // shared token (guard 2), in both modes.
   return /^(chrome|moz)-extension:\/\//.test(origin);
 }
 
@@ -238,10 +250,13 @@ export function acpConnectionRefusal(
   if (!originAllowed(clientOrigin)) {
     return { reason: "origin-rejected", detail: "web origins are not allowed to drive the harness" };
   }
-  // Anonymous loopback opt-out: the origin guard still runs (web origins stay
-  // refused), but the token guard is skipped entirely — the operator chose
-  // tokenless LOCAL access on purpose.
-  if (allowAnonymousLoopback) return null;
+  // Anonymous loopback opt-out (scoped by ks4on): the origin guard still runs
+  // (web origins stay refused), and the token guard is skipped ONLY for an
+  // ORIGINLESS request — that is what identifies a local process. A browser
+  // page always carries an Origin it cannot remove, so an extension page still
+  // authenticates below: the operator chose tokenless LOCAL access, never
+  // tokenless access for every installed extension.
+  if (allowAnonymousLoopback && !clientOrigin) return null;
   const encoder = new TextEncoder();
   const bearerToken = req.headers.get("authorization")?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
   const presentedParam = url.searchParams.get("token") || bearerToken;
@@ -955,10 +970,10 @@ export function createAcpServer(
   hostCwdDefault: string = args.cwd,
   /** jsjy: the shared secret this server requires. Defaults to the module-level
    * TOKEN (CLI --token or the persisted file); a test passes its own so it never
-   * reads or writes the operator's real token file. When `allowAnonymousLoopback`
-   * is true the token is not required at all (the explicit loopback-only opt-out,
-   * Paul 2026-10-07), and an empty override is then the INTENDED value — never an
-   * accidental unauthenticated bridge. */
+   * reads or writes the operator's real token file. Under `allowAnonymousLoopback`
+   * (Paul 2026-10-07) the token is skipped for ORIGINLESS requests only — an
+   * extension origin still authenticates with it (ks4on) — so a non-empty token
+   * is required in BOTH modes. */
   tokenOverride: string = TOKEN,
   allowAnonymousLoopback: boolean = ALLOW_ANONYMOUS_LOOPBACK,
   hostOverride: string = HOST,
@@ -975,12 +990,17 @@ export function createAcpServer(
         `hostnames like "localhost" and non-loopback addresses are rejected for anonymous access`,
     );
   }
-  //  2. Without the opt-out, an EMPTY override would make the guard accept an
-  //     empty `?token=` (presented "" === expected ""), i.e. an unauthenticated
-  //     bridge. Refuse to build one rather than trusting every future caller to
-  //     pass a real secret (jsjy review F4).
-  if (!allowAnonymousLoopback && (typeof tokenOverride !== "string" || tokenOverride.trim() === "")) {
-    throw new Error("createAcpServer requires a non-empty token: an empty secret would accept an empty ?token= (or set allowAnonymousLoopback deliberately)");
+  //  2. An EMPTY override would make the guard accept an empty `?token=`
+  //     (presented "" === expected ""), i.e. an unauthenticated bridge. That
+  //     holds in BOTH modes: under the opt-out only ORIGINLESS requests skip
+  //     the token (ks4on), so an empty secret would still admit any extension
+  //     page that presented `?token=`. Refuse to build one rather than trusting
+  //     every future caller to pass a real secret (jsjy review F4).
+  if (typeof tokenOverride !== "string" || tokenOverride.trim() === "") {
+    throw new Error(
+      "createAcpServer requires a non-empty token: an empty secret would accept an empty ?token= " +
+        "(under --allow-anonymous-loopback only ORIGINLESS local processes are tokenless; extension origins still authenticate)",
+    );
   }
   const toolEndpoints = new Map<string, Awaited<ReturnType<typeof createAcpTools>>>();
   const server = Deno.serve({ port, hostname: effectiveHost }, (req) => {
@@ -1349,17 +1369,16 @@ export function createAcpServer(
 // If invoked directly from CLI
 if (import.meta.main) {
   // LOUD, explicit warning whenever the opt-out is active: reading the log later
-  // must make it obvious that loopback is unauthenticated ON PURPOSE (and that a
-  // token, if one was also passed, is deliberately ignored).
+  // must make it obvious that loopback is unauthenticated ON PURPOSE for local
+  // processes, and that browser/extension pages still authenticate (ks4on).
   if (ALLOW_ANONYMOUS_LOOPBACK) {
     console.error("[acp-bridge] WARNING: ANONYMOUS LOOPBACK ACCESS ENABLED (--allow-anonymous-loopback)");
-    console.error("[acp-bridge] WARNING: the bridge is UNAUTHENTICATED on loopback — no token is required, and ANY");
+    console.error("[acp-bridge] WARNING: ORIGINLESS loopback connections are UNAUTHENTICATED — no token is required, and ANY");
     console.error("[acp-bridge] WARNING: local process can connect and drive the harness (shell commands, file");
     console.error("[acp-bridge] WARNING: writes, the approval surface). This was chosen on purpose and applies only");
     console.error("[acp-bridge] WARNING: to literal loopback (127.0.0.1 / ::1) — a non-loopback or hostname bind refuses to start.");
-    if (args.token || args["token-file"]) {
-      console.error("[acp-bridge] WARNING: --token/--token-file was also given but is IGNORED under --allow-anonymous-loopback.");
-    }
+    console.error("[acp-bridge] WARNING: a browser page (ANY installed extension included) always sends an Origin and");
+    console.error("[acp-bridge] WARNING: STILL needs the shared token (ks4on) — tokenless access is for local processes only.");
   }
   const server = createAcpServer(PORT);
   const bound = (server as any).addr?.port ?? PORT;
@@ -1371,8 +1390,9 @@ if (import.meta.main) {
     // file is cited instead, and the plaintext is printed only in the
     // read-only-HOME fallback above, where no file could be written.
     if (ALLOW_ANONYMOUS_LOOPBACK) {
-      console.log(`[acp-bridge] listening on ws://127.0.0.1:${bound}/acp (ANONYMOUS — no token required)`);
-      console.log(`[acp-bridge] paste the endpoint into CAP: acp.endpoint and leave acp.token empty`);
+      console.log(`[acp-bridge] listening on ws://127.0.0.1:${bound}/acp (ANONYMOUS — local processes need no token; browser/extension pages still do)`);
+      console.log(`[acp-bridge] paste the endpoint into CAP: acp.endpoint, and the token from this file into acp.token (the extension's page carries an Origin, so it authenticates):`);
+      console.log(`[acp-bridge]   ${TOKEN_FILE}   (mode 0600; --token overrides it for one run)`);
     } else {
       console.log(`[acp-bridge] listening on ws://127.0.0.1:${bound}/acp (token required)`);
       console.log(`[acp-bridge] paste the endpoint into CAP: acp.endpoint, and the token from this file into acp.token:`);

@@ -384,8 +384,10 @@ Deno.test("c76l7 / 7uwob: /health strips adapter, defaultCwd, and harnessCliPath
     await pinnedServer.shutdown();
   }
 
-  // 6. Anonymous loopback mode: all requests are authenticated by design
-  const anonServer = createAcpServer(0, undefined, {}, testCwd, "", true);
+  // 6. Anonymous loopback mode: ORIGINLESS requests (no Origin header, as a local
+  //    process sends) are authenticated by design; an extension page still needs
+  //    the token (ks4on) — pinned in tests/acp-loopback-optout.test.ts.
+  const anonServer = createAcpServer(0, undefined, {}, testCwd, TEST_BRIDGE_TOKEN, true);
   const anonPort = (anonServer as any).addr.port;
   try {
     const anonRes = await fetch(`http://127.0.0.1:${anonPort}/health?harness=pi`);

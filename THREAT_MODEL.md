@@ -59,7 +59,7 @@ Component map, with the file that owns each surface:
 | Providers | `extension/lib/provider.js`, `extension/lib/provider-server-tools.js` | the two provider paths (boundary TB4) |
 | MCP | `extension/lib/mcp-config.js:113`, `extension/lib/mcp-client-core.js:99` | owner-registered external servers |
 | WebMCP site tools | `extension/lib/webmcp-authority.js`, `extension/lib/tools.js:511` | page-declared tools, owner-enrolled |
-| ACP bridge (host-side) | `scripts/acp-bridge.ts:52`, `:785` | loopback WebSocket in front of a shell-capable harness |
+| ACP bridge (host-side) | `scripts/acp-bridge.ts:53`, `:1006` | loopback WebSocket in front of a shell-capable harness |
 
 **Offscreen host inventory (authority for register R12; `origin/main@28c7189d`).**
 The single `extension/offscreen/offscreen.js` document registers these **12**
@@ -175,8 +175,8 @@ inventory and the sender/inventory guard described in INV-15.
   echo normaliser close the REQUEST-echo side for BOTH brokers.
 - **TB5 — The ACP bridge.** A loopback WebSocket on the host in front of an agent
   harness that can run shell commands and write files
-  (`scripts/acp-bridge.ts:52` defaults to `127.0.0.1`, `:785` binds the server;
-  `:203-208` defines the Origin guard and `:859-867` refuses an unapproved Origin
+  (`scripts/acp-bridge.ts:55` defaults to `127.0.0.1`, `:1006` binds the server;
+  `:214-225` defines the Origin guard and `:1113-1121` refuses an unapproved Origin
   or wrong token by default). This is a host-process boundary, not an extension one — the
   extension only ever holds the client end.
 - **TB6 — The OPFS root and the extension origin.** Chromium grants the extension
@@ -263,7 +263,7 @@ should reason about; the threats that use them are in sections 5 and 6.
 | S7 | Imported archives | `extension/lib/archive-target-registry.js:375`, `:427` | a file the owner restores carries attacker-chosen keys and values |
 | S8 | MCP server output | `extension/lib/mcp-client-core.js:99` | a registered server returns arbitrary text and tool results |
 | S9 | Provider responses and provider errors | `extension/lib/pure.js:1034`, `:1102` | an endpoint can echo a credential back into a log or a card |
-| S10 | Host-side ACP WebSocket clients | `scripts/acp-bridge.ts:859-867` | a local client with the token (or unauthenticated under --allow-anonymous-loopback) can drive a shell-capable agent; a web page without an approved Origin and token is refused |
+| S10 | Host-side ACP WebSocket clients | `scripts/acp-bridge.ts:1113-1121` | a local client with the token (or, under --allow-anonymous-loopback, an ORIGINLESS local client without it — chrome-agent-platform-ks4on) can drive a shell-capable agent; a web page or extension page without an approved Origin and the token is refused |
 | S11 | Owner-supplied local folders (fs grants) | `extension/lib/fs-grants.js:47`, `:130` | path strings the owner grants are still resolved by the extension |
 | S12 | Hook event payloads | `extension/lib/hooks.js:494`, `:550` | a hook body is serialized into a model INSTRUCTION position |
 | S14 | Model-authored user-script and content-script registration | `extension/lib/browser-tools.js:6345`, `:6484` | a model registers persistent JavaScript (up to 32 KiB) to execute across web origins via chrome.userScripts.register or chrome.scripting.registerContentScripts |
@@ -493,9 +493,9 @@ consequences are carried by the matching register entry where one exists.
 
 ### T15. A web page driving the local shell-capable ACP harness
 
-- **Boundary:** TB5. **Evidence:** `scripts/acp-bridge.ts:52` (loopback default),
-  `:191-208` (`originAllowed` admits extension origins and local clients without Origin),
-  `:859-867` (403 on a refused Origin or wrong token, including loopback by default), and
+- **Boundary:** TB5. **Evidence:** `scripts/acp-bridge.ts:55` (loopback default),
+  `:214-225` (`originAllowed` admits extension origins and local clients without Origin),
+  `:1113-1121` (403 on a refused Origin or wrong token, including loopback by default), and
   `:137-189` (the default shared secret persists across restarts). **Test:**
   `tests/acp-bridge-security.test.ts:49-60` (a web Origin is refused, an extension
   Origin is accepted); `:189-230` (the persisted token survives restart).
@@ -715,8 +715,13 @@ and each names the executable check that would catch a regression.
   explicitly, requires a token even on loopback by default, and binds loopback by default.**
   The explicit `--allow-anonymous-loopback` opt-out is a deliberate, loopback-only
   exception; combining the flag with a non-loopback bind or unvalidated hostname is a startup error.
-  `scripts/acp-bridge.ts:52`, `scripts/acp-bridge.ts:109-116`, `scripts/acp-bridge.ts:203-208`,
-  `scripts/acp-bridge.ts:859-867`; `tests/acp-bridge-security.test.ts:49-60`,
+  Residual (chrome-agent-platform-ks4on): the Origin predicate is extension-ID-agnostic —
+  ANY installed extension's pages pass the origin gate — so authorization never rests on
+  the Origin. Every Origin-bearing request (extension pages included) authenticates with
+  the shared token in BOTH modes; the opt-out is tokenless for ORIGINLESS (local-process)
+  connections only, which is what an unremovable browser Origin header distinguishes.
+  `scripts/acp-bridge.ts:53`, `scripts/acp-bridge.ts:118-125`, `scripts/acp-bridge.ts:214-225`,
+  `scripts/acp-bridge.ts:1113-1121`; `tests/acp-bridge-security.test.ts:49-60`,
   `tests/acp-loopback-optout.test.ts`.
 - **INV-15 — Every new offscreen execution host must authenticate the service
   worker before handling a job.** `isTrustedServiceWorkerSender` at

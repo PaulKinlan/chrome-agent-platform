@@ -333,9 +333,14 @@ Implemented and verified live (pi-acp 0.0.33 over `npm run acp:bridge`):
   function does not run the guard — so the next person adding a probe cannot
   reinvent the path without also confronting the policy.
   **Tokenless loopback is DELIBERATE — an explicit opt-out (Paul, 2026-10-07):**
-  `--allow-anonymous-loopback` makes the loopback bridge tokenless ON PURPOSE, so
-  a local process may drive the harness without a token. It exists for local-only
-  convenience: the bridge binds `127.0.0.1` and the operator explicitly chose it.
+  `--allow-anonymous-loopback` makes the loopback bridge tokenless ON PURPOSE for
+  ORIGINLESS clients, so a local process may drive the harness without a token.
+  It exists for local-only convenience: the bridge binds `127.0.0.1` and the
+  operator explicitly chose it. Scoped by chrome-agent-platform-ks4on
+  (2026-11-12): tokenless applies to local processes only — a browser page always
+  sends an Origin it cannot remove, so ANY installed extension's page still
+  authenticates with the shared token in this mode (the Origin predicate is
+  extension-ID-agnostic; authorization rests on the token, never the Origin).
   It is OPT-IN and LOOPBACK-ONLY — the default is unchanged (token required
   everywhere), a non-loopback bind with the flag REFUSES to start (never
   anonymous on a routable address), and the bridge logs a loud warning that any

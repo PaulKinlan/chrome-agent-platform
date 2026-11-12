@@ -10,7 +10,9 @@
 //     persists it (default $XDG_CONFIG_HOME/cap-acp/bridge-token, mode 0600), and the
 //     status line below says so.
 //     --allow-anonymous-loopback is an EXPLICIT opt-out (Paul, 2026-10-07): the loopback
-//     bridge then runs with NO token, so any local process can drive the harness. It is
+//     bridge then requires NO token from ORIGINLESS clients, so any local process can drive
+//     the harness (chrome-agent-platform-ks4on: a browser/extension page always carries an
+//     Origin it cannot remove, and STILL authenticates with the shared token). It is
 //     loopback-only — a non-loopback bind refuses to start — and is logged loudly.
 //   node scripts/acp-service.mjs status
 //   node scripts/acp-service.mjs uninstall
@@ -45,16 +47,18 @@ const ACTION = args._[0] || "status";
 let HARNESS = String(args.harness || ""); // "" = resolve from what this machine has (never a binary it lacks)
 const PORT = String(args.port || "3210");
 const TOKEN = args.token ? String(args.token) : "";
-/** Explicit opt-out (Paul, 2026-10-07): the loopback bridge runs tokenless on purpose. */
+/** Explicit opt-out (Paul, 2026-10-07): the loopback bridge runs tokenless on purpose
+ *  for ORIGINLESS local processes; browser/extension pages still authenticate (ks4on). */
 const ALLOW_ANONYMOUS_LOOPBACK = Boolean(args["allow-anonymous-loopback"]);
 
 /** jsjy: the bridge requires a secret on every upgrade whether or not the operator passed --token —
  *  without one it GENERATES and persists a token, so "no token" no longer means "no auth". Say which
  *  case this install is in, and name the file, so the operator can find the value to paste. The ONE
- *  exception is --allow-anonymous-loopback, which must say so plainly (never claim a token is required). */
+ *  exception is --allow-anonymous-loopback, which must say so plainly (ks4on: tokenless
+ *  applies to ORIGINLESS local processes only — extension pages still authenticate). */
 function tokenNote() {
   if (ALLOW_ANONYMOUS_LOOPBACK) {
-    return " · ANONYMOUS loopback (--allow-anonymous-loopback: NO token required; any local process can drive the harness)";
+    return " · ANONYMOUS loopback (--allow-anonymous-loopback: NO token for local processes; browser/extension pages still authenticate)";
   }
   return TOKEN
     ? " · token required (the --token you installed)"
@@ -118,7 +122,10 @@ function resolveHarnessForInstall() {
 
 function bridgeArgs() {
   const a = ["run", "-A", join(ROOT, "scripts", "acp-bridge.ts"), "--port", PORT, "--harness", HARNESS];
-  if (TOKEN && !ALLOW_ANONYMOUS_LOOPBACK) a.push("--token", TOKEN);
+  // ks4on: --token is honoured under --allow-anonymous-loopback too — extension
+  // origins still authenticate with it there (only originless local processes
+  // are tokenless), so the installed unit must carry it in both modes.
+  if (TOKEN) a.push("--token", TOKEN);
   if (ALLOW_ANONYMOUS_LOOPBACK) a.push("--allow-anonymous-loopback");
   if (CWD) a.push("--cwd", CWD);
   return a;
@@ -351,7 +358,7 @@ function status() {
   // we do not have.
   if (installed) {
     if (installed.isAnonymous) {
-      console.log("auth: ANONYMOUS loopback (installed with --allow-anonymous-loopback) — NO token required; any local process can drive the harness");
+      console.log("auth: ANONYMOUS loopback (installed with --allow-anonymous-loopback) — NO token for local processes; browser/extension pages still authenticate (ks4on)");
     } else if (installed.token) {
       console.log("auth: token required (installed with explicit --token)");
     } else {
@@ -359,7 +366,7 @@ function status() {
     }
   } else {
     if (ALLOW_ANONYMOUS_LOOPBACK) {
-      console.log("auth (assumption from CLI flag --allow-anonymous-loopback; service not installed): ANONYMOUS loopback — NO token required");
+      console.log("auth (assumption from CLI flag --allow-anonymous-loopback; service not installed): ANONYMOUS loopback — NO token for local processes; browser/extension pages still authenticate (ks4on)");
     } else if (TOKEN) {
       console.log("auth (assumption from CLI flag --token; service not installed): token required — the --token you provided");
     } else {

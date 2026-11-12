@@ -1,13 +1,18 @@
 // tests/acp-loopback-optout.test.ts — the explicit loopback-only tokenless opt-out
-// (--allow-anonymous-loopback, Paul 2026-10-07).
+// (--allow-anonymous-loopback, Paul 2026-10-07; scoped by chrome-agent-platform-ks4on).
 //
 // jsjy made auth required on EVERY upgrade (loopback included) on 2026-10-06. Paul's
 // decision (2026-10-07) adds ONE deliberate, visible, LOOPBACK-ONLY exception: an
 // operator may start the bridge with --allow-anonymous-loopback to run tokenless on
-// 127.0.0.1. The default is unchanged (token required everywhere), the flag refuses
-// to start on a non-loopback bind, and it logs loudly. This file pins every one of
-// those properties so the opt-out cannot silently widen into "unauthenticated by
-// default" or "anonymous on a routable address".
+// 127.0.0.1. ks4on (2026-11-12) scoped that exception to what it was always FOR:
+// tokenless applies to ORIGINLESS clients — a local process sends no Origin, while
+// a browser page ALWAYS sends one it cannot remove, so an extension page (ANY
+// installed extension is a third-party supply-chain surface, not the operator's
+// local process) still authenticates with the shared token in both modes. The
+// default is unchanged (token required everywhere), the flag refuses to start on a
+// non-loopback bind, and it logs loudly. This file pins every one of those
+// properties so the opt-out cannot silently widen into "unauthenticated by
+// default", "anonymous on a routable address", or "tokenless for extensions".
 //
 // CAP-FB-20260912-ACP-INTEGRATION-01 (tracking epic chrome-agent-platform-qlho)
 
@@ -72,28 +77,57 @@ Deno.test("ACP loopback opt-out: default (no flag) still requires a token on loo
   }
 });
 
-// (b) Flag + loopback + no token → the upgrade succeeds (tokenless).
-Deno.test("ACP loopback opt-out: --allow-anonymous-loopback admits a tokenless loopback upgrade", async () => {
-  const bridge = createAcpServer(0, FAKE_ADAPTER, {}, "", "", true);
+// (b) Flag + loopback: an ORIGINLESS client (a local process) is tokenless — that
+//     is the whole feature. An Origin-bearing client is NOT (ks4on).
+Deno.test("ACP loopback opt-out: --allow-anonymous-loopback admits a tokenless ORIGINLESS loopback upgrade", async () => {
+  const bridge = createAcpServer(0, FAKE_ADAPTER, {}, "", TEST_BRIDGE_TOKEN, true);
   const port = (bridge as any).addr.port;
   try {
-    const noToken = await upgradeStatus(port, EXTENSION_ORIGIN);
-    assertEquals(noToken.includes("101"), true, `a tokenless loopback upgrade must succeed under the opt-out, got: ${noToken}`);
+    const noToken = await upgradeStatus(port, null);
+    assertEquals(noToken.includes("101"), true, `a tokenless ORIGINLESS loopback upgrade must succeed under the opt-out, got: ${noToken}`);
   } finally {
     await bridge.shutdown();
   }
 });
 
-// (c) Flag + token supplied and WRONG → still accepted on loopback (the operator
-//     chose tokenless access, so a stray/wrong token is ignored, never a refusal).
-Deno.test("ACP loopback opt-out: a wrong (or any) token is irrelevant while the opt-out is active", async () => {
+// (ks4on) The hole this bead closes: under the opt-out, ANY installed extension's
+// page used to reach a shell-capable agent with NO credential, because the origin
+// gate is extension-ID-agnostic and the token guard was skipped entirely. Now an
+// Origin-bearing request authenticates in BOTH modes: tokenless → 403, a wrong
+// token → 403, the bridge's token → 101.
+Deno.test("ACP loopback opt-out (ks4on): an extension Origin STILL authenticates under --allow-anonymous-loopback", async () => {
+  const bridge = createAcpServer(0, FAKE_ADAPTER, {}, "", TEST_BRIDGE_TOKEN, true);
+  const port = (bridge as any).addr.port;
+  try {
+    const noToken = await upgradeStatus(port, EXTENSION_ORIGIN);
+    assertEquals(noToken.includes("403"), true, `a tokenless extension-origin upgrade must be refused under the opt-out, got: ${noToken}`);
+    const otherExtension = await upgradeStatus(port, "chrome-extension://zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz");
+    assertEquals(otherExtension.includes("403"), true, `ANY extension's page must be refused without the token, got: ${otherExtension}`);
+    const mozExtension = await upgradeStatus(port, "moz-extension://00000000-0000-0000-0000-000000000000");
+    assertEquals(mozExtension.includes("403"), true, `a moz-extension page must be refused without the token, got: ${mozExtension}`);
+    const wrongToken = await upgradeStatus(port, EXTENSION_ORIGIN, "not-the-token");
+    assertEquals(wrongToken.includes("403"), true, "a wrong token must be refused under the opt-out");
+    const correct = await upgradeStatus(port, EXTENSION_ORIGIN, TEST_BRIDGE_TOKEN);
+    assertEquals(correct.includes("101"), true, "an extension page with the shared token is admitted under the opt-out");
+  } finally {
+    await bridge.shutdown();
+  }
+});
+
+// (c) Flag + token supplied and WRONG → still accepted for an ORIGINLESS client
+//     (the operator chose tokenless LOCAL access, so a stray/wrong token from a
+//     local process is irrelevant, never a refusal).
+Deno.test("ACP loopback opt-out: a wrong (or any) token is irrelevant for an ORIGINLESS client under the opt-out", async () => {
   const bridge = createAcpServer(0, FAKE_ADAPTER, {}, "", "some-supplied-token", true);
   const port = (bridge as any).addr.port;
   try {
-    const wrongToken = await upgradeStatus(port, EXTENSION_ORIGIN, "not-the-token");
-    assertEquals(wrongToken.includes("101"), true, `a wrong token must be ignored under the opt-out, got: ${wrongToken}`);
-    const noToken = await upgradeStatus(port, EXTENSION_ORIGIN);
-    assertEquals(noToken.includes("101"), true, "no token must also be accepted under the opt-out");
+    const wrongToken = await upgradeStatus(port, null, "not-the-token");
+    assertEquals(wrongToken.includes("101"), true, `a wrong token must be irrelevant for an originless client under the opt-out, got: ${wrongToken}`);
+    const noToken = await upgradeStatus(port, null);
+    assertEquals(noToken.includes("101"), true, "no token must also be accepted for an originless client under the opt-out");
+    // …but the SAME wrong token from an extension page is a refusal (ks4on).
+    const extWrong = await upgradeStatus(port, EXTENSION_ORIGIN, "not-the-token");
+    assertEquals(extWrong.includes("403"), true, `an extension page with a wrong token must be refused, got: ${extWrong}`);
   } finally {
     await bridge.shutdown();
   }
@@ -214,12 +248,12 @@ Deno.test("ACP loopback opt-out: flag + '0.0.0.0' refuses to start", async () =>
 });
 
 Deno.test("ACP loopback opt-out: flag + '127.0.0.1' binds loopback and upgrades", async () => {
-  const bridge = createAcpServer(0, FAKE_ADAPTER, {}, "", "", true, "127.0.0.1");
+  const bridge = createAcpServer(0, FAKE_ADAPTER, {}, "", TEST_BRIDGE_TOKEN, true, "127.0.0.1");
   const boundAddr = (bridge as any).addr;
   assertEquals(boundAddr.hostname, "127.0.0.1", "actual bound address must be 127.0.0.1");
   const port = boundAddr.port;
   try {
-    const res = await upgradeStatus(port, EXTENSION_ORIGIN);
+    const res = await upgradeStatus(port, EXTENSION_ORIGIN, TEST_BRIDGE_TOKEN);
     assertEquals(res.includes("101"), true, `must start and upgrade on 127.0.0.1, got: ${res}`);
   } finally {
     await bridge.shutdown();
@@ -227,7 +261,7 @@ Deno.test("ACP loopback opt-out: flag + '127.0.0.1' binds loopback and upgrades"
 });
 
 Deno.test("ACP loopback opt-out: flag + '::1' binds IPv6 loopback and upgrades", async () => {
-  const bridge = createAcpServer(0, FAKE_ADAPTER, {}, "", "", true, "::1");
+  const bridge = createAcpServer(0, FAKE_ADAPTER, {}, "", TEST_BRIDGE_TOKEN, true, "::1");
   const boundAddr = (bridge as any).addr;
   assertEquals(boundAddr.hostname, "::1", "actual bound address must be ::1");
   const port = boundAddr.port;
@@ -235,7 +269,7 @@ Deno.test("ACP loopback opt-out: flag + '::1' binds IPv6 loopback and upgrades",
     const conn = await Deno.connect({ hostname: "::1", port });
     try {
       const headers = [
-        "GET /acp HTTP/1.1",
+        `GET /acp?token=${encodeURIComponent(TEST_BRIDGE_TOKEN)} HTTP/1.1`,
         `Host: [::1]:${port}`,
         `Origin: ${EXTENSION_ORIGIN}`,
         "Connection: Upgrade",
@@ -259,7 +293,7 @@ Deno.test("ACP loopback opt-out: flag + '::1' binds IPv6 loopback and upgrades",
 });
 
 Deno.test("ACP loopback opt-out: flag + '[::1]' canonicalizes to bare '::1', binds IPv6 loopback and upgrades", async () => {
-  const bridge = createAcpServer(0, FAKE_ADAPTER, {}, "", "", true, "[::1]");
+  const bridge = createAcpServer(0, FAKE_ADAPTER, {}, "", TEST_BRIDGE_TOKEN, true, "[::1]");
   const boundAddr = (bridge as any).addr;
   assertEquals(boundAddr.hostname, "::1", "actual bound address for [::1] must canonicalize to bare ::1");
   const port = boundAddr.port;
@@ -267,7 +301,7 @@ Deno.test("ACP loopback opt-out: flag + '[::1]' canonicalizes to bare '::1', bin
     const conn = await Deno.connect({ hostname: "::1", port });
     try {
       const headers = [
-        "GET /acp HTTP/1.1",
+        `GET /acp?token=${encodeURIComponent(TEST_BRIDGE_TOKEN)} HTTP/1.1`,
         `Host: [::1]:${port}`,
         `Origin: ${EXTENSION_ORIGIN}`,
         "Connection: Upgrade",
@@ -290,16 +324,41 @@ Deno.test("ACP loopback opt-out: flag + '[::1]' canonicalizes to bare '::1', bin
   }
 });
 
-// (e) The /acp/preflight diagnostic runs the SAME guards: tokenless loopback is
-//     admitted under the flag, but a web-page Origin is STILL refused (the origin
-//     guard is kept, never bypassed by the opt-out).
+// (f) An empty token is refused in BOTH modes (ks4on): under the opt-out an empty
+//     secret would still admit any extension page presenting `?token=` — only
+//     ORIGINLESS local processes are tokenless, so the bridge always has a secret.
+Deno.test("ACP loopback opt-out: an empty token is refused even under --allow-anonymous-loopback", () => {
+  assertThrows(
+    () => createAcpServer(0, FAKE_ADAPTER, {}, "", "", true),
+    Error,
+    "createAcpServer requires a non-empty token",
+  );
+  assertThrows(
+    () => createAcpServer(0, FAKE_ADAPTER, {}, "", "   ", true),
+    Error,
+    "createAcpServer requires a non-empty token",
+  );
+});
+
+// (e) The /acp/preflight diagnostic runs the SAME guards: under the flag an
+//     ORIGINLESS tokenless client is admitted, an extension page needs the token
+//     (ks4on), and a web-page Origin is STILL refused (the origin guard is kept,
+//     never bypassed by the opt-out).
 Deno.test("ACP loopback opt-out: /acp/preflight agrees with the live path under the flag", async () => {
-  const bridge = createAcpServer(0, FAKE_ADAPTER, {}, "", "", true);
+  const bridge = createAcpServer(0, FAKE_ADAPTER, {}, "", TEST_BRIDGE_TOKEN, true);
   const port = (bridge as any).addr.port;
   try {
-    const tokenless = await preflight(port, {});
-    assertEquals(tokenless.status, 200);
-    assertEquals(tokenless.body, { ok: true });
+    const originless = await preflight(port, { origin: null });
+    assertEquals(originless.status, 200);
+    assertEquals(originless.body, { ok: true });
+
+    const extNoToken = await preflight(port, {});
+    assertEquals(extNoToken.status, 403, `an extension page without the token must be refused, got: ${JSON.stringify(extNoToken.body)}`);
+    assertEquals(extNoToken.body.reason, "token-missing");
+
+    const extToken = await preflight(port, { token: TEST_BRIDGE_TOKEN });
+    assertEquals(extToken.status, 200);
+    assertEquals(extToken.body, { ok: true });
 
     const webOrigin = await preflight(port, { origin: "https://evil.example" });
     assertEquals(webOrigin.status, 403);
