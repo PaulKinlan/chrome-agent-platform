@@ -93,6 +93,13 @@ type GrandchildRecord = { sleeper: number; child: number; pgrp: number; childPgr
  * A MISSING sentinel never reaps: the write is best-effort, and a false exit would 124 whole
  * gates, while the write-before-spawn ordering makes the missing case a nanosecond-scale window.
  */
+/**
+ * chrome-agent-platform-nma7i: how long a leaked fixture's watchdog may outlive the run before it
+ * gives up. Bounded well above any real leg (seconds) and well below the VM reaper's two hours, so
+ * a leak is cleaned up by the process that owns it rather than by an operator noticing a stray deno.
+ */
+export const SELF_REAP_WATCHDOG_CAP_MS = 10 * 60 * 1000;
+
 function selfReapWatchdog(sentinelPath: string): string {
   return `
 const __sentinel = ${JSON.stringify(sentinelPath)};
@@ -111,6 +118,13 @@ const __selfReap = setInterval(() => {
   // window is not worth a mass-timeout risk.
 }, 1000);
 Deno.unrefTimer(__selfReap); // must never hold the event loop: fixtures that should EXIT exit
+// chrome-agent-platform-nma7i: and an ABSOLUTE cap, because the /proc check above can never fire
+// when the sentinel was never written — which is exactly what a leg failing at the READY-marker
+// stage produces (the child is killed before it writes). Three such runs on 2026-11-12 each left a
+// watchdog behind and the VM reaper had to kill one 120 minutes later. The cap is not a claim that
+// the runner is gone; it is this process refusing to outlive the test run by more than a bounded
+// margin.
+setTimeout(() => Deno.exit(0), ${SELF_REAP_WATCHDOG_CAP_MS});
 `;
 }
 
