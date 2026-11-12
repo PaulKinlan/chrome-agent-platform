@@ -52,11 +52,26 @@ Deno.test("y4lbe: a build-gate run whose serial tier refuses (75) prints REFUSED
   assertEquals(code, 75, `the refusal exit code is preserved upward (run-tests.mjs re-combines it):\n${out}`);
   assert(out.includes("REFUSED"), `the lane-facing line names a refusal:\n${out}`);
   assert(!out.includes("FAILED with exit code 75"), `a refusal must never read as FAILED:\n${out}`);
-  assert(!out.includes("ALL") || !out.includes("GREEN"), `a refusal records no PASS:\n${out}`);
+  // d83la: no "records no PASS" assertion here — it was vacuous twice over: it
+  // grepped the GREEN banner, not the PASS-record line, and an explicit-file run
+  // never reaches the record branch (decision is null). The property is pinned
+  // where it can fail: the source pin below.
 });
 
 Deno.test("y4lbe: a genuine product failure in build-gate still prints FAILED with the raw code (falsification side)", async () => {
   const { code, out } = await runBuildGateWithFixture(Y4LBE_PRODUCT_FIXTURE);
   assertEquals(code, 1, `a product red keeps its raw code:\n${out}`);
   assert(out.includes("FAILED with exit code 1"), `a product red is narrated as FAILED:\n${out}`);
+});
+
+Deno.test("d83la: the PASS record exists ONLY inside the rc === 0 branch — a refusal can never license a skip", async () => {
+  const src = await Deno.readTextFile(new URL("../scripts/build-gate.ts", import.meta.url));
+  const occurrences = src.split("recordBuildTierPass(").length - 1;
+  assertEquals(occurrences, 1, "exactly one PASS-record call site");
+  const greenBlock = src.indexOf("if (rc === 0)");
+  const refusalBlock = src.indexOf("rc === ENVIRONMENTAL_REFUSAL_EXIT");
+  const recordAt = src.indexOf("recordBuildTierPass(");
+  assert(greenBlock !== -1 && refusalBlock !== -1 && recordAt !== -1, "the three landmarks exist");
+  assert(greenBlock < recordAt && recordAt < refusalBlock,
+    "the PASS record sits inside the rc===0 block, BEFORE the refusal branch — a refusal path cannot reach it");
 });
