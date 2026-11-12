@@ -100,7 +100,7 @@ try {
     }
     console.error(`[beads-export] explicit reconciliation under ${decision}: ${missing.join(", ")}; verify the owner decision recorded on that bead`);
   } else if (missing.length) {
-    console.error(`[beads-export] ${missing.length} committed/on-disk issue ID(s) absent from ${candidateLabel}; refusing to overwrite the export:`);
+    console.error(`[beads-export] ${missing.length} committed/on-disk issue ID(s) absent from ${candidateLabel}; ${stagedMode ? "refusing the commit (nothing is overwritten)" : "refusing to overwrite the export"}:`);
     for (const id of missing) console.error(`  ${id}`);
     console.error(stagedMode
       ? "The staged file is what the hook checks: inspect it (git diff --cached .beads/issues.jsonl), restore the missing row(s) from the canonical DB, and restage."

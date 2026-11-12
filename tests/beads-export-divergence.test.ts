@@ -355,6 +355,10 @@ Deno.test("vor46: in --candidate (hook) mode the refusal names the STAGED export
       "the guidance sends the lane to its staged file");
     assert(!result.stderr.includes("Dolt history"),
       "the Dolt-history guidance is manual-mode only — the ID is present in the canonical DB");
+    assertStringIncludes(result.stderr, "refusing the commit (nothing is overwritten)",
+      "xert2: hook mode refuses the COMMIT — no export is overwritten");
+    assert(!result.stderr.includes("refusing to overwrite the export"),
+      "xert2: the overwrite remedy belongs to the manual path only");
   } finally {
     await repo.cleanup();
   }
