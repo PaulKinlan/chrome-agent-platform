@@ -738,7 +738,12 @@ export function approvalPendingCount(store) {
 // The actions whose card discloses the exact script source + the hosts it
 // fetches. The owner cannot approve code they have not seen, so for these
 // (and only these) the card carries the bounded source and host list.
-export const SOURCE_DISCLOSING_ACTIONS = new Set(["script.create", "script.run", "task.schedule-script", "workflow.run"]);
+// inu5w: script.update belongs here for the same reason script.create does. The update route
+// stages a private diff of the old and new bodies, but a diff is not a disclosure: the owner
+// could approve a rewrite that ADDS a fetch host without the extracted host list ever reaching
+// the card, while the identical source arriving through create would show it. The two paths are
+// one control, so they are one set.
+export const SOURCE_DISCLOSING_ACTIONS = new Set(["script.create", "script.run", "task.schedule-script", "workflow.run", "script.update"]);
 export const SITE_TOOL_APPROVAL_ACTIONS = new Set(["webmcp.use-tool"]);
 export const SCRIPT_REGISTRATION_APPROVAL_ACTIONS = new Set([
   "browser.register-user-script",
