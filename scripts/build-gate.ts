@@ -79,7 +79,20 @@ export function buildGateVerdict(rc: number): { line: string; record: boolean } 
  * @param {string[]} [args]
  * @returns {Promise<number>}
  */
-export async function main(args = Deno.args): Promise<number> {
+export async function main(
+  args = Deno.args,
+  deps: {
+    runSerial?: (files: string[], opts: { cwd: string }) => number;
+    resolveTier?: typeof resolveBuildTier;
+    record?: typeof recordBuildTierPass;
+  } = {},
+): Promise<number> {
+  // d83la (round 3): the seams exist so a test can count the RECORDS EMITTED
+  // (data), not the lines printed — 'no pass record on a refusal' is only half
+  // the contract; 'exactly one on a pass' is the half a moved call evades.
+  const runSerial = deps.runSerial ?? runSerialFiles;
+  const resolveTier = deps.resolveTier ?? resolveBuildTier;
+  const record = deps.record ?? recordBuildTierPass;
   const cliFiles = args.filter((a) => !a.startsWith("-"));
   const explicit = cliFiles.length > 0;
   const files = explicit ? cliFiles : [...BUILD_GATE_FILES];
@@ -87,7 +100,7 @@ export async function main(args = Deno.args): Promise<number> {
   // An explicit request names its own files, so it always runs; only the default form is selected.
   const decision = explicit
     ? null
-    : await resolveBuildTier({ root: ROOT, version: await treeVersion(), mode: buildTierMode(Deno.env.toObject()) });
+    : await resolveTier({ root: ROOT, version: await treeVersion(), mode: buildTierMode(Deno.env.toObject()) });
 
   if (decision && !decision.run) {
     console.log(`build-gate: SKIP ${files.length} build-behaviour test(s) — ${decision.reason}`);
@@ -115,7 +128,7 @@ export async function main(args = Deno.args): Promise<number> {
   for (const f of files) {
     console.log(`  - ${f}`);
   }
-  const rc = runSerialFiles(files, { cwd: ROOT });
+  const rc = runSerial(files, { cwd: ROOT });
   const verdict = buildGateVerdict(rc);
   if (rc === 0) {
     console.log(`\nbuild-gate: ALL ${files.length} BUILD-BEHAVIOUR TESTS GREEN`);
@@ -124,7 +137,7 @@ export async function main(args = Deno.args): Promise<number> {
     // printed "PASS record" line is pinned red by tests/build-gate-static.test.ts.
     if (verdict.record && decision?.key) {
       // Only a PASS may record, so a failing tier can never license a later skip.
-      const recorded = await recordBuildTierPass({ key: decision.key, suites: files, exitCode: rc });
+      const recorded = await record({ key: decision.key, suites: files, exitCode: rc });
       console.log(`build-gate: PASS record ${recorded.written ? "written" : `not written (${recorded.reason})`} for input key ${decision.key.slice(0, 12)}`);
     }
   } else {

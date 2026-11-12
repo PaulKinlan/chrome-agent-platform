@@ -625,13 +625,17 @@ Deno.test("inputs: the tree's version stamp appears ONLY in the files the landin
 
 Deno.test("build-gate call site: selection goes through resolveBuildTier and the record is written only on success", async () => {
   const source = await readFile(join(ROOT, "scripts/build-gate.ts"), "utf8");
-  assert(source.includes("resolveBuildTier("), "the runner must use the shared resolver, not its own git delta");
-  assert(source.includes("recordBuildTierPass("), "a PASS must be recorded, or the tier can never skip");
+  // d83la (round 3): main() takes the machinery as injected seams, with the SHARED
+  // implementations as the defaults — the production path is unchanged, and the
+  // pin now checks the DEFAULTS are the shared resolver/recorder (a bespoke
+  // replacement still reds this test).
+  assert(source.includes("resolveTier ?? resolveBuildTier"), "the runner's default resolver is the shared resolveBuildTier, not its own git delta");
+  assert(source.includes("record ?? recordBuildTierPass"), "a PASS is recorded through the shared recordBuildTierPass by default");
   assert(!/\bgit\b/.test(source), "selection must not read a ref, a merge base or a remote (the gate-full.mjs finding class)");
-  // The record call sits inside the success branch: `if (rc === 0) { ... recordBuildTierPass(...)`.
+  // The record call sits inside the success branch: `if (rc === 0) { ... await record(...)`.
   const success = source.indexOf("if (rc === 0)");
-  const record = source.indexOf("recordBuildTierPass(");
-  assert(success !== -1 && record > success, "recordBuildTierPass must be reachable only from the rc === 0 branch");
+  const record = source.indexOf("await record(");
+  assert(success !== -1 && record > success, "the record call must be reachable only from the rc === 0 branch");
   assert(source.includes("CAP_BUILD_TIER"), "the force switch is documented at the call site");
 });
 

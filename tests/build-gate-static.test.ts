@@ -76,8 +76,56 @@ Deno.test("d83la: buildGateVerdict is the only PASS-record authority — refusal
 
 Deno.test("d83la: exactly one record call site, behind the verdict guard, and exactly one PASS-record line", async () => {
   const src = await Deno.readTextFile(new URL("../scripts/build-gate.ts", import.meta.url));
-  assertEquals(src.split("recordBuildTierPass(").length - 1, 1, "exactly one PASS-record call site");
+  // The call goes through the `record` seam; the property is exactly one call,
+  // behind the verdict guard.
+  assertEquals(src.split("await record(").length - 1, 1, "exactly one PASS-record call site");
   assert(src.includes("if (verdict.record && decision?.key)"), "the call is guarded by the verdict, not by rc text");
   assertEquals(src.split("build-gate: PASS record").length - 1, 1, "exactly one PASS-record line, the guarded one");
 });
 
+
+// ── d83la (round 3): count the RECORDS EMITTED, not the lines printed ──────
+// Review round 2 FAIL: 'no pass record on refusal' alone leaves a moved call
+// alive — a tree that records in the wrong place (or not at all) still
+// satisfies a pure negative. These drive main() with the tier seams injected
+// and count real record FILES written by the real recordBuildTierPass.
+
+async function emittedRecordsFor(rc: number): Promise<unknown[]> {
+  const dir = durableDir(`d83la-records-${Deno.pid}-${Math.random().toString(36).slice(2, 8)}`);
+  try {
+    const { main } = await import("../scripts/build-gate.ts");
+    const { recordBuildTierPass } = await import("../scripts/lib/build-tier-inputs.mjs");
+    const key = "a".repeat(64);
+    const code = await main([], {
+      resolveTier: async () => ({ run: true, key, inputs: 1, reason: "test-forced", record: null }),
+      runSerial: () => rc,
+      record: (args) => recordBuildTierPass({ ...args, dir }),
+    });
+    assertEquals(code, rc, "main returns the tier's code unchanged");
+    let names: string[] = [];
+    try {
+      for await (const e of Deno.readDir(dir)) names.push(e.name);
+    } catch { /* no dir => no records */ }
+    const records = [];
+    for (const name of names) {
+      records.push(JSON.parse(await Deno.readTextFile(joinPath(dir, name))));
+    }
+    return records;
+  } finally {
+    await Deno.remove(dir, { recursive: true }).catch(() => {});
+  }
+}
+
+Deno.test("d83la: a genuine pass emits EXACTLY ONE pass record (a count of records, not printed text)", async () => {
+  const records = await emittedRecordsFor(0);
+  assertEquals(records.length, 1, "a pass emits exactly one record");
+  assertEquals((records[0] as { key: string }).key, "a".repeat(64), "the record is for the tier's key");
+});
+
+Deno.test("d83la: a refusal (75) emits ZERO pass records even with a live decision key", async () => {
+  assertEquals((await emittedRecordsFor(75)).length, 0, "a refusal emits no record at all");
+});
+
+Deno.test("d83la: a product failure (1) emits ZERO pass records", async () => {
+  assertEquals((await emittedRecordsFor(1)).length, 0, "a failure emits no record at all");
+});
