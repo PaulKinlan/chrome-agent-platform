@@ -81,6 +81,78 @@ Deno.test("weights bookkeeping (jw8a6): the committed table equals a fresh deriv
   );
 });
 
+// ── chrome-agent-platform-fstgo: the derivation check proves table == digest, never digest == REALITY ──
+//
+// The comparison above is satisfied by ANY digest that agrees with the table, and both files are
+// written by the same pass. A test file added AFTER the digest was cut simply has no entry, so
+// weightsDocument() skips it, the derived table omits it, and the equality holds: the file starts
+// in the "light" tail, which is precisely the jw8a6 pathology (a heavy suite finishing last)
+// arriving silently between re-cuts. Measured on main before this test existed: a copy of the
+// heaviest 90s suite, dropped in as tests/zz-fstgo-probe.test.ts, passed this file 2/2 green.
+//
+// WHAT THIS ASSERTS. The digest's suite_durations is the log's COMPLETE record (it keeps sub-3s
+// entries too — the threshold is applied by weightsDocument, not by the digest), so a live
+// parallel-eligible file missing from it was NOT PRESENT when the log ran: a population change.
+// Every live file must therefore be measured, or DECLARED below with the measurement that makes it
+// harmless. The declared list is the repo's usual shape — a reason and a bead, never a silent hole —
+// and it is self-cleaning: an entry whose file is measured again, or no longer live, reds, so the
+// table empties itself when the digest is next re-cut.
+const UNMEASURED_POPULATION_CHANGES = new Map([
+  // SUITE totals, from the repo's own parser — parseSuiteDurations() in
+  // scripts/lib/parallel-durations.mjs, over the FULL-suite log of tree d70a82dec (799 suites,
+  // 342s, ~/.fleet/checks/<tree>.fast.log). Re-derive rather than trust these literals: fstgo's
+  // first cut copied PER-TEST reporter times here instead of suite totals (the reviewer caught
+  // named-agent-provider-approval-detail declared 0.002s when the suite is 1.33s), which is the
+  // same "a number recorded once and never re-derived" defect this whole file exists for.
+  ["tests/acp-native-install-detect.test.ts", { secs: 0.001555, why: "added after the digest was cut" }],
+  ["tests/gate-bookkeeping-freshness.test.ts", { secs: 0.027874, why: "this guard itself" }],
+  ["tests/impeccable-live-browser-dom-lifecycle.test.ts", { secs: 0.002726, why: "added after the digest" }],
+  ["tests/named-agent-provider-approval-detail.test.ts", { secs: 1.333324, why: "closest to the floor: re-measure before adding a slow leg" }],
+  ["tests/provider-approval-card-gating.test.ts", { secs: 0.355231, why: "added after the digest" }],
+  ["tests/provider-redirect-guard.test.ts", { secs: 0.289708, why: "37fzt redirect guard from the review" }],
+  ["tests/release-note-preflight.test.ts", { secs: 0.733446, why: "added after the digest" }],
+  ["tests/update-test-weights.test.ts", { secs: 0.106, why: "added after the digest" }],
+]);
+
+Deno.test("fstgo: the digest measures the whole live parallel population, or says why not", async () => {
+  const source = JSON.parse(
+    await Deno.readTextFile(new URL("../scripts/lib/test-weights.source.json", import.meta.url)),
+  );
+  const measured = new Set(Object.keys(source.suite_durations ?? {}));
+  const live = [...eligibleParallelFiles()].sort();
+  const unmeasured = live.filter((file) => !measured.has(file));
+
+  const undeclared = unmeasured.filter((file) => !UNMEASURED_POPULATION_CHANGES.has(file));
+  assertEquals(
+    undeclared,
+    [],
+    `these parallel-eligible test files were added after the committed source digest was cut, so they ` +
+      `carry no weight and start in the light tail — the jw8a6 pathology, silently. Re-cut the digest ` +
+      `from a FULL gate log: node scripts/update-test-weights.mjs <full-gate-log> --tree <sha-of-logged-tree> ` +
+      `(one run rewrites BOTH scripts/lib/test-weights.json and scripts/lib/test-weights.source.json). ` +
+      `Unmeasured: ${JSON.stringify(undeclared)}`,
+  );
+
+  // Self-cleaning: a declaration is only valid while it is TRUE. Once the digest is re-cut, or the
+  // file leaves the parallel set, the entry must go — otherwise the table becomes the silent hole
+  // it was written to prevent.
+  const stale = [...UNMEASURED_POPULATION_CHANGES.keys()].filter((file) => !unmeasured.includes(file)).sort();
+  assertEquals(
+    stale,
+    [],
+    `these declarations are stale — the file is measured again or is no longer parallel-eligible, so ` +
+      `the exemption must be deleted: ${JSON.stringify(stale)}`,
+  );
+  for (const [file, entry] of UNMEASURED_POPULATION_CHANGES) {
+    assert(
+      typeof entry.secs === "number" && entry.secs >= 0 && entry.secs < 3,
+      `${file}: a declaration must carry the measured seconds that make it harmless (below ` +
+        `weightsDocument 3s floor); an unmeasured exemption is the hatch gokfv rejected`,
+    );
+    assert(typeof entry.why === "string" && entry.why.length > 4, `${file}: a declaration needs a reason`);
+  }
+});
+
 Deno.test("heavy bookkeeping (finua): the wasm-sync-workspace heavy reason describes the POST-split file, never the pre-split citation", async () => {
   const src = await Deno.readTextFile(
     new URL("../scripts/test-partition.mjs", import.meta.url),
