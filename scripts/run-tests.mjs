@@ -20,7 +20,7 @@
 // kept running the serial sweep per edit (Paul, 2026-09-04). The runner passes
 // --config deno.runner.jsonc to see every file.
 // This script is the merge gate via `npm test`; explicit files still run directly.
-import { existsSync, readdirSync, realpathSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { availableParallelism, constants as osConstants } from "node:os";
@@ -51,6 +51,29 @@ export { DEFAULT_PARALLEL_TIMEOUT_MS, computeParallelPhaseTimeout, areAllFailure
 const PARALLEL_READY_FILE = process.env.CAP_PARALLEL_READY_FILE;
 const PARALLEL_READY_TIMEOUT_MS = Number(process.env.CAP_PARALLEL_READY_TIMEOUT_MS ?? 60_000);
 
+
+/**
+ * j5xbi: the real-browser suites that refused during THIS run, read back from the append-only
+ * ledger they write. Unreadable ledger → no line, which is the honest outcome: we can only declare
+ * what we can prove was recorded.
+ */
+function refusedBrowserSuites() {
+  try {
+    const path = process.env.CAP_BROWSER_REFUSAL_LEDGER;
+    if (!path || !existsSync(path)) return [];
+    const counts = new Map();
+    for (const line of readFileSync(path, "utf8").split("\n")) {
+      if (!line.trim()) continue;
+      try {
+        const row = JSON.parse(line);
+        if (typeof row?.suite === "string") counts.set(row.suite, (counts.get(row.suite) ?? 0) + 1);
+      } catch { /* a torn line names no suite: never guess one */ }
+    }
+    return [...counts].map(([suite, refusals]) => ({ suite, refusals }));
+  } catch {
+    return [];
+  }
+}
 
 function runParallel(files, phase = "parallel phase", durationsOut = null, killedOut = null, neverRanOut = null) {
   if (!files || files.length === 0) return Promise.resolve(0);
@@ -567,6 +590,11 @@ export async function main(args = process.argv.slice(2)) {
       // The FAST tier certifies a lockfile delta by a closure; this tier must record the same trail
       // when a fail-closed FAST run hands its context across (chrome-agent-platform-lezl0).
       lockfileDelta: fileMappingContext?.lockfileDelta ?? [],
+      // chrome-agent-platform-j5xbi condition (4): a real-browser suite that REFUSED (could not
+      // stand its harness up on a measurably starved box) is named here as UNMEASURED. It is not a
+      // pass and not a coverage gap: the landing must be able to say which suites were not
+      // credentialed, by name, instead of folding them into a green line.
+      unmeasured: refusedBrowserSuites(),
     });
   }
   // chrome-agent-platform-5xg1w: the LAST line of an incomplete run is the marker the fleet's per-tree

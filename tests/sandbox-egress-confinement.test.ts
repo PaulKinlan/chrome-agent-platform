@@ -28,15 +28,17 @@ import {
   recordRefusal,
   refuseIfStarved,
 } from "../scripts/lib/browser-harness-refusal.mjs";
-import { readFileSync, appendFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
+import { dirname } from "node:path";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
 
 // j5xbi: the running per-suite refusal count lives in the evidence dir, so a permanently broken
 // suite cannot hide behind a permanently loaded neighbour across gates.
-const refusalLedger = durableDir("browser-harness-refusals.jsonl");
+const refusalLedger = Deno.env.get("CAP_BROWSER_REFUSAL_LEDGER") ?? durableDir("browser-harness-refusals.jsonl");
 const ledgerIo = {
   readFile: (path: string) => readFileSync(path, "utf8"),
   writeFile: (path: string, text: string) => appendFileSync(path, text),
+  ensureParent: (path: string) => { mkdirSync(dirname(path), { recursive: true }); },
 };
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url)).replace(/\/$/, "");
@@ -104,8 +106,16 @@ Deno.test({
       });
 
       cdp = await openCdp(chromeInstance.wsUrl, { timeoutMs: 30000 });
+      // j5xbi: the readiness deadline scales with measured contention. Keyed on ABSOLUTE load,
+      // because on this 8-CPU box at absolute 9.8 the per-CPU reading is 1.22 — a factor that rounds
+      // almost to one while five browser suites were reddening on one gate.
+      const readyTimeoutMs = browserReadyTimeoutMs({
+        base: 10_000,
+        load: currentAbsoluteLoad(),
+        steal: currentStealFractionSync(),
+      });
       const sw = await cdp.serviceWorker({
-        timeoutMs: 10000,
+        timeoutMs: readyTimeoutMs,
         match: (t: any) => t.type === "service_worker" && String(t.url).includes("dist/background"),
       });
       // j5xbi (coord's ruling): if the harness could not come up AND the box is measurably

@@ -176,10 +176,17 @@ export function countRefusals({ readFile }, path, suite) {
 }
 
 export function recordRefusal(
-  { readFile, writeFile },
+  { readFile, writeFile, ensureParent },
   path,
   suite,
 ) {
+  // A ledger whose directory does not exist writes nothing and reports nothing — the reviewer
+  // measured exactly that (a refusal with persistentCount=0). The caller passes ensureParent when
+  // it can create the directory; if it cannot, the count stays best-effort and the receipt says so
+  // by carrying the count it could prove.
+  try {
+    ensureParent?.(path);
+  } catch { /* best-effort: a read-only evidence dir must not fail a suite */ }
   let prior = 0;
   try {
     const text = readFile(path);

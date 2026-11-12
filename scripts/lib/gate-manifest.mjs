@@ -66,6 +66,9 @@ export const GATE_UNMAPPED_PREFIX = "fast-gate: unmapped: ";
  *  Deliberately NOT the unmapped line: that one raises the fleet's COVERAGE WARNING. */
 export const GATE_RUN_FAILED_PREFIX = "fast-gate: run-failed: ";
 
+/** `fast-gate: unmeasured: …` (j5xbi) — suites that refused: not run, not passed, named. */
+export const GATE_UNMEASURED_PREFIX = "fast-gate: unmeasured: ";
+
 /** xpmke: a file the selector refused ON PURPOSE (its own machinery, an uncertifiable
  *  lockfile delta) is not an unmapped GAP. It gets its own line so the fleet's coverage
  *  warning stops firing on files no lane can act on — and so a genuine gap stays loud and
@@ -522,6 +525,19 @@ export function formatGateUnmapped(files = []) {
   return list.length ? GATE_UNMAPPED_PREFIX + list.join(" ") : null;
 }
 
+/** `fast-gate: unmeasured: a b(refused 3x)` — null when there is nothing to report.
+ *  j5xbi: a refused suite is not a pass and not a coverage gap; it is uncredentialed, by name. */
+export function formatGateUnmeasured(rows = []) {
+  const named = (Array.isArray(rows) ? rows : [])
+    .map((row) => (typeof row === "string" ? { suite: row } : row))
+    .filter((row) => row && String(row.suite ?? "").trim())
+    .map((row) => {
+      const count = Number(row.refusals);
+      return Number.isFinite(count) && count > 1 ? `${String(row.suite).trim()}(refused ${count}x)` : String(row.suite).trim();
+    });
+  return named.length ? GATE_UNMEASURED_PREFIX + named.join(" ") : null;
+}
+
 /** `fast-gate: run-failed: a b c` — null when there is nothing to report. */
 export function formatGateRunFailed(files = []) {
   const list = normalizeSuiteList(files);
@@ -550,9 +566,9 @@ export function formatGateUnknown(reason) {
  * line because the fleet consumer takes the LAST manifest line in a log — a certification trail must
  * never be able to displace it.
  *
- * @param {{ manifest?: object | null, unmapped?: string[], fileMapping?: Array<{file: string, status: string, reason: string}>, lockfileDelta?: string[], unknown?: string | null, log?: (...a: any[]) => void }} args
+ * @param {{ manifest?: object | null, unmapped?: string[], fileMapping?: Array<{file: string, status: string, reason: string}>, lockfileDelta?: string[], unknown?: string | null, unmeasured?: Array<{suite: string, refusals?: number}> | string[], log?: (...a: any[]) => void }} args
  */
-export function emitGateLedger({ manifest = null, unmapped = [], fileMapping = [], lockfileDelta = [], unknown = null, log = console.error } = {}) {
+export function emitGateLedger({ manifest = null, unmapped = [], fileMapping = [], lockfileDelta = [], unknown = null, unmeasured = [], log = console.error } = {}) {
   const lines = [];
   for (const line of lockfileDelta ?? []) {
     const text = String(line ?? "").trim();
@@ -575,6 +591,11 @@ export function emitGateLedger({ manifest = null, unmapped = [], fileMapping = [
   const closedLine = formatGateFailedClosed(closed.map((row) => row.file));
   if (closedLine) lines.push(closedLine);
   for (const row of closed) lines.push(`fast-gate: fail-closed-reason: ${JSON.stringify({ file: row.file, reason: row.reason })}`);
+  // chrome-agent-platform-j5xbi condition (4): suites that REFUSED (harness could not be stood up on
+  // a measurably starved box) are declared UNMEASURED by name. Never folded into a pass, never filed
+  // as a coverage gap — a landing must be able to state what it did not credential.
+  const unmeasuredLine = formatGateUnmeasured(unmeasured);
+  if (unmeasuredLine) lines.push(unmeasuredLine);
   if (unknown) lines.push(formatGateUnknown(unknown));
   for (const line of lines) log(line);
   return lines;

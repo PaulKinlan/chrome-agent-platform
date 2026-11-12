@@ -1,3 +1,4 @@
+import { emitGateLedger } from "../scripts/lib/gate-manifest.mjs";
 // tests/serial-phase-resilience.test.ts — chrome-agent-platform-6yrq
 //
 // Proves the serial gate phase is resilient against indefinite wedges:
@@ -23,6 +24,7 @@ import {
 import {
   browserReadyTimeoutMs,
   CAP_ENVIRONMENTAL_REFUSAL,
+  countRefusals,
   currentAbsoluteLoad,
   formatUnmeasuredSuites,
   recordRefusal,
@@ -1103,14 +1105,33 @@ Deno.test("j5xbi refusal (4): a refused suite is DECLARED unmeasured, named indi
     ]),
     "fast-gate: unmeasured: tests/agent-header-rename-reload.test.ts tests/mic-shadow-host-journey.test.ts(refused 3x)",
   );
+  // Condition (4) has a CONSUMER, which rev-j5xbi correctly found missing: the tier ledger renders the
+  // unmeasured line, and a refused suite never appears in the unmapped (coverage-gap) list.
+  const lines = emitGateLedger({
+    manifest: { tier: "fast", graph: "PARTIAL", executed: 0, failed: 0, rc: 0 },
+    unmapped: [],
+    fileMapping: [],
+    unmeasured: [{ suite: "tests/mic-shadow-host-journey.test.ts", refusals: 2 }],
+    log: () => {},
+  });
+  assert(lines.includes("fast-gate: unmeasured: tests/mic-shadow-host-journey.test.ts(refused 2x)"),
+    `a refused suite must be declared unmeasured by name: ${lines.join(" | ")}`);
+  assertEquals(lines.some((line: string) => line.startsWith("fast-gate: unmapped:")), false,
+    "a refusal is not a coverage gap");
+
   // The ledger is append-only and survives the process, which is what makes a repeat refusal provable.
   const store = new Map();
   const io = {
     readFile: (p: string) => store.get(p) ?? "",
     writeFile: (p: string, t: string) => { store.set(p, (store.get(p) ?? "") + t); },
+    ensureParent: () => {},
   };
   const path = "browser-refusals.jsonl";
   assertEquals(recordRefusal(io, path, "tests/sandbox-egress-confinement.test.ts"), 1);
   assertEquals(recordRefusal(io, path, "tests/sandbox-egress-confinement.test.ts"), 2);
   assertEquals(recordRefusal(io, path, "tests/agent-share-import.test.ts"), 1, "counts are per suite");
+  // round-trip: the count READ BACK matches what was written (rev-j5xbi measured refusal-but-count-0
+  // against a directory-backed ledger, which is what a missing parent directory looks like).
+  assertEquals(countRefusals(io, path, "tests/sandbox-egress-confinement.test.ts"), 2,
+    "the persistent count must read back what the receipt claimed");
 });
