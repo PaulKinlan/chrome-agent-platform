@@ -13,14 +13,15 @@ issue IDs in `HEAD:.beads/issues.jsonl` and the on-disk export against
 disappear. It makes no changes. A missing or empty *on-disk* export is
 recoverable from the committed snapshot; a missing, empty, or malformed
 *candidate* export is not. The tracked
-`scripts/git-hooks/pre-commit` checks its already-generated candidate before
-replacing/staging the export. On an older branch without the checker (or a
-machine without Node) it skips the refresh, warns, and allows the commit;
-it must not silently refresh an unverified snapshot. Hooks are installed in the *shared* Git directory,
+`scripts/git-hooks/pre-commit` never regenerates or stages the export itself
+(chrome-agent-platform-xcffx, coord 2026-11-12: a lane commit carries only what
+its author staged); when an export change IS staged deliberately, the hook runs
+this same check against the STAGED candidate before the commit. On an older
+branch without the checker (or a machine without Node) the staged export is
+committed UNVALIDATED with a warning — nothing is overwritten, so nothing can be
+erased. Hooks are installed in the *shared* Git directory,
 not in each worktree; where they are not installed, run this command manually
-before manually refreshing `.beads/issues.jsonl`. Write a temporary export
-and atomically move it only after it succeeds and is nonempty; a failed/empty
-export must not truncate or replace the committed snapshot.
+before manually refreshing `.beads/issues.jsonl`.
 
 For a missing ID, preserve the original Git ref and JSON line as evidence;
 check `bd show`, `bd history`, `bd restore`, the Dolt history and related issue
