@@ -70,6 +70,21 @@ export function areAllFailuresEnvironmental(cleanOutput) {
     }
   }
 
+  // 0i477: EVERY error line must have been accounted for. The split above only starts a
+  // new block at a `name => path` line, so text that does not carry that shape — the
+  // canonical one being a module-load death (`error: Module not found …`) — stayed in the
+  // preamble (dropped by slice(1)) or was swallowed by the neighbouring block's body. A
+  // load death printed beside an environmental refusal therefore made the BATCH classify
+  // as all-environmental: classifyPhaseExit turned a tree that could not even load a
+  // module into refusal 75, which an operator requeues instead of investigating. Removing
+  // the classified blocks and re-testing for an `error:` line is the fail-closed check:
+  // any error text the classifier did not look at keeps the batch a FAILURE.
+  let leftover = errorsText;
+  for (const block of errorBlocks) leftover = leftover.replace(block, "");
+  if (/\berror:/m.test(leftover)) {
+    return false;
+  }
+
   return true;
 }
 

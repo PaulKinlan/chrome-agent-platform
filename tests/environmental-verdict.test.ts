@@ -243,4 +243,43 @@ Deno.test("erxkj: classifyPhaseExitFromOutput NEVER softens a product red (two-s
   assertEquals(classifyPhaseExitFromOutput(1, noSummary).code, 1, "a refusal marker without a FAILED summary keeps the raw code");
   assertEquals(classifyPhaseExitFromOutput(0, REFUSAL_ONLY_OUTPUT).code, 0, "green is untouched");
   assertEquals(classifyPhaseExitFromOutput(124, "timed out").code, 124, "a bound kill is untouched");
+
+// ── chrome-agent-platform-0i477 (2026-11-12): n3t01 made a FAILED BATCH consult
+// areAllFailuresEnvironmental, so an all-environmental batch returns refusal 75 where it
+// returned exit 1. That is defensible — a box that could not measure should refuse rather
+// than fail — but the BOUNDARY is "every failure in the batch is environmental", and a
+// boundary that softens is how a defect gets retried instead of investigated. These legs
+// pin the whole mapping, including the case that was silently wrong.
+Deno.test("0i477: the verdict mapping — all-environmental refuses, MIXED and product failures stay exit 1", () => {
+  const REFUSAL = `\n\nntp-boot-staging: boots ntp.html => ./tests/ntp-boot-staging-timing.test.ts:41:6\n` +
+    `error: QuietWindowRefusedError: ENVIRONMENT: machine is not quiet enough for this gate (waited 181351 ms)\n`;
+  const PRODUCT = `\n\nproduct-suite: asserts something => ./tests/product.test.ts:12:3\n` +
+    `error: AssertionError: Expected 0 long tasks, got 3\n`;
+  // all-environmental -> refusal
+  assertEquals(areAllFailuresEnvironmental(` ERRORS ${REFUSAL}\n FAILURES \n`), true, "all-environmental");
+  // MIXED, both orders -> NOT a refusal (this is where softening would hide a defect)
+  assertEquals(areAllFailuresEnvironmental(` ERRORS ${PRODUCT}${REFUSAL}\n FAILURES \n`), false, "mixed: product then refusal");
+  assertEquals(areAllFailuresEnvironmental(` ERRORS ${REFUSAL}${PRODUCT}\n FAILURES \n`), false, "mixed: refusal then product");
+  // product failure alone -> NOT a refusal
+  assertEquals(areAllFailuresEnvironmental(` ERRORS ${PRODUCT}\n FAILURES \n`), false, "product alone");
+});
+
+Deno.test("0i477: a failure the block splitter does not recognise keeps the batch a FAILURE, even beside a refusal", () => {
+  // The splitter starts a new block only at a `name => path` line, so anything printed
+  // BEFORE the first such line used to be dropped by slice(1) — and a module-load death
+  // (`error: Module not found …`, no arrow) ahead of an environmental refusal therefore
+  // classified as ALL-environmental. Measured before the fix: this returned true, i.e.
+  // classifyPhaseExit turned a tree that could not even LOAD a module into refusal 75,
+  // which an operator requeues instead of investigating. That is the hjuis limitation
+  // (module-load death is 'unknown', not a named failure) meeting the all-environmental
+  // boundary, and the only safe answer is fail closed.
+  const REFUSAL = `\n\nntp-boot-staging: boots ntp.html => ./tests/ntp-boot-staging-timing.test.ts:41:6\n` +
+    `error: QuietWindowRefusedError: ENVIRONMENT: machine is not quiet enough for this gate (waited 181351 ms)\n`;
+  const LOAD_DEATH = `\n\nerror: Module not found "file:///nope.js".\n`;
+  assertEquals(
+    areAllFailuresEnvironmental(` ERRORS ${LOAD_DEATH}${REFUSAL}\n FAILURES \n`),
+    false,
+    "an unrecognised error line ahead of a refusal must NOT be softened into a refusal",
+  );
+  assertEquals(areAllFailuresEnvironmental(` ERRORS ${LOAD_DEATH}\n FAILURES \n`), false, "a load death alone is a failure");
 });
