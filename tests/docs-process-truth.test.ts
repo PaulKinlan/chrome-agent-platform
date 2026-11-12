@@ -236,3 +236,26 @@ Deno.test("xert2: the beads-export doc routes a missing ID by mode — staged fi
   assert(doc.includes("Only when the checker ran manually"),
     "the Dolt-history guidance must be scoped to the manual path");
 });
+
+Deno.test("q42k6/zuhgl/ltsop: the docs state the two-classifier post-zen14 contract exactly", () => {
+  const inventory = read("docs/TEST-COUPLING-INVENTORY.md");
+  // ltsop: the journey path (classifyEvaluateTimeout) has THREE causes and NEVER
+  // returns unattributable; only classifyCdpTimeout has that arm.
+  assert(inventory.includes("there are TWO classifiers and they differ"),
+    "the inventory must distinguish the two classifiers");
+  assert(inventory.includes("`classifyEvaluateTimeout` (the journey abort path) has THREE causes"),
+    "the journey classifier has three causes — unattributable belongs to classifyCdpTimeout only");
+  assert(inventory.includes("PLUS a fourth, `unattributable`"),
+    "the fourth cause is pinned to classifyCdpTimeout");
+  // zuhgl: the no-/proc shape is idle-never-settled (PRODUCT RED), and 'unmeasurable'
+  // names an unreadable LOAD sample — the inverse claims must not survive.
+  assert(inventory.includes("the LOAD sample itself could not be read"),
+    "unmeasurable names the load sample, not the steal axis");
+  assert(!inventory.includes("MEASUREMENT across FOUR causes"),
+    "the single-four-cause conflation must not survive");
+  const contract = read("docs/CHROME-TEST-CONTRACT.md");
+  assert(contract.includes("measures LOAD but not steal, so an idle box classifies `idle-never-settled` — PRODUCT RED, never a refusal"),
+    "the contract sentence states the 91i40 no-/proc truth");
+  assert(!contract.includes("on a no-/proc host classifies `unmeasurable`"),
+    "the inverted clause must not survive");
+});
