@@ -29,6 +29,7 @@ import { BUILD_GATE, BUILD_GATE_FILES, BUILD_GATE_REASONS, HEAVY_GATE, HEAVY_GAT
 import { announce, runReadOnlyDistBatch, runSerialFiles, runSerialLanes } from "./lib/serial-phase.mjs";
 import { ALWAYS_ON } from "./select-tests.mjs";
 import { durableDir } from "./lib/durable-root.mjs";
+import { refusalsFromLedger } from "./lib/browser-harness-refusal.mjs";
 import { join } from "node:path";
 import { concurrencyNotice } from "./lib/chrome-slot-bound.mjs";
 import {
@@ -55,30 +56,15 @@ const PARALLEL_READY_TIMEOUT_MS = Number(process.env.CAP_PARALLEL_READY_TIMEOUT_
 
 
 /**
- * j5xbi: the real-browser suites that refused during THIS run, read back from the append-only
- * ledger they write. Unreadable ledger → no line, which is the honest outcome: we can only declare
- * what we can prove was recorded.
+ * j5xbi: the real-browser suites that refused during THIS run, read back through the module's own
+ * reader (so the gate and any test exercise one code path). The ledger path must be the SAME one the
+ * suites write: reading only an env var that nothing sets made the receipt silent in exactly the case
+ * it exists for, and durableDir() creates a DIRECTORY, so the first version's path could never be
+ * appended to at all (EISDIR, swallowed). The env var is an override; the default is the suites' path.
  */
 function refusedBrowserSuites() {
-  try {
-    // j5xbi: the ledger path must be the SAME one the suites write. Reading only an env var that
-    // nothing sets made the receipt silent in exactly the case it exists for (coord asked precisely
-    // this: an unmeasured suite invisible in the artefact a reviewer reads). So the default is the
-    // suites' own durable path, and the env var is an override rather than the only route.
-    const path = process.env.CAP_BROWSER_REFUSAL_LEDGER || join(durableDir("browser-harness"), "refusals.jsonl");
-    if (!existsSync(path)) return [];
-    const counts = new Map();
-    for (const line of readFileSync(path, "utf8").split("\n")) {
-      if (!line.trim()) continue;
-      try {
-        const row = JSON.parse(line);
-        if (typeof row?.suite === "string") counts.set(row.suite, (counts.get(row.suite) ?? 0) + 1);
-      } catch { /* a torn line names no suite: never guess one */ }
-    }
-    return [...counts].map(([suite, refusals]) => ({ suite, refusals }));
-  } catch {
-    return [];
-  }
+  const path = process.env.CAP_BROWSER_REFUSAL_LEDGER || join(durableDir("browser-harness"), "refusals.jsonl");
+  return refusalsFromLedger({ readFile: (p) => readFileSync(p, "utf8"), exists: existsSync }, path);
 }
 
 function runParallel(files, phase = "parallel phase", durationsOut = null, killedOut = null, neverRanOut = null) {

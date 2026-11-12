@@ -25,6 +25,7 @@ import {
   browserReadyTimeoutMs,
   CAP_ENVIRONMENTAL_REFUSAL,
   countRefusals,
+  refusalsFromLedger,
   currentAbsoluteLoad,
   formatUnmeasuredSuites,
   recordRefusal,
@@ -1134,4 +1135,47 @@ Deno.test("j5xbi refusal (4): a refused suite is DECLARED unmeasured, named indi
   // against a directory-backed ledger, which is what a missing parent directory looks like).
   assertEquals(countRefusals(io, path, "tests/sandbox-egress-confinement.test.ts"), 2,
     "the persistent count must read back what the receipt claimed");
+});
+
+Deno.test("j5xbi refusal (round trip): a REAL ledger file, written by the suite path and read by the gate reader, names each suite in the unmeasured line", async () => {
+  // Coord's condition on landing: prove the artifact by WRITING AND READING IT, not by trusting that
+  // the line exists. This uses the real filesystem, the real writer and the real reader — the two
+  // defects this would have caught are (a) an env var nothing sets and (b) durableDir() returning a
+  // DIRECTORY, where the append raised EISDIR into a swallowed catch and the count stayed 0.
+  const dir = await Deno.makeTempDir({ dir: durableDir("scratch"), prefix: "j5xbi-ledger-" });
+  const path = `${dir}/refusals.jsonl`;
+  const io = {
+    readFile: (p: string) => Deno.readTextFileSync(p),
+    writeFile: (p: string, text: string) => { Deno.writeTextFileSync(p, text, { append: true }); },
+    ensureParent: () => {},
+  };
+  try {
+    assertEquals(recordRefusal(io, path, "tests/mic-shadow-host-journey.test.ts"), 1);
+    assertEquals(recordRefusal(io, path, "tests/mic-shadow-host-journey.test.ts"), 2);
+    assertEquals(recordRefusal(io, path, "tests/agent-header-rename-reload.test.ts"), 1);
+    const readBack = refusalsFromLedger(
+      { readFile: (p: string) => Deno.readTextFileSync(p), exists: (p: string) => { try { Deno.statSync(p); return true; } catch { return false; } } },
+      path,
+    );
+    assertEquals(readBack, [
+      { suite: "tests/mic-shadow-host-journey.test.ts", refusals: 2 },
+      { suite: "tests/agent-header-rename-reload.test.ts", refusals: 1 },
+    ], "the gate reader must read back exactly what the suites wrote, with per-suite counts");
+    // And the artifact a reviewer reads names each suite individually with its count.
+    const lines = emitGateLedger({
+      manifest: { tier: "full", graph: "PARTIAL", executed: 0, failed: 0, rc: 0 },
+      unmapped: [],
+      fileMapping: [],
+      unmeasured: readBack,
+      log: () => {},
+    });
+    assert(
+      lines.includes("fast-gate: unmeasured: tests/mic-shadow-host-journey.test.ts(refused 2x) tests/agent-header-rename-reload.test.ts"),
+      `the unmeasured line must name each suite with its count: ${lines.join(" | ")}`,
+    );
+    // A MISSING ledger is "we cannot prove a refusal", not an invented line.
+    assertEquals(refusalsFromLedger({ readFile: () => { throw new Error("ENOENT"); }, exists: () => false }, `${dir}/absent.jsonl`), []);
+  } finally {
+    await Deno.remove(dir, { recursive: true }).catch(() => {});
+  }
 });

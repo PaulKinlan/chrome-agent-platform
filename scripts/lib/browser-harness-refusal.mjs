@@ -204,3 +204,36 @@ export function recordRefusal(
   } catch { /* the count is best-effort; the receipt still carries what we observed */ }
   return next;
 }
+
+/**
+ * Read the ledger back: [{ suite, refusals }], one row per suite seen. This is the READER the gate
+ * uses, exported so a test can drive a REAL file through the same code path the runner does — a
+ * round trip that is proven at the io boundary but not through the actual reader is how the
+ * persistentCount=0 defect survived review once already.
+ *
+ * An unreadable or absent ledger returns [] rather than throwing: the honest outcome is "we cannot
+ * prove a refusal was recorded", and the caller then adds no line instead of inventing one.
+ *
+ * @param {{ readFile?: (p: string) => string, exists?: (p: string) => boolean }} io
+ * @param {string} path
+ * @returns {Array<{suite: string, refusals: number}>}
+ */
+export function refusalsFromLedger({ readFile, exists } = {}, path) {
+  try {
+    if (typeof exists === "function" && !exists(path)) return [];
+    const text = String(typeof readFile === "function" ? readFile(path) : "");
+    const counts = new Map();
+    for (const line of text.split("\n")) {
+      if (!line.trim()) continue;
+      try {
+        const row = JSON.parse(line);
+        if (typeof row?.suite === "string" && row.suite.trim()) {
+          counts.set(row.suite, (counts.get(row.suite) ?? 0) + 1);
+        }
+      } catch { /* a torn line names no suite: never guess one */ }
+    }
+    return [...counts].map(([suite, refusals]) => ({ suite, refusals }));
+  } catch {
+    return [];
+  }
+}
