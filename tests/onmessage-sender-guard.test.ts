@@ -436,8 +436,13 @@ const ALLOWLISTED_SITES = new Map<string, string>([
   // moot — the entry cac6c removed is gone; the predicate is imported from
   // pure-trust.js.)
   [
-    "extension/content/content-script.js:399",
-    "content script receiving SW pushes: isTrustedServiceWorkerSenderPort — faithful port of pure.js isTrustedServiceWorkerSender (KEEP IN SYNC), id + tab/documentId absence + url pins the compiled SW bundle; pinned by the behavioral content-script test below",
+    // y2uw8 renumbered this 399 -> 402 (a comment fix above it) and the site redded,
+    // correctly: the coupling is deliberate, so a shift forces a human to re-verify that
+    // the entry still describes the listener it credited. It does — the port is unchanged —
+    // and the justification now names pure-trust.js, which is where gzkmx moved
+    // isTrustedServiceWorkerSender.
+    "extension/content/content-script.js:402",
+    "content script receiving SW pushes: isTrustedServiceWorkerSenderPort — faithful port of pure-trust.js isTrustedServiceWorkerSender (KEEP IN SYNC), id + tab/documentId absence + url pins the compiled SW bundle; pinned by the behavioral content-script test below",
   ],
   [
     "extension/content/webmcp-detect-relay.js:97",

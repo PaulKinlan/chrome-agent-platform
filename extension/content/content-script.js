@@ -261,11 +261,14 @@ function onWindowMessage(event) {
 }
 window.addEventListener("message", onWindowMessage);
 
-// isTrustedServiceWorkerSenderPort — FAITHFUL PORT of lib/pure.js
-// isTrustedServiceWorkerSender (chrome-agent-platform-yl0wn). Content scripts
-// cannot import ES modules (chrome.scripting injects classic files — the same
-// reason main-world.js keeps a port of redactSecretText), so the predicate is
-// duplicated here. KEEP IN SYNC with extension/lib/pure.js
+// isTrustedServiceWorkerSenderPort — FAITHFUL PORT of extension/lib/pure-trust.js
+// isTrustedServiceWorkerSender (chrome-agent-platform-yl0wn; moved out of pure.js by
+// gzkmx, which is why this pointer says pure-trust.js and not pure.js — a
+// KEEP-IN-SYNC comment naming a file that no longer holds the function sends the next
+// reader to a dead end, which is worse than no comment at all).
+// Content scripts cannot import ES modules (chrome.scripting injects classic files —
+// the same reason main-world.js keeps a port of redactSecretText), so the predicate is
+// duplicated here. KEEP IN SYNC with extension/lib/pure-trust.js
 // isTrustedServiceWorkerSender and SERVICE_WORKER_BUNDLE_PATH
 // ("dist/background/service-worker.js"): the relay must accept ONLY the
 // compiled service-worker bundle — sender.id + tab absence alone admitted
