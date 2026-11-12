@@ -125,13 +125,16 @@ function hostOf(url) {
  * catalogue suggestions once a key is entered.
  *   - OpenAI-compatible endpoints (OpenAI, Grok/x.ai, Z.ai, Ollama, LM Studio,
  *     DeepSeek, any BYO base URL): GET `${baseURL}/models` with the Bearer key.
- *   - Gemini on its default endpoint: the native `/v1beta/models?key=` list
- *     (the OpenAI-compatible `/models` route is not the canonical list);
- *     the `models/` prefix is normalised away.
+ *   - Gemini on its default endpoint: the native `/v1beta/models` list (the
+ *     OpenAI-compatible `/models` route is not the canonical list); the key
+ *     travels in the `x-goog-api-key` REQUEST HEADER and never in the URL
+ *     (chrome-agent-platform-ofbtl, same shape as jjedl's image path on this
+ *     host), so no intermediary, referrer or request log on the path sees the
+ *     credential; the `models/` prefix is normalised away.
  *   - Anthropic on its default endpoint: `/v1/models` with the x-api-key header.
  * 10 s timeout. Returns a de-duplicated, sorted, chat-only id list with the
  * pricing-tier pseudo-ids dropped. NEVER throws: every failure is [] and the
- * logged reason passes safeProviderError (the URL with `key=` is never logged).
+ * logged reason passes safeProviderError (the key is redacted either way).
  */
 export async function fetchLiveModels(providerId, { baseURL, apiKey, signal } = {}) {
   const base = String(baseURL ?? "").replace(/\/+$/, "");
@@ -149,12 +152,15 @@ export async function fetchLiveModels(providerId, { baseURL, apiKey, signal } = 
   let extract = (json) => (Array.isArray(json?.data) ? json.data : []).map((m) => m?.id);
   let nextUrl = null; // (json) => next page URL or null
   if (providerId === "gemini" && host === GEMINI_NATIVE_HOST) {
-    url = `https://${GEMINI_NATIVE_HOST}/v1beta/models?key=${encodeURIComponent(key)}&pageSize=1000`;
+    // chrome-agent-platform-ofbtl: the key is a HEADER, never a query param —
+    // the continuation page carries it the same way.
+    if (key) headers["x-goog-api-key"] = key;
+    url = `https://${GEMINI_NATIVE_HOST}/v1beta/models?pageSize=1000`;
     extract = (json) => (Array.isArray(json?.models) ? json.models : []).map((m) => String(m?.name ?? "").replace(/^models\//, ""));
     nextUrl = (json) => {
       const token = typeof json?.nextPageToken === "string" && json.nextPageToken ? json.nextPageToken : null;
       return token
-        ? `https://${GEMINI_NATIVE_HOST}/v1beta/models?key=${encodeURIComponent(key)}&pageSize=1000&pageToken=${encodeURIComponent(token)}`
+        ? `https://${GEMINI_NATIVE_HOST}/v1beta/models?pageSize=1000&pageToken=${encodeURIComponent(token)}`
         : null;
     };
   } else if (providerId === "anthropic" && host === ANTHROPIC_HOST) {
