@@ -128,6 +128,38 @@ Deno.test("hjuis: a SyntaxError aborts the module graph — the named culprit is
   assertEquals(r.get("tests/ok.test.ts"), "unknown", "an unrun file invents no verdict");
 });
 
+Deno.test("y1bvp: a RUNTIME SyntaxError's stack frame must not attribute the GREEN file it references", () => {
+  // Live Deno 2.9.7 output: b.test.ts exports a function that throws a SyntaxError
+  // at RUNTIME (JSON.parse); a.test.ts calls it and fails. Deno ran b's own test
+  // GREEN in its own worker. The syntax arm must not attribute b.
+  const out = `Check tests/a.test.ts
+Check tests/b.test.ts
+./tests/a.test.ts => b passes ... ok (423µs)
+./tests/a.test.ts => a parses ... FAILED (763µs)
+./tests/b.test.ts => b passes ... ok (394µs)
+
+ ERRORS 
+
+a parses => ./tests/a.test.ts:2:6
+error: SyntaxError: Expected property name or '}' in JSON at position 1 (line 1 column 2)
+  return (() => JSON.parse("{"))();
+                     ^
+    at JSON.parse (<anonymous>)
+    at file:///home/vD/tests/b.test.ts:2:22
+    at boom (file:///home/vD/tests/b.test.ts:2:32)
+    at file:///home/vD/tests/a.test.ts:2:31
+
+ FAILURES 
+
+a parses => ./tests/a.test.ts:2:6
+
+FAILED | 2 passed | 1 failed (10ms)
+`;
+  const r = attributeParallelBatchOutput(out, ["tests/a.test.ts", "tests/b.test.ts"]);
+  assertEquals(r.get("tests/a.test.ts"), "failed", "the test that threw is failed");
+  assertEquals(r.get("tests/b.test.ts"), "passed", "b ran green in its own worker — a runtime error's stack reference is not evidence");
+});
+
 Deno.test("hjuis: a stack reference is NOT failure evidence for the referenced file (over-attribution pin)", () => {
   // A normal product failure's stack may reference a PASSING file; only the
   // pointer shapes and a SyntaxError block attribute failures.

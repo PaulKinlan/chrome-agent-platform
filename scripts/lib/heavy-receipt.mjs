@@ -254,9 +254,11 @@ export function attributeParallelBatchOutput(output, files) {
   const clean = String(output ?? "").replace(BATCH_ANSI_RE, "");
   const sawPass = new Set();
   const sawFail = new Set();
+  let sawAnyPerTestLine = false;
   for (const line of clean.split("\n")) {
     const perTest = /^\.\/(.+?\.test\.ts) => /.exec(line);
     if (perTest) {
+      sawAnyPerTestLine = true;
       if (/\bFAILED( \(|$)/.test(line)) sawFail.add(perTest[1]);
       else if (/\b(ok|ignored)( \(|$)/.test(line)) sawPass.add(perTest[1]);
       continue;
@@ -276,11 +278,16 @@ export function attributeParallelBatchOutput(output, files) {
   }
   // hjuis (repro B): a SyntaxError aborts the module graph before any per-test
   // line exists; the ONLY evidence is the error block's `at file://…/<file>:l:c`
-  // pointer. The block boundary is the next `error:` header, and a ref counts
-  // only when its path ENDS with a batch file's repo-relative name — so a stack
-  // reference inside a NORMAL failure's error body never attributes the
-  // referenced file, and an unrun file invents no verdict.
-  const syntaxBlocks = clean.split(/\n(?=error: )/).filter((b) => b.startsWith("error: SyntaxError"));
+  // pointer. y1bvp: the arm fires ONLY when no per-test line exists anywhere — a
+  // RUNTIME SyntaxError (thrown inside a test, e.g. JSON.parse) also prints an
+  // 'error: SyntaxError:' block, but there the failing file is already named by
+  // its failure pointer and the block's stack frames may reference files that ran
+  // GREEN; attributing them would tar a passing file. The block boundary is the
+  // next `error:` header, and a ref counts only when its path ENDS with a batch
+  // file's repo-relative name.
+  const syntaxBlocks = sawAnyPerTestLine
+    ? []
+    : clean.split(/\n(?=error: )/).filter((b) => b.startsWith("error: SyntaxError"));
   if (syntaxBlocks.length > 0) {
     const refs = syntaxBlocks.flatMap((b) => [...b.matchAll(/file:\/\/\S+/g)].map((m) => m[0]));
     for (const file of files) {
