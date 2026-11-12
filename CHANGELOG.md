@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.749] — 2026-11-12
+- WebMCP tools from a web page now have their names delimited when shown to the model, and a tool whose name cannot be dispatched is refused with a clear error instead of failing confusingly later.
+
 ## [0.3.748] — 2026-11-12
 - A skill whose source the extension does not recognise can no longer put its text into the agent's system prompt — only the skills the extension bundles, or the ones you wrote, can.
 - The in-page trust check now cites the module that actually defines it, so a future change to the service-worker check is made in the right place instead of copied from a stale reference.
