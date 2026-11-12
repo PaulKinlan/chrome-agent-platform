@@ -27,7 +27,7 @@
 //      canonical lock nor a slot (chrome-agent-platform-51x4 preserved);
 //   8. the slot wait is bounded by `CAP_CHROME_LOCK_WAIT_MS` and printed.
 import { fileURLToPath } from "node:url";
-import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
+import { assert, assertEquals, assertRejects, assertStringIncludes } from "jsr:@std/assert@1";
 
 const origSlotDir = Deno.env.get("CAP_CHROME_SLOT_DIR");
 const SLOT_DIR = await Deno.makeTempDir({ prefix: "cap-slot-dir-" });
@@ -49,6 +49,7 @@ const {
   slotFile,
   CHROME_SLOT_FILE_PREFIX,
 } = await import("../scripts/lib/chrome-slots.ts");
+const { concurrencyNotice } = await import("../scripts/lib/chrome-slot-bound.mjs");
 
 async function fakeBrowser(): Promise<string> {
   const fake = await Deno.makeTempFile({ suffix: ".sh" });
@@ -492,6 +493,51 @@ Deno.test("uzik: the launcher prints the gate marker only when a runner asks for
     "no marker without the opt-in (harness output stays clean)",
   );
   await Deno.remove(fake);
+});
+
+// i7p87: the browser bound must be the SAME number in the two runtimes that consume it.
+// The semaphore runs under Deno; scripts/run-tests.mjs prints the phase announcement under
+// node. A .ts module cannot be imported from node, so the value moved to
+// chrome-slot-bound.mjs — and the risk that creates is exactly the one this leg fences:
+// two copies drifting apart, where a lane reads "slots=4" in a log while the box enforces 2.
+Deno.test("i7p87: the node-visible bound and the Deno semaphore bound agree, rule for rule", async () => {
+  const shared = await import("../scripts/lib/chrome-slot-bound.mjs");
+  const cases: Array<[string | undefined, number]> = [
+    [undefined, 4],
+    ["", 4],
+    ["3", 3],
+    ["0", 1],
+    ["-5", 1],
+    ["nonsense", 4],
+    ["2.7", 2],
+  ];
+  for (const [raw, expected] of cases) {
+    const env = () => raw;
+    assertEquals(shared.maxConcurrentChromes(env), expected, `shared bound for ${JSON.stringify(raw)}`);
+    // …and the Deno-exported accessor, driven through the real environment, agrees.
+    const saved = Deno.env.get("CAP_CHROME_MAX_CONCURRENT");
+    try {
+      if (raw === undefined) Deno.env.delete("CAP_CHROME_MAX_CONCURRENT");
+      else Deno.env.set("CAP_CHROME_MAX_CONCURRENT", raw);
+      assertEquals(maxConcurrentChromes(), expected, `chrome-slots.ts bound for ${JSON.stringify(raw)}`);
+    } finally {
+      if (saved === undefined) Deno.env.delete("CAP_CHROME_MAX_CONCURRENT");
+      else Deno.env.set("CAP_CHROME_MAX_CONCURRENT", saved);
+    }
+  }
+});
+
+Deno.test("i7p87: the phase announcement states the LIVE browser concurrency, both bounds", () => {
+  const env = (vars: Record<string, string | undefined>) => (name: string) => vars[name];
+  // Neither bound set: the hardware's worker count, min'd against the default slot count.
+  assertStringIncludes(concurrencyNotice({ cpus: 8, env: env({}) }), "deno workers=8, chrome slots=4 → at most 4 browser(s) live");
+  // A worker count below the slot count is the binding constraint, and the line says so
+  // rather than leaving a reader to do the arithmetic.
+  assertStringIncludes(concurrencyNotice({ cpus: 2, env: env({}) }), "at most 2 browser(s) live");
+  // DENO_JOBS overrides the CPU count (Deno's own documented behaviour).
+  assertStringIncludes(concurrencyNotice({ cpus: 8, env: env({ DENO_JOBS: "3" }) }), "deno workers=3");
+  // The slot bound is env-tunable, and the announcement must report what is ENFORCED.
+  assertStringIncludes(concurrencyNotice({ cpus: 8, env: env({ CAP_CHROME_MAX_CONCURRENT: "1" }) }), "chrome slots=1 → at most 1 browser(s) live");
 });
 
 Deno.test("cleanup: chrome-slot-semaphore restores env and removes temp files", async () => {

@@ -23,11 +23,12 @@
 import { existsSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { constants as osConstants } from "node:os";
+import { availableParallelism, constants as osConstants } from "node:os";
 import { resolve as resolvePath } from "node:path";
 import { BUILD_GATE, BUILD_GATE_FILES, BUILD_GATE_REASONS, HEAVY_GATE, HEAVY_GATE_FILES, HEAVY_GATE_REASONS, READ_ONLY_DIST, SERIAL, partition } from "./test-partition.mjs";
 import { announce, runReadOnlyDistBatch, runSerialFiles, runSerialLanes } from "./lib/serial-phase.mjs";
 import { ALWAYS_ON } from "./select-tests.mjs";
+import { concurrencyNotice } from "./lib/chrome-slot-bound.mjs";
 import {
   certificationGaps,
   computeParallelPhaseTimeout,
@@ -61,6 +62,12 @@ function runParallel(files, phase = "parallel phase", durationsOut = null, kille
   const scheduled = phase === "parallel phase" && process.env.CAP_PARALLEL_SCHEDULE !== "0";
   const ordered = scheduled ? scheduleOrder(files, loadWeights()) : files;
   if (scheduled) announce(`run-tests: parallel scheduler longest-first (${ordered.length} selected file(s)); Deno default workers`);
+  // i7p87: the phase's browser concurrency, stated where a reader of a RED phase will
+  // see it. The variable in "these suites pass alone and fail inside the phase" is how
+  // many browsers can be live at once, and that number was only recoverable by reading
+  // two modules. Printed unconditionally (not under `scheduled`) because a reader must not
+  // need to know which branch they are on to learn the bound.
+  announce(`run-tests: ${phase} concurrency: ${concurrencyNotice({ cpus: availableParallelism?.() ?? 0 })}`);
   const t0 = Date.now();
   const phaseTimeoutMs = computeParallelPhaseTimeout(files.length);
   return new Promise((resolve) => {

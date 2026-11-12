@@ -41,10 +41,15 @@
  *  the resulting literal; keep the two in step. */
 export const CHROME_SLOT_FILE_PREFIX = "cap-chrome-slot-";
 
-/** Default bound. The bead's own number ("max 3-4 concurrent chromes"): 4 keeps
- *  a full `npm test` parallel phase from OOMing the box while letting four lanes
- *  drive browsers at once. */
-export const DEFAULT_MAX_CONCURRENT_CHROMES = 4;
+/** Default bound, re-exported from chrome-slot-bound.mjs so the node side
+ *  (scripts/run-tests.mjs, which prints the phase's concurrency) reads the same
+ *  number this semaphore enforces. The rationale lives with the value.
+ *  (The bead's own number, "max 3-4 concurrent chromes": 4 keeps a full
+ *  `npm test` parallel phase from OOMing the box while letting four lanes
+ *  drive four browsers.) */
+import { maxConcurrentChromes as maxConcurrentChromesShared } from "./chrome-slot-bound.mjs";
+
+export { DEFAULT_MAX_CONCURRENT_CHROMES } from "./chrome-slot-bound.mjs";
 
 /** Slots this process currently holds. Counting is the point: two browsers in
  *  one harness cost two slots, exactly like two browsers in two lanes. */
@@ -72,14 +77,12 @@ export function slotFile(i: number): string {
   return `${slotDir()}/${CHROME_SLOT_FILE_PREFIX}${i}.lock`;
 }
 
-/** The concurrency bound, read per call. Unparsable → the default; anything
- *  below 1 → 1 (0 would deadlock every launch on the machine). */
+/** The concurrency bound, read per call. The parsing rules (unparsable →
+ *  default, below 1 → 1 so a launch cannot deadlock, fractional bounds floor)
+ *  live in chrome-slot-bound.mjs with the value, because run-tests.mjs must
+ *  reach the identical answer under node. */
 export function maxConcurrentChromes(): number {
-  const raw = Deno.env.get("CAP_CHROME_MAX_CONCURRENT");
-  if (raw === undefined || raw.trim() === "") return DEFAULT_MAX_CONCURRENT_CHROMES;
-  const parsed = Number(raw);
-  if (!Number.isFinite(parsed)) return DEFAULT_MAX_CONCURRENT_CHROMES;
-  return Math.max(1, Math.floor(parsed));
+  return maxConcurrentChromesShared(Deno.env.get.bind(Deno.env));
 }
 
 /** How long to wait for a slot. Shares the lock's env var on purpose: one knob
