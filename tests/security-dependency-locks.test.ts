@@ -212,8 +212,22 @@ Deno.test("behrd: every advisory-patched dependency is patched in BOTH lockfiles
     // Deno side of this loop, which already enumerates every `${denoName}@` key. An
     // advisory-pinned package must also resolve to exactly ONE copy: if a range split ever
     // forces two, this gate forces the dedupe to be a deliberate decision, not drift.
+    // chrome-agent-platform-8j0wp: the path predicates alone miss ALIASED installs —
+    // '"bp": "npm:body-parser@2.3.0"' in package.json locks node_modules/bp with
+    // resolved pointing at the body-parser TARBALL, and every vulnerable copy hiding
+    // behind an alias was invisible to this gate (the filed false green). Match the
+    // ARTIFACT as well as the path: an entry whose resolved URL's registry package
+    // directory is this package (its unscoped name) is a copy of it wherever npm put
+    // it. Floor-check and single-resolution-check the union, so the gate certifies
+    // the dependency, not one path spelling of it.
+    const unscoped = name.split("/").pop()!;
     const npmPaths = Object.keys(npmLock.packages)
-      .filter((key) => key === `node_modules/${name}` || key.endsWith(`/node_modules/${name}`));
+      .filter((key) => {
+        if (key === `node_modules/${name}` || key.endsWith(`/node_modules/${name}`)) return true;
+        const resolved = String(npmLock.packages[key]?.resolved ?? "");
+        const m = resolved.match(/^https?:\/\/[^/]+\/(?:@[^/]+\/)?([^/]+)\/[-]\//);
+        return m !== null && m[1] === unscoped;
+      });
     assert(npmPaths.length >= 1, `npm must lock ${name} - the ${advisory} floor has nothing to check`);
     assert(npmPaths.length === 1,
       `npm resolves ${name} to ${npmPaths.length} copies (${npmPaths.join(", ")}) - advisory-pinned packages ` +
