@@ -8,39 +8,32 @@
 // filter branch quoting "note is not user-facing", a sentence bump-version has
 // never printed (the real one is "landing note is empty or not user-facing").
 // An author who trusts the quote greps for it, finds nothing, and concludes the
-// pre-flight is wrong rather than the commit.
+// pre-flight is wrong rather than the commit. The missing-trailer branch had
+// the same shape from the other side: it quoted a truncated sentence whose real
+// text carries the remedy ("… pass --internal <sha> explicitly if it is
+// internal-only"), which is the part an author needs.
 //
-// WHAT THIS DRIVES. Every quoted refusal in the pre-flight must be findable,
-// verbatim, in scripts/bump-version.mjs — the file that prints it. `<sha>`
-// placeholders are honoured as the tool's own interpolations, so a quote may
-// span a template hole; every static segment must still be present. The remedy
-// for a failure is therefore a real sentence from a real tool, at the moment the
-// author can still act on it.
+// WHY THIS DRIVES classifyCommit AND ALSO SWEEPS THE SOURCE. Driving the real
+// function is what the author sees, and it puts this suite in the changed-file
+// selector's import graph for scripts/check-release-note-preflight.mjs — the
+// gate reported that file as an UNMAPPED changed file while the only other
+// suite reached it through a spawned CLI, which the import graph cannot see.
+// The sweep is the complement: a claim on a branch no fixture can reach would
+// otherwise rot unnoticed.
 
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { fileURLToPath } from "node:url";
+import { classifyCommit } from "../scripts/check-release-note-preflight.mjs";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
-
 const PREFLIGHT = `${ROOT}scripts/check-release-note-preflight.mjs`;
 const BUMP_VERSION = `${ROOT}scripts/bump-version.mjs`;
 
-/** Every `bump-version refuses …: "<refusal>"` claim in the pre-flight's reasons. */
-function quotedRefusals(source: string, path: string): string[] {
-  const quotes: string[] = [];
-  // A claim often spans a JS string concatenation, so the gap between the claim
-  // and its quote crosses backtick/`+` boundaries: match it, do not parse it.
-  const claim = /bump-version refuses (?:the landing|it)\b[\s\S]{0,220}?"([^"]+)"/g;
-  for (const m of source.matchAll(claim)) if (!quotes.includes(m[1])) quotes.push(m[1]);
-  assert(quotes.length > 0, `${path} no longer quotes any bump-version refusal — this guard would pass vacuously`);
-  return quotes;
-}
-
 /**
  * A quote read from SOURCE text carries the string concatenation that produced it
- * (`"…if ` + `it is…"`), and bump-version's own template literals carry `${sha}` holes
- * and line wrapping. Normalise both sides to single-spaced sentences with the holes
- * removed, then compare the remaining static segments.
+ * (`"…if ` + `it is…"`), and bump-version's own template literals carry `${sha}`
+ * holes and line wrapping. Normalise both sides to single-spaced sentences with
+ * the holes removed, then compare the remaining static segments.
  */
 function normalise(text: string): string {
   return text
@@ -58,40 +51,79 @@ function staticSegments(quote: string): string[] {
     .filter((part) => part.length > 4);
 }
 
-Deno.test("vggt7: every refusal the pre-flight quotes is a sentence bump-version actually prints", async () => {
-  const preflight = await Deno.readTextFile(PREFLIGHT);
-  const bumpVersion = normalise(await Deno.readTextFile(BUMP_VERSION));
+/** The single refusal a reason quotes, or a failure naming what it printed instead. */
+function quotedRefusal(reason: string): string {
+  const quotes = [...reason.matchAll(/"([^"]{8,})"/g)].map((m) => m[1]);
+  // The note itself is also quoted on the filter branch; the REFUSAL is the quote
+  // that follows the 'bump-version refuses' claim.
+  const afterClaim = reason.slice(reason.indexOf("bump-version refuses"));
+  const m = /"([^"]{8,})"/.exec(afterClaim);
+  assert(m, `a pre-flight refusal must quote the bump-version sentence it predicts: ${JSON.stringify(reason)}`);
+  return m[1];
+}
 
-  const quotes = quotedRefusals(preflight, PREFLIGHT);
-  assertEquals(quotes.length >= 3, true, `expected the three landing refusals to be quoted, got ${JSON.stringify(quotes)}`);
-
-  const missing: string[] = [];
-  for (const quote of quotes) {
-    for (const segment of staticSegments(quote)) {
-      if (!bumpVersion.includes(segment)) missing.push(`${JSON.stringify(segment)} (from "${quote}")`);
-    }
-  }
+function assertPrintedByBumpVersion(quote: string, bumpVersion: string, context: string) {
+  const missing = staticSegments(quote).filter((segment) => !bumpVersion.includes(segment));
   assertEquals(
     missing,
     [],
-    `the pre-flight quotes a refusal bump-version does not print. A quote is a claim about another ` +
-      `file's output: either fix the quote to the sentence ${BUMP_VERSION} actually emits, or change ` +
-      `that file in the same commit. Not found: ${missing.join("; ")}`,
+    `${context}: the pre-flight quotes a refusal bump-version does not print. A quote is a claim about ` +
+      `another file's output — either fix the quote to the sentence ${BUMP_VERSION} actually emits, or ` +
+      `change that file in the same commit. Not found: ${missing.map((s) => JSON.stringify(s)).join("; ")}`,
   );
+}
+
+Deno.test("vggt7: each refusal classifyCommit prints is a sentence bump-version actually emits", async () => {
+  const bumpVersion = normalise(await Deno.readTextFile(BUMP_VERSION));
+
+  const cases: Array<{ what: string; commit: { files: string[]; body: string } }> = [
+    // No trailer at all on a product path.
+    { what: "missing trailer", commit: { files: ["extension/lib/x.js"], body: "no trailer here" } },
+    // A trailer that sanitises to nothing.
+    { what: "empty after sanitise", commit: { files: ["extension/lib/x.js"], body: "Release-note:   " } },
+    // The self-declared internal form (refused verbatim, not by the filter).
+    { what: "none: internal", commit: { files: ["extension/lib/x.js"], body: "Release-note: none: internal refactor" } },
+    // A note the project's user-facing filter rejects — the vggt7 quote.
+    {
+      what: "filter rejection",
+      commit: { files: ["extension/lib/x.js"], body: "Release-note: internal: rewrote the guard" },
+    },
+  ];
+
+  const seen = new Set<string>();
+  for (const { what, commit } of cases) {
+    const result = classifyCommit(commit);
+    assertEquals(result.ok, false, `${what}: expected a refusal, got a pass`);
+    const quote = quotedRefusal((result as { reason: string }).reason);
+    seen.add(quote);
+    assertPrintedByBumpVersion(quote, bumpVersion, what);
+  }
+  // Non-vacuity: the four cases must reach at least three distinct refusals, or a
+  // single branch would be certifying the whole file.
+  assertEquals(seen.size >= 3, true, `expected >=3 distinct quoted refusals, got ${JSON.stringify([...seen])}`);
+});
+
+Deno.test("vggt7: no claim in the pre-flight is left unchecked, including unreachable branches", async () => {
+  const preflight = await Deno.readTextFile(PREFLIGHT);
+  const bumpVersion = normalise(await Deno.readTextFile(BUMP_VERSION));
+
+  // A claim often spans a JS string concatenation, so the gap between the claim
+  // and its quote crosses backtick/`+` boundaries: match it, do not parse it.
+  const claim = /bump-version refuses (?:the landing|it)\b[\s\S]{0,220}?"([^"]+)"/g;
+  const quotes = [...new Set([...preflight.matchAll(claim)].map((m) => m[1]))];
+  assertEquals(quotes.length >= 3, true, `expected the landing refusals to be quoted, got ${JSON.stringify(quotes)}`);
+  for (const quote of quotes) assertPrintedByBumpVersion(quote, bumpVersion, "source sweep");
 });
 
 Deno.test("vggt7: the filter refusal quotes the LANDING sentence, not the hook's", async () => {
   // bump-version refuses a non-user-facing note twice with different words: the
   // landing path prints "landing note is empty or not user-facing" (:172) and
   // the hook path prints "changelog note … fails user-facing check" (:196). The
-  // pre-flight predicts the LANDING, so it must quote the landing sentence —
-  // asserting the specific string keeps a future edit from re-shelving the
-  // wrong one behind a passing generic check above.
-  const preflight = await Deno.readTextFile(PREFLIGHT);
-  const filterBranch = preflight.slice(preflight.indexOf("explainUserFacingEntry(note)"));
-  const reason = filterBranch.slice(0, filterBranch.indexOf("return { ok: true }"));
+  // pre-flight predicts the LANDING, so it must quote the landing sentence.
+  const result = classifyCommit({ files: ["extension/lib/x.js"], body: "Release-note: internal: rewrote the guard" });
+  assertEquals(result.ok, false);
   assert(
-    reason.includes('"landing note is empty or not user-facing"'),
+    (result as { reason: string }).reason.includes('"landing note is empty or not user-facing"'),
     "the user-facing-filter refusal must quote bump-version's LANDING sentence",
   );
 });
