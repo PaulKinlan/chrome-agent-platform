@@ -716,15 +716,40 @@ Deno.test("lzccc: a WINDOWED stolen wait earns the grace end-to-end, from counte
   const lateMarginMs = 1_500;
   const statLine = (stealJiffies: number, idleJiffies: number) =>
     `cpu  0 0 0 ${idleJiffies} 0 0 0 ${stealJiffies} 0 0\n`;
-  // Start: a quiet box. The child then spends the wait "stolen": ~65% of the jiffies it
-  // elapsed went to hypervisor steal while the guest idle counter barely moved.
+  // Start: a quiet box. During the wait the counters jump to ~90% steal, which is what the
+  // runner must see as a WINDOW rather than as an instant.
   await Deno.writeTextFile(statFile, statLine(0, 0));
-  // The runner samples the counters BEFORE the wait and AT the soft deadline, so the fixture
-  // must move them inside that window — writing them after the deadline would prove nothing.
-  // The write is the fixture's FIRST statement (no await before it): a write placed after a
-  // delay races the child's own compile, and the sample then lands too early (measured).
-  await Deno.writeTextFile(tempTest, `${selfReapWatchdog(`${tempTest}.runner`)}await Deno.writeTextFile(${JSON.stringify(statFile)}, ${JSON.stringify(statLine(3900, 2100))});
-await new Promise((resolve) => setTimeout(resolve, ${softMs + lateMarginMs}));
+  // 6qnjf (and reviewer finding w0dsa, which corrected my first attempt): the COUNTERS ARE
+  // ADVANCED BY THE TEST, NOT BY THE CHILD. My first fix made the child's jump bigger, and that
+  // could not work: the child is still COLD-BOOTING at the soft deadline on a loaded box, so
+  // the stat file is untouched, the windowed measurement finds no delta, and the runner falls
+  // back to the host's INSTANT steal — 0.3719 in the failing gate log, which is exactly
+  // 2000 * 1/(1-0.3719) = 3184ms, the bound that killed it. (A 65% fixture jump would have
+  // given 5714ms, not 3184ms — so the gate log itself proves the fixture's jump was never read.
+  // The reviewer's arithmetic, and they were right; mine was wrong.)
+  //
+  // The counters are advanced by a detached WRITER from this process, not by the cold-booting
+  // child (the child's whole job is to be LATE). But a single jump has its own race, which
+  // rev-6qnjf2 caught: if this process is descheduled for longer than the jump's delay before
+  // runSerialFile takes its START sample, both samples see the jumped values, the delta is zero
+  // and the leg fails exactly like the original bug (reproduced at 600ms).
+  //
+  // So the writer RAMPS: it keeps increasing the counters every 100ms for far longer than the
+  // soft deadline. Whatever moment the runner samples, the pair straddles growth, and the growth
+  // is overwhelmingly steal (~300 steal jiffies per 305 total => ~98%). No schedule of this
+  // process can put both samples on the same value.
+  const advance = new Deno.Command("sh", {
+    // NB: the payload is a shell SINGLE-QUOTED literal, not JSON.stringify — JSON quoting would
+    // put literal quotes and a literal backslash-n into the stat file, the parser would reject
+    // the line, and the leg would fail with steal=0 while looking like a runner fault (measured).
+    args: ["-c", `i=0; while [ $i -le 120 ]; do
+      printf 'cpu  0 0 0 %s 0 0 0 %s 0 0\\n' "$((i*5))" "$((i*300))" > ${JSON.stringify(statFile)}
+      i=$((i+1)); sleep 0.1
+    done`],
+    stdout: "null",
+    stderr: "null",
+  }).spawn();
+  await Deno.writeTextFile(tempTest, `${selfReapWatchdog(`${tempTest}.runner`)}await new Promise((resolve) => setTimeout(resolve, ${softMs + lateMarginMs}));
 await Deno.writeTextFile(${JSON.stringify(readyFile)}, "ready");
 Deno.test("passes after late marker", () => {});
 `);
@@ -746,6 +771,7 @@ Deno.test("passes after late marker", () => {});
     assert(named, `the receipt names the steal it measured: ${err}`);
     assert(Number(named[1]) > 0.4, `the named steal must be the WINDOW's, not an instant: ${err}`);
   } finally {
+    await advance.status.catch(() => {});
     await Deno.remove(tempDir, { recursive: true }).catch(() => {});
   }
 });
