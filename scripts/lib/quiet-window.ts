@@ -1057,12 +1057,13 @@ export function isCdpEvaluateTimeout(message: string): boolean {
  *                          environmental, per this file's contract: an
  *                          unmeasurable box is never assumed quiet — but the
  *                          reason says "unmeasurable", never "load".
- *   - `unattributable`     (zen14) steal was above the bound or NOT MEASURED.
- *                          Stolen vCPU time stretches every wall clock while
- *                          leaving load average and our process list untouched
- *                          (fbg7i measured 50-96% steal on an "otherwise idle"
- *                          box), so "no named job of ours" cannot certify quiet.
- *                          Environmental (exit 75), never a product red.
+ *   - `unattributable`     (zen14) steal was measured ABOVE the bound: a
+ *                          provable environment fault with the run still
+ *                          measurable. Environmental (exit 75), never a product
+ *                          red. Steal UNMEASURED (the no-/proc shape,
+ *                          chrome-agent-platform-91i40) is NOT this cause: a
+ *                          genuine failure must never read as retryable, so it
+ *                          falls through to the product-red arms.
  */
 export type EvaluateTimeoutCause = "loaded" | "idle-never-settled" | "unmeasurable" | "unattributable";
 
@@ -1140,11 +1141,13 @@ export function hasNamedHeavyJob(sample: LoadSample | null): boolean {
  * A CDP timeout under load is classified as an environmental refusal ONLY when the
  * sample carries contemporaneous evidence of a NAMED heavy builder job
  * (activeBuilderJobs > 0 or non-empty compilerNames) — or, since chrome-agent-platform-zen14,
- * when the steal axis cannot certify quiet: host CPU steal above CAP_QUIET_MAX_STEAL_PCT,
- * or steal UNMEASURED, yields `unattributable` (environmental, exit 75), because stolen
- * vCPU time is invisible to load average and to the named-job scan. Only with steal
- * measured AND below the bound is an idle box, or parallel-runner load with zero named
- * builder jobs, classified as a PRODUCT RED (environmental: false).
+ * when host CPU steal measured above CAP_QUIET_MAX_STEAL_PCT: stolen vCPU time is invisible
+ * to load average and to the named-job scan, so that is `unattributable` (environmental,
+ * exit 75 — a provable environment fault with the run still measurable). Steal UNMEASURED
+ * (the no-/proc shape, chrome-agent-platform-91i40) is NOT a refusal — a genuine failure
+ * must never read as retryable — so with steal low-or-unmeasured, an idle box or
+ * parallel-runner load with zero named builder jobs is classified as a PRODUCT RED
+ * (environmental: false), the limitation named in the reason.
  */
 export function classifyCdpTimeout(
   sample: LoadSample | null,
@@ -1176,20 +1179,21 @@ export function classifyCdpTimeout(
     };
   }
 
-  // zen14: PRODUCT RED requires POSITIVE quiet evidence on the steal axis.
-  // Hypervisor-stolen CPU stretches every task's wall clock without moving the
-  // load average or this host's process list (fbg7i measured 50-96% steal on a
-  // VM that was otherwise idle all night), so "zero named heavy-builder jobs"
-  // cannot certify a quiet box on its own. Steal above the bound — or steal
-  // UNMEASURED — makes the verdict unattributable: a re-run, never a product
-  // red and never a load claim.
-  if (typeof sample.stealPct !== "number" || sample.stealPct > spec.maxStealPct) {
+  // zen14: PRODUCT RED requires the steal axis to be measurably quiet WHEN the
+  // box can measure it. Steal ABOVE the bound is a provable environment fault
+  // with the run still measurable — hypervisor-stolen vCPU time stretches every
+  // task's wall clock without moving the load average or this host's process
+  // list (fbg7i measured 50-96% steal on a VM that was otherwise idle all
+  // night) — so the verdict is unattributable: a re-run, never a product red,
+  // never a load claim. Steal UNMEASURED (the no-/proc shape,
+  // chrome-agent-platform-91i40) is NOT a refusal: an unmeasurable run must
+  // never read as a pass, and equally a genuine failure must never read as
+  // retryable — it falls through to the product-red arms below.
+  if (typeof sample.stealPct === "number" && sample.stealPct > spec.maxStealPct) {
     return {
       cause: "unattributable",
       environmental: true,
-      reason: typeof sample.stealPct === "number"
-        ? `cdp operation exceeded the budget while host CPU steal measured ${sample.stealPct.toFixed(0)}% (> ${spec.maxStealPct}% bound) — stolen vCPU time is invisible to load average and to the named-job scan, so this is UNATTRIBUTABLE, not a product red (zen14)`
-        : `cdp operation exceeded the budget with zero concurrent named heavy-builder jobs, but host CPU steal was NOT MEASURED — without it, the named-job scan cannot certify a quiet box, so this is UNATTRIBUTABLE, not a product red (zen14)`,
+      reason: `cdp operation exceeded the budget while host CPU steal measured ${sample.stealPct.toFixed(0)}% (> ${spec.maxStealPct}% bound) — stolen vCPU time is invisible to load average and to the named-job scan, so this is UNATTRIBUTABLE, not a product red (zen14)`,
       environment,
       sample,
     };
@@ -1200,7 +1204,14 @@ export function classifyCdpTimeout(
     environmental: false,
     reason: namedJob
       ? "cdp operation exceeded the budget while the box was measurably IDLE"
-      : `cdp operation exceeded the budget with zero concurrent named heavy-builder jobs (unnamed parallel-phase load: ${environment}) — preserving PRODUCT RED per MERGER-PLAYBOOK m9g43`,
+      : `cdp operation exceeded the budget with zero concurrent named heavy-builder jobs (unnamed parallel-phase load: ${environment}) — preserving PRODUCT RED per MERGER-PLAYBOOK m9g43` +
+        // zen14's named limitation: on a no-/proc box the steal axis is
+        // unobservable, so "zero named jobs" there is only as quiet as the load
+        // axis shows — the product red stands, and the limitation is named
+        // rather than silently reclassified (chrome-agent-platform-91i40).
+        (typeof sample.stealPct === "number"
+          ? ""
+          : "; host CPU steal UNMEASURED on this box (no /proc, chrome-agent-platform-91i40) — the named-job scan sees only the load axis"),
     environment,
     sample,
   };

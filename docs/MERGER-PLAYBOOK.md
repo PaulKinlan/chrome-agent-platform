@@ -58,13 +58,14 @@ If isolation passes but the log does **not** name an overlapping heavy job, the 
 
 **The steal-axis exception (chrome-agent-platform-zen14):** since zen14, the CDP-timeout
 classifier itself prints `UNATTRIBUTABLE` (exit 75, a re-run verdict — never a product red,
-never a load claim) when host CPU steal was above `CAP_QUIET_MAX_STEAL_PCT` at the timeout,
-or when steal was not measured at all: stolen vCPU time stretches every task's wall clock
-while leaving load average and the named-job scan untouched (fbg7i measured 50-96% steal on
-an otherwise idle VM all night), so "no named job of ours" cannot certify a quiet box. A
-PRODUCT RED from that classifier now carries positive quiet evidence on the steal axis by
-construction. This does not weaken the named-overlap rule above for reds that carry no
-classifier verdict; it governs what the classifier prints.
+never a load claim) when host CPU steal was measured ABOVE `CAP_QUIET_MAX_STEAL_PCT` at the
+timeout: stolen vCPU time stretches every task's wall clock while leaving load average and
+the named-job scan untouched (fbg7i measured 50-96% steal on an otherwise idle VM all
+night), and the measurement makes the environment provably at fault while the run stays
+measurable. Steal UNMEASURED (the no-/proc shape, chrome-agent-platform-91i40) is NOT a
+refusal — a genuine failure must never read as retryable, so the product red stands with
+the limitation named in the reason. This does not weaken the named-overlap rule above for
+reds that carry no classifier verdict; it governs what the classifier prints.
 
 The `xy6n2` union red at `af43d57dc` prompted this rule: two untouched-file reds coincided with the `mwj7v` fast job (reported PID `1202953`), but coincidence and isolation alone cannot classify that gate. The gate log must itself name the overlapping PID/kind in its window before this exception applies; otherwise even this example stays a PRODUCT RED. If both facts hold, **copy the red log and exact-tree cache verdict into the bead's evidence bundle before invalidation** (the next gate can overwrite them), then invalidate only that exact-tree cache record so the next invocation really executes. Wait for the competing job to exit; do not kill another lane's processes. Measure quiet using the project's quiet-window criteria (or the gate's declared quiet precondition), not merely an empty heavy slot; a quiet-window exit 75 is a refusal, not a rerun verdict or permission to land. Permit **one** cache-invalidated quiet re-run of the same full gate/tree and record its counts, ignored count, exit and overlap check. A repeated red is a hard stop as a PRODUCT RED; **no third attempt** and no retry-until-green. Only a green quiet full gate plus the usual remaining gates can permit landing. That green does not erase the first red or prove a fix; both attempts and the reason for this narrow exception stay on the bead.
 

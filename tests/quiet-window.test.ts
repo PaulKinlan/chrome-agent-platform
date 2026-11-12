@@ -941,7 +941,7 @@ Deno.test("56hfm / lckla: classifyCdpTimeout requires contemporaneous named heav
   assertEquals(v4.environmental, true);
 });
 
-Deno.test("zen14: PRODUCT RED requires positive quiet evidence on the steal axis — high or UNMEASURED steal is UNATTRIBUTABLE", () => {
+Deno.test("zen14: PRODUCT RED stands on measurably-low steal; only steal ABOVE the bound is UNATTRIBUTABLE", () => {
   const quietShape = {
     load1: 4.4,
     load5: 4.0,
@@ -963,11 +963,16 @@ Deno.test("zen14: PRODUCT RED requires positive quiet evidence on the steal axis
   assert(stolen.reason.includes("steal"), `names the cause: ${stolen.reason}`);
   assert(stolen.reason.includes("63%"), `carries the measurement: ${stolen.reason}`);
 
-  // 2. Steal UNMEASURED (null — e.g. the no-/proc branch) cannot certify quiet either.
+  // 2. Steal UNMEASURED (null — the no-/proc shape, chrome-agent-platform-91i40) is NOT a
+  //    refusal: a genuine failure must never read as retryable, so the product red STANDS
+  //    and the named limitation rides in the reason (review round 1: the first cut
+  //    reclassified this as a retryable refusal — a softening, the mirror of reporting an
+  //    unmeasurable run as a pass).
   const unmeasured = classifyCdpTimeout(sample({ ...quietShape, stealPct: null }), resolveSpec(SPEC));
-  assertEquals(unmeasured.cause, "unattributable");
-  assertEquals(unmeasured.environmental, true);
-  assert(unmeasured.reason.includes("NOT MEASURED"), unmeasured.reason);
+  assertEquals(unmeasured.cause, "idle-never-settled");
+  assertEquals(unmeasured.environmental, false, "unmeasured steal stays a PRODUCT red, never a refusal");
+  assert(unmeasured.reason.includes("preserving PRODUCT RED"), unmeasured.reason);
+  assert(unmeasured.reason.includes("91i40"), `names the no-/proc limitation: ${unmeasured.reason}`);
 
   // 3. Steal measured BELOW the bound is the positive quiet evidence: product red preserved.
   const provablyQuiet = classifyCdpTimeout(sample({ ...quietShape, stealPct: 4 }), resolveSpec(SPEC));
