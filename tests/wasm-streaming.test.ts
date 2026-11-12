@@ -391,7 +391,7 @@ Deno.test("the bundled-tool transport exposes one owner-derived stream lifecycle
     "promotion must not mistake the route name for the artifact type");
   assert(source.includes("releaseRunWasmStreamOutputs(executionId)"),
     "run settlement must release model-owned stream results");
-  assert(source.includes('const runId = typeof context?.runId === "string" && context.runId ? context.runId : null'),
+  assert(source.includes('const runId = streamOwnerRunIdOrNull(context.runId)'),
     "model stream retention must require the exact run key supplied to settlement");
   assert(source.includes('runId: executionId,'),
     "every orchestrator run must receive its immutable settlement key");

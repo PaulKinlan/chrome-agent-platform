@@ -7,6 +7,8 @@ import {
   decodeModelStreamOwner,
   isModelStreamOwner,
 } from "../extension/lib/wasm-stream-owner-codec.js";
+import { assertEquals } from "jsr:@std/assert@1";
+import { validExecutionId } from "../extension/lib/durable-runs.js";
 
 function assert(condition, message = "assertion failed") { if (!condition) throw new Error(message); }
 function equal(actual, expected, message = "values differ") {
@@ -74,6 +76,51 @@ Deno.test("ko4h6 codec: legacy and malformed owners decode to null, never a gues
   for (const notString of [null, undefined, 42, {}, ["agent:v2:1:ra"]]) {
     equal(decodeModelStreamOwner(notString), null);
   }
+});
+
+Deno.test("n6aj1: the v2/legacy ambiguity is a documented framing fact, closed writer-side", () => {
+  // The filed repro: a legacy owner whose run id begins 'v2:<digits>:' parses as the
+  // v2 owner of the SHIFTED tuple. The framing cannot refuse it (ko4h6 forbids grammar
+  // inference in the codec), so the boundary is the WRITER: the owner lanes gate
+  // context.runId through lib/run-id-gate.js's streamOwnerRunIdOrNull (the execution-id
+  // grammar), and no valid execution id can begin 'v2:' — the colliding legacy form is
+  // unreachable from any writer by construction. This pin documents the decode result
+  // as the plain length-prefix arithmetic, NOT as provenance.
+  const decoded = decodeModelStreamOwner("agent:v2:3:abc:hub");
+  assertEquals(decoded, { runId: "abc", agentId: ":hub" });
+  // The grammar refuses the colliding run id shape in every direction.
+  assertEquals(validExecutionId("v2:3:abc"), false);
+  assertEquals(validExecutionId("agent:v2:3:abc:hub"), false);
+});
+
+Deno.test("n6aj1 r2: per-site gate semantics — owner lanes use the owner gate, identity lanes the preview-aware gate", async () => {
+  // Round 1's pin matched ONE literal spelling of the gate, which is how an
+  // unconditional exec-id gate slipped into the preview lane and refused Settings
+  // previews that worked. This pin asserts the SEMANTICS per function slice: the
+  // stream-owner function uses the owner gate; each identity lane uses the
+  // preview-aware gate; and no raw (ungated) derivation remains anywhere.
+  const sw = await Deno.readTextFile(new URL("../extension/background/service-worker.js", import.meta.url));
+  const sliceOf = (name) => {
+    const start = sw.indexOf(`async function ${name}`);
+    assert(start !== -1, `${name} must exist`);
+    const end = sw.indexOf("\nasync function ", start + 1);
+    return sw.slice(start, end === -1 ? sw.length : end);
+  };
+  const ownerFn = sliceOf("dispatchBundledWasmStream");
+  assertEquals((ownerFn.match(/streamOwnerRunIdOrNull\(context\.runId\)/g) ?? []).length, 2,
+    "both wasm-stream owner derivations must use the OWNER gate (execution ids only)");
+  assertEquals((ownerFn.match(/dispatchRunIdOrNull/g) ?? []).length, 0,
+    "the owner lane must not use the preview-aware gate — owners are execution ids only");
+  for (const lane of ["dispatchEmscriptenRun", "dispatchUserWasmTool"]) {
+    const slice = sliceOf(lane);
+    assertEquals((slice.match(/dispatchRunIdOrNull\(context\.runId\)/g) ?? []).length, 1,
+      `${lane} must use the preview-aware gate — refusing Settings previews was the round-1 regression`);
+    assertEquals((slice.match(/streamOwnerRunIdOrNull\(context\.runId\)/g) ?? []).length, 0,
+      `${lane} never derives a stream owner`);
+    assert(slice.includes("round 2"), `${lane} must carry the written exemption reason`);
+  }
+  assertEquals((sw.match(/const runId = typeof context\?\.runId === "string" && context\.runId/g) ?? []).length, 0,
+    "ungated context.runId derivations must not return");
 });
 
 Deno.test("ko4h6 codec: encode refuses empty, non-string, and over-1024-byte identities", () => {

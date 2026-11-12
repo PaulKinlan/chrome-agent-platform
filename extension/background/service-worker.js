@@ -479,6 +479,7 @@ import {
 import { readSkillFile, writeSkillFiles, removeSkillFiles } from "../lib/skill-files.js";
 import { attachedSkillRefs, JOURNALED_SKILLS_CAP } from "../lib/skill-promotion.js";
 import { durableRuns, sweepOrphanAgentData } from "../lib/durable-runs.js";
+import { dispatchRunIdOrNull, streamOwnerRunIdOrNull } from "../lib/run-id-gate.js";
 import { replaySafetyForTool } from "../lib/tool-replay-safety.js";
 import { createAlarmPermissionLifecycle } from "../lib/alarm-permission-lifecycle.js";
 import {
@@ -759,7 +760,11 @@ async function dispatchBundledWasmStream({ toolId, args: validatedArgs, context 
   // in a service worker — the 6s2c P0).
   const callexportRow = BUNDLED_TOOL_PACKAGE_ROWS.find((row) => row.toolId === toolId && row.callexport === true);
   if (callexportRow) {
-    const runId = typeof context?.runId === "string" && context.runId ? context.runId : null;
+    // chrome-agent-platform-n6aj1: the stream owner is derived from runId, and the v2
+    // framing cannot distinguish provenance — a legacy owner whose run id begins
+    // 'v2:<digits>:' parses as the v2 owner of a different tuple. Only grammar-valid
+    // execution ids (which can never begin 'v2:') may reach the codec (run-id-gate.js).
+    const runId = streamOwnerRunIdOrNull(context.runId);
     if (!runId) throw new Error("wasm_stream_run_required");
     const agentId = String(context?.agentId || "hub");
     const owner = encodeModelStreamOwner(runId, agentId);
@@ -811,7 +816,11 @@ async function dispatchBundledWasmStream({ toolId, args: validatedArgs, context 
       return failPhaseResult(error);
     }
   }
-  const runId = typeof context?.runId === "string" && context.runId ? context.runId : null;
+  // chrome-agent-platform-n6aj1: the stream owner is derived from runId, and the v2
+  // framing cannot distinguish provenance — a legacy owner whose run id begins
+  // 'v2:<digits>:' parses as the v2 owner of a different tuple. Only grammar-valid
+  // execution ids (which can never begin 'v2:') may reach the codec (run-id-gate.js).
+  const runId = streamOwnerRunIdOrNull(context.runId);
   if (!runId) throw new Error("wasm_stream_run_required");
   const agentId = String(context?.agentId || "hub");
   const owner = encodeModelStreamOwner(runId, agentId);
@@ -900,7 +909,14 @@ async function runAdmittedEmscripten({ packageId, version, graphDigest, operatio
 }
 
 async function dispatchEmscriptenRun({ packageId, version, graphDigest, operationId, args, context, preview = false }) {
-  const runId = typeof context?.runId === "string" && context.runId ? context.runId : null;
+  // chrome-agent-platform-n6aj1 round 2: this runId is dispatch-identity metadata
+  // (authority record, documentId fallback, fenced context) and NEVER derives a
+  // stream owner, so the execution-id grammar would wrongly refuse the SW-minted
+  // preview shapes ('model-run-*', 'settings-preview-*') that Settings dispatches
+  // every run. dispatchRunIdOrNull accepts execution ids plus exactly those two
+  // bounded preview shapes; the owner-codec collision stays closed at the owner
+  // lanes (streamOwnerRunIdOrNull).
+  const runId = dispatchRunIdOrNull(context.runId);
   if (!runId) throw new Error("emscripten_run_required");
   const authority = buildPreviewAuthority({
     origin: typeof context?.origin === "string" && /^https?:\/\//u.test(context.origin)
@@ -2838,7 +2854,14 @@ async function dispatchUserWasmTool({ descriptorInput, args: validatedArgs, cont
   if (!host.ok) return host;
 
   // 3. Build live user-wasm authority record (reflects active run and agent, not preview)
-  const runId = typeof context?.runId === "string" && context.runId ? context.runId : null;
+  // chrome-agent-platform-n6aj1 round 2: this runId is dispatch-identity metadata
+  // (authority record, documentId fallback, fenced context) and NEVER derives a
+  // stream owner, so the execution-id grammar would wrongly refuse the SW-minted
+  // preview shapes ('model-run-*', 'settings-preview-*') that Settings dispatches
+  // every run. dispatchRunIdOrNull accepts execution ids plus exactly those two
+  // bounded preview shapes; the owner-codec collision stays closed at the owner
+  // lanes (streamOwnerRunIdOrNull).
+  const runId = dispatchRunIdOrNull(context.runId);
   const agentId = String(context?.agentId ?? "hub");
   const origin = typeof context?.origin === "string" && /^https?:\/\//u.test(context.origin)
     ? new URL(context.origin).origin

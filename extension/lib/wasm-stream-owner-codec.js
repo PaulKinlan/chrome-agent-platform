@@ -11,6 +11,19 @@
 // they are non-authoritative, are never silently recoded, and every authority
 // check over them fails closed. Non-model owners (e.g. "owner-options:<doc>")
 // are a different family and stay opaque to this codec.
+//
+// Provenance boundary (chrome-agent-platform-n6aj1): the framing is injective
+// over (runId, agentId) tuples, but it cannot tell a v2 owner from a legacy
+// concatenation whose run id itself begins 'v2:<digits>:' — the string
+// "agent:v2:3:abc:hub" is BOTH the v2 encoding of ("abc", ":hub") and the
+// legacy encoding of ("v2:3:abc", "hub"). The codec makes no grammar
+// assumption (ko4h6: never split, startsWith, or prefix inference); instead
+// every writer derives runId through the OWNER gate (lib/run-id-gate.js ->
+// validExecutionId) before encodeModelStreamOwner, and no valid execution id
+// can begin 'v2:', so the colliding legacy form is unreachable from any
+// writer by construction. The decode result for such a string is pinned in
+// the codec test as the plain length-prefix tuple — never treated as
+// provenance.
 
 const PREFIX = "agent:v2:";
 const MAX_OWNER_BYTES = 1024;
