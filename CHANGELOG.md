@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.3.746] — 2026-11-12
+- When you approve a model-written script update, the card now lists the sites the script will fetch from — the same disclosure you already get when a script is created.
+- Skills from sources the extension does not recognise are treated as untrusted data, so their descriptions can no longer issue instructions to the agent.
+- Skills the extension does not bundle now show as quoted text in the agent's suggestions and are no longer offered for on-demand reading, since only bundled or installed skills have a body to read.
+
 ## [0.3.745] — 2026-11-12
 - The Gemini model list no longer puts your API key in the request URL — it travels in a request header, so intermediaries and request logs cannot see it.
 
