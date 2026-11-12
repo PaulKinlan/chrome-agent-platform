@@ -232,7 +232,13 @@ git push origin v<version>
 # 10. Link and close bead
 node scripts/beads-landing-link.mjs <previous-main>..<commit-sha> --comment <commit-sha>
 bd close <bead-id> --reason "Landed on origin/main @ <commit-sha> (v0.3.xxx). <Summary of fix>. Full two-phase suite green (<S> serial + <P> parallel = <T> files, <N> passed, wall <W>s)."
-bd dolt push
+# The sync is the WRAPPER, never a raw `bd dolt push` (chrome-agent-platform-qhuf2):
+# the fleet shim bounds the flock WAIT, never the HOLDER, so a raw push can hold the
+# lock and the dolt DB for 25+ minutes (measured 2026-10-31) while every lane write
+# fails with the misleading "database is locked". The wrapper bounds the hold and
+# names the live holder pid. The post-commit hook calls it for you; a manual sync
+# after a beads-only change goes through it too.
+scripts/bd-sync-bound.sh push
 ```
 
 ---
@@ -288,3 +294,16 @@ Three landings on 2026-10-23 stalled on clearance FORM alone, with no code defec
 5. **Renaming or splitting a branch invalidates every verdict that names the old name.** When a branch is split, each new branch needs its own verdict naming the new branch string, even if the commits are unchanged. This is the 3li6g/dfif5 split case: a verdict naming `fleet/fixer` died the moment `fleet/fixer` pointed at a different tip, although the pinned commit itself was correct.
 
 Worked examples that resolved first try: b9dtq's verdict on `fleet/reach2-b9dtq` (pin 73f6809c6, resolved from the verdict's `Delta` line, tip match) and dfif5's on `fleet/fixer-dfif5` (pin 21f836950, likewise resolved from its `Delta` line, tip match) — the `Pinned sha:` lines in both were for the human reader. When writing a verdict, re-read rules 2 and 3 against the CURRENT branch state at the moment of landing — pins are checked structurally at merge time, not at review time.
+
+6. **When `fleet-land-message` exits NON-ZERO, never commit its output** (chrome-agent-platform-qnci3, landed as the tool's error string in 32b72e03f's SUBJECT — a landing the fleet's own review-cadence sweep cannot see, because it does not match the landing shape). Rebuild the message by hand from the pieces the helper would have read:
+
+   ```
+   Merge fleet/<branch> (<bead-id>): <the bead title, verbatim>
+
+   <the LAND-SUMMARY block, quoted from the implementer's hand-off comment>
+
+   Verdict: <the reviewer's clearance field lines, quoted>
+   Helper: `fleet-land-message <bead> fleet/<branch>` exited <n> — <its first line of stderr>
+   ```
+
+   The canonical subject shape matters beyond readability: `scripts/beads-landing-link.mjs`, the daily/weekly unreviewed-landing sweep, and `bd`'s own close-reason conventions all parse it, and none of them can see a bead id embedded in a helper error. The worked precedent is 0d5fa240a (2026-10-28): canonical subject, helper failure and verdict provenance recorded in the BODY. Record the failure; never let it become the message.

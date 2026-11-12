@@ -276,13 +276,60 @@ Deno.test("h346c: a registry entry naming a suite the tree does not have FAILS C
   assertEquals(plan.guardGap, [{ file: "extension/lib/script-host.js", guard: "tests/a-guard-that-does-not-exist.test.ts" }]);
 });
 
+// ── chrome-agent-platform-4iyck: the h346c rule applied to the files that had NO mapping at all.
+// Each of these four subjects had a guard suite in the tree that the selection did not carry, and
+// the selector had no registry entry to derive one from — so the exposure was permanent, not a
+// one-delta accident. The acceptance is the same for all four: the plan carries the guard, the gap
+// count is zero, and the plan SAYS which guard it added.
+Deno.test("4iyck: each formerly-unmapped subject carries its guard, with no gap and a stated reason", () => {
+  const subjects: Array<[string, string]> = [
+    // 67xsg: cap-fetch-deny reads the SW as DATA (no import edge).
+    ["extension/background/service-worker.js", "tests/cap-fetch-deny.test.ts"],
+    // c60vo: the dispatcher denial paths are driven by settings-session's extracted SW harness.
+    ["extension/background/service-worker.js", "tests/settings-session.test.ts"],
+    // v8n9b: the classic-script port and the canonical predicate it mirrors.
+    ["extension/content/content-script.js", "tests/trusted-sender-port-fence.test.ts"],
+    ["extension/lib/pure-trust.js", "tests/trusted-sender-port-fence.test.ts"],
+    // 28hwd + qnci3: runbooks are passive content, so nothing read them.
+    ["docs/MERGER-PLAYBOOK.md", "tests/runbook-sync-commands.test.ts"],
+    [".agents/skills/beads-flow/SKILL.md", "tests/runbook-sync-commands.test.ts"],
+  ];
+  for (const [file, guard] of subjects) {
+    const plan = planSelection({ changedFiles: () => [file] });
+    assertEquals(plan.kind, "subset", `${file}: the change is still certifiable as a subset`);
+    assert(plan.files!.includes(guard), `${file} must carry its guard ${guard}`);
+    assertEquals(plan.guardGap, [], `${file}: after enforcement no guard gap remains`);
+    // Removing the guard from the selection is the merger's stop signal, and it NAMES the guard.
+    assertEquals(guardGapFor([file], (plan.files ?? []).filter((f) => f !== guard)), [{ file, guard }]);
+  }
+  // A guard the import graph and the text-reference walk BOTH miss is the case the registry exists
+  // for, and there the plan must say so — otherwise the selection silently grows. The runbooks are
+  // that case: they are passive content, so before 4iyck nothing selected anything for them.
+  const runbookPlan = planSelection({ changedFiles: () => ["docs/MERGER-PLAYBOOK.md"] });
+  assert(
+    runbookPlan.notices.some((n) => n.includes("owns a dedicated guard") && n.includes("runbook-sync-commands")),
+    `the plan must SAY it added the runbook guard: ${runbookPlan.notices.join(" | ")}`,
+  );
+});
+
 Deno.test("h346c: guardGapFor is the merger's stop signal — it counts changed files whose guard is absent", () => {
   const changed = ["extension/background/service-worker.js", "extension/lib/script-host.js", "extension/lib/pure.js"];
+  // 4iyck: service-worker.js owns THREE guards now (the sender census plus the two suites that read
+  // it as data — cap-fetch-deny and settings-session), and the gap list must name every absent one:
+  // a stop signal that reports one of three missing guards is the same silent subset this bead
+  // exists to remove.
   assertEquals(guardGapFor(changed, ["tests/onmessage-sender-guard.test.ts"]), [
+    { file: "extension/background/service-worker.js", guard: "tests/cap-fetch-deny.test.ts" },
+    { file: "extension/background/service-worker.js", guard: "tests/settings-session.test.ts" },
     { file: "extension/lib/script-host.js", guard: "tests/sandbox-egress-confinement.test.ts" },
-  ], "only the guard-owning file with an absent guard counts; pure.js owns none");
+  ], "every absent guard of a guard-owning file counts; pure.js owns none");
   assertEquals(
-    guardGapFor(changed, ["tests/onmessage-sender-guard.test.ts", "tests/sandbox-egress-confinement.test.ts"]),
+    guardGapFor(changed, [
+      "tests/onmessage-sender-guard.test.ts",
+      "tests/cap-fetch-deny.test.ts",
+      "tests/settings-session.test.ts",
+      "tests/sandbox-egress-confinement.test.ts",
+    ]),
     [],
     "a zero is a pass",
   );

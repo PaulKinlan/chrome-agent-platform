@@ -635,8 +635,24 @@ Deno.test("h346c: the dedicated-guard registry is path-keyed, ownership-based an
   }
 
   // The two incidents this table exists for, asserted as the exact ownership claim.
-  assertEquals(guardsForChangedFile("extension/background/service-worker.js"), ["tests/onmessage-sender-guard.test.ts"]);
+  assertEquals(guardsForChangedFile("extension/background/service-worker.js"), [
+    "tests/onmessage-sender-guard.test.ts",
+    // 4iyck: both suites READ the SW as data, which is why no import edge exists to select them.
+    "tests/cap-fetch-deny.test.ts",
+    "tests/settings-session.test.ts",
+  ]);
   assertEquals(guardsForChangedFile("extension/lib/script-host.js"), ["tests/sandbox-egress-confinement.test.ts"]);
+
+  // 4iyck: the four exposures that had NO mapping at all — the h346c rule applied to them.
+  // (a) v8n9b: the classic-script PORT of the trusted-SW predicate and the canonical copy it
+  //     mirrors are both registry keys, so neither side can drift with the fence unselected.
+  assertEquals(guardsForChangedFile("extension/content/content-script.js"), ["tests/trusted-sender-port-fence.test.ts"]);
+  assertEquals(guardsForChangedFile("extension/lib/pure-trust.js"), ["tests/trusted-sender-port-fence.test.ts"]);
+  // (b) 28hwd + qnci3: runbooks are PASSIVE CONTENT to the selector, so before these entries a
+  //     landing-recipe change selected the always-on core and nothing that read the document.
+  for (const runbook of ["docs/MERGER-PLAYBOOK.md", ".agents/skills/beads-flow/SKILL.md", "AGENTS.md"]) {
+    assertEquals(guardsForChangedFile(runbook), ["tests/runbook-sync-commands.test.ts"], runbook);
+  }
 
   // BOTH tables are consulted: a caller must never have to know which table an entry lives in
   // (the HTML entries keep their own table, and a rule that read only one would re-open the gap).
