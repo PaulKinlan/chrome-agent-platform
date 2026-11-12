@@ -20,6 +20,12 @@ import {
   runSerialFile,
   serialFileTimeoutMs,
 } from "../scripts/lib/serial-phase.mjs";
+import {
+  CAP_ENVIRONMENTAL_REFUSAL,
+  formatUnmeasuredSuites,
+  recordRefusal,
+  refuseIfStarved,
+} from "../scripts/lib/browser-harness-refusal.mjs";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -1020,4 +1026,89 @@ Deno.test("v3p4s: serial-runner maps child SIGKILL to 137 and SIGTERM to 143", a
   } finally {
     await Deno.remove(dir, { recursive: true }).catch(() => {});
   }
+});
+
+// ── chrome-agent-platform-j5xbi: when a real-browser suite may REFUSE instead of redden ──────────
+// Coord's ruling, 2026-11-12, with four conditions. Each condition gets its own assertion below,
+// because a refusal path is a laundering machine unless every one of them is pinned.
+Deno.test("j5xbi refusal (1): an OBSERVED unmet precondition under measured starvation is a refusal, with its numbers", () => {
+  const refusal = refuseIfStarved({
+    suite: "tests/sandbox-egress-confinement.test.ts",
+    registered: false, // the observed fact, not an inference
+    waitedMs: 16_000,
+    boundMs: 40_000,
+    contention: { loadPerCpu: 3.63, load: 9.8, steal: 0.306 },
+    priorRefusals: 0,
+  });
+  assert(refusal, "a starved box with no service worker must refuse");
+  assertEquals(refusal.suite, "tests/sandbox-egress-confinement.test.ts");
+  assert(refusal.receipt.startsWith(CAP_ENVIRONMENTAL_REFUSAL), "the gate classifies on this marker");
+  for (const fact of ["observed=no-service-worker", "waitedMs=16000", "boundMs=40000", "loadPerCpu=3.63", "load=9.8", "steal=0.306"]) {
+    assert(refusal.receipt.includes(fact), `the receipt must carry ${fact}: ${refusal.receipt}`);
+  }
+});
+
+Deno.test("j5xbi refusal (2): the harness came up, so NOTHING after it can be excused (no laundering)", () => {
+  // Registered, on the most starved machine imaginable: still not a refusal. Every assertion failure
+  // after this point is a product red, and there must be no path from here to 75.
+  assertEquals(refuseIfStarved({
+    suite: "tests/agent-share-import.test.ts",
+    registered: true,
+    waitedMs: 39_000,
+    boundMs: 40_000,
+    contention: { loadPerCpu: 99, load: 400, steal: 0.95 },
+    priorRefusals: 7,
+  }), null);
+});
+
+Deno.test("j5xbi refusal (3): starvation cannot mask a broken suite - a quiet box fails closed, and the count follows", () => {
+  // A quiet box with no service worker is a DEFECT in the suite: no refusal, fail closed.
+  assertEquals(refuseIfStarved({
+    suite: "tests/g09i-sidebar-tab.test.ts",
+    registered: false,
+    waitedMs: 40_000,
+    boundMs: 40_000,
+    contention: { loadPerCpu: 1.0, load: 0.9, steal: 0.01 },
+    priorRefusals: 5,
+  }), null, "repeated refusals must not turn a quiet-box failure into a pass");
+  // Unmeasurable contention is not starvation either: a refusal needs a fact, and "we could not tell"
+  // is not one.
+  assertEquals(refuseIfStarved({
+    suite: "tests/g09i-sidebar-tab.test.ts", registered: false, waitedMs: 40_000, boundMs: 40_000,
+    contention: { loadPerCpu: null, load: null, steal: null },
+  }), null);
+  // The running count is carried per suite so a permanently broken suite cannot hide behind a
+  // permanently loaded neighbour, and it increments across calls.
+  const first = refuseIfStarved({
+    suite: "tests/mic-shadow-host-journey.test.ts", registered: false, waitedMs: 26_000, boundMs: 40_000,
+    contention: { loadPerCpu: 2.0, steal: 0.0 }, priorRefusals: 0,
+  });
+  const second = refuseIfStarved({
+    suite: "tests/mic-shadow-host-journey.test.ts", registered: false, waitedMs: 26_000, boundMs: 40_000,
+    contention: { loadPerCpu: 2.0, steal: 0.0 }, priorRefusals: first?.refusals ?? 0,
+  });
+  if (!first || !second) throw new Error("both attempts must refuse, so the count can rise");
+  assertEquals([first.refusals, second.refusals], [1, 2], "the receipt carries a rising per-suite count");
+  assert(second.receipt.includes("refusals=2"), second.receipt);
+});
+
+Deno.test("j5xbi refusal (4): a refused suite is DECLARED unmeasured, named individually, never folded into a pass", () => {
+  assertEquals(formatUnmeasuredSuites([]), null, "no refusals means no line");
+  assertEquals(
+    formatUnmeasuredSuites([
+      { suite: "tests/agent-header-rename-reload.test.ts", refusals: 1 },
+      { suite: "tests/mic-shadow-host-journey.test.ts", refusals: 3 },
+    ]),
+    "fast-gate: unmeasured: tests/agent-header-rename-reload.test.ts tests/mic-shadow-host-journey.test.ts(refused 3x)",
+  );
+  // The ledger is append-only and survives the process, which is what makes a repeat refusal provable.
+  const store = new Map();
+  const io = {
+    readFile: (p: string) => store.get(p) ?? "",
+    writeFile: (p: string, t: string) => { store.set(p, (store.get(p) ?? "") + t); },
+  };
+  const path = "browser-refusals.jsonl";
+  assertEquals(recordRefusal(io, path, "tests/sandbox-egress-confinement.test.ts"), 1);
+  assertEquals(recordRefusal(io, path, "tests/sandbox-egress-confinement.test.ts"), 2);
+  assertEquals(recordRefusal(io, path, "tests/agent-share-import.test.ts"), 1, "counts are per suite");
 });

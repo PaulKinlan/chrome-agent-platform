@@ -89,6 +89,25 @@ Deno.test({
         timeoutMs: 10000,
         match: (t: any) => t.type === "service_worker" && String(t.url).includes("dist/background"),
       });
+      // j5xbi (coord's ruling): if the harness could not come up AND the box is measurably
+      // starved, this is an ENVIRONMENTAL REFUSAL (exit 75, requeue) — not a product red, and not a
+      // pass. The moment `sw` exists, every failure below is a product red: refuseIfStarved returns
+      // null for registered === true, so nothing after the harness is up can be excused.
+      if (!sw) {
+        const refusal = refuseIfStarved({
+          suite: "tests/sandbox-egress-confinement.test.ts",
+          registered: false,
+          waitedMs: readyTimeoutMs,
+          boundMs: readyTimeoutMs,
+          contention: { loadPerCpu: currentLoadPerCpu(), load: currentAbsoluteLoad(), steal: currentStealFractionSync() },
+          priorRefusals: countRefusals(ledgerIo, refusalLedger, "tests/sandbox-egress-confinement.test.ts"),
+        });
+        if (refusal) {
+          recordRefusal(ledgerIo, refusalLedger, "tests/sandbox-egress-confinement.test.ts");
+          console.error(refusal.receipt);
+          Deno.exit(ENVIRONMENTAL_REFUSAL_EXIT);
+        }
+      }
       assert(sw, "Service worker must be running");
       const extId = await computeUnpackedExtensionId(EXT);
 
