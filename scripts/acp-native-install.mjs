@@ -122,13 +122,36 @@ function install() {
   // (observed: Chrome reported "Specified native messaging host not found").
   // The harness is chosen by the wrapper's default or CAP_ACP_HARNESS in the
   // browser's environment.
+  // yqhb2: several candidate manifest dirs is a legitimate best-effort loop — an unwritable one on a
+  // locked-down machine is normal. What was NOT acceptable is that the failure was discarded, so
+  // "every candidate was refused" printed `installed ` and exited 0, indistinguishable from a machine
+  // with no candidate dirs at all. The attempts and failures are now counted and named, and a run that
+  // writes NOTHING fails loudly instead of succeeding silently.
   const written = [];
+  const manifestWrites = { attempted: 0, written: 0, failed: 0, errors: [] };
   for (const dir of manifestDirs()) {
+    const target = join(dir, `${HOST_NAME}.json`);
+    manifestWrites.attempted += 1;
     try {
       mkdirSync(dir, { recursive: true });
-      writeFileSync(join(dir, `${HOST_NAME}.json`), JSON.stringify(manifest, null, 2) + "\n");
-      written.push(join(dir, `${HOST_NAME}.json`));
-    } catch { /* unwritable candidate dir */ }
+      writeFileSync(target, JSON.stringify(manifest, null, 2) + "\n");
+      written.push(target);
+      manifestWrites.written += 1;
+    } catch (error) {
+      manifestWrites.failed += 1;
+      const reason = String(error?.code ?? error?.message ?? error);
+      manifestWrites.errors.push({ dir, reason });
+      console.error(`acp-native-install: could not write ${target}: ${reason}`);
+    }
+  }
+  if (written.length === 0) {
+    // Loud, not silent: we tried N candidate locations and every one refused. That is a failed
+    // install, and the caller must see it as one.
+    console.error(
+      `acp-native-install: wrote NO native-messaging manifest (attempted ${manifestWrites.attempted}, ` +
+        `failed ${manifestWrites.failed}): ${manifestWrites.errors.map((e) => `${e.dir} (${e.reason})`).join("; ")}`,
+    );
+    process.exitCode = 1;
   }
   // Chrome spawns the host with CHROME's environment, which lacks the user's
   // bin dirs — so the wrapper sources this file to get the PATH that installed

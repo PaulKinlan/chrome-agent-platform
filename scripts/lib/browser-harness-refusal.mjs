@@ -26,6 +26,7 @@
 //     ledger can list them per landing instead of folding them into a pass.
 
 import { loadavg } from "node:os";
+import { bestEffortWrite } from "./best-effort-write.mjs";
 import { MAX_LOAD_SCALE, stealScaleComponent } from "./serial-phase.mjs";
 
 const loadAvg = () => loadavg()[0];
@@ -176,7 +177,7 @@ export function countRefusals({ readFile }, path, suite) {
 }
 
 export function recordRefusal(
-  { readFile, writeFile, ensureParent },
+  { readFile, writeFile, ensureParent, counters = { attempted: 0, written: 0, failed: 0 } },
   path,
   suite,
 ) {
@@ -199,9 +200,23 @@ export function recordRefusal(
     }
   } catch { /* no ledger yet: this is the first refusal */ }
   const next = prior + 1;
-  try {
-    writeFile(path, `${JSON.stringify({ suite: String(suite), at: new Date().toISOString() })}\n`);
-  } catch { /* the count is best-effort; the receipt still carries what we observed */ }
+  // yqhb2: this write used to be wrapped in a bare catch, so an EISDIR (the path was a DIRECTORY —
+  // durableDir creates one) was discarded and the receipt went silent. It now goes through the
+  // visible-counter primitive: the attempt, the success and the failure are all counted, and a
+  // failure is logged. The receipt still carries what we OBSERVED, so the refusal itself is honest;
+  // what changed is that "we could not record it" is no longer indistinguishable from "there was
+  // nothing to record".
+  counters.attempted += 1;
+  const outcome = bestEffortWrite({
+    write: writeFile,
+    label: `refusal ledger for ${suite}`,
+    log: (message) => console.error(message),
+  }, path, `${JSON.stringify({ suite: String(suite), at: new Date().toISOString() })}\n`);
+  if (outcome.ok) counters.written += 1;
+  else {
+    counters.failed += 1;
+    counters.lastError = String(outcome.error?.code ?? outcome.error?.message ?? "write-failed");
+  }
   return next;
 }
 

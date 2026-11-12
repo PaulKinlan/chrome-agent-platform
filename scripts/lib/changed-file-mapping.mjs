@@ -127,6 +127,12 @@ export const DEDICATED_FILE_GUARDS = Object.freeze({
   "scripts/lib/browser-harness-refusal.mjs": Object.freeze([
     "tests/serial-phase-resilience.test.ts",
   ]),
+  // yqhb2: the write-visibility primitive is driven as DATA by the guard that enforces its rule (no
+  // catch may swallow a write, and an unaccounted attempt is named). No import edge exists from the
+  // module to the sweep that scans for its use, so it is declared here for the same reason as above.
+  "scripts/lib/best-effort-write.mjs": Object.freeze([
+    "tests/best-effort-write-guard.test.ts",
+  ]),
   "extension/background/service-worker.js": Object.freeze([
     // cac6c: the AST census of EVERY runtime.onMessage listener in extension/. It walks
     // the tree with fs.readdirSync, so it has no static import edge from the file it

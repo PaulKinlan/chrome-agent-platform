@@ -84,6 +84,12 @@ export const CORE = [
 // root-path guards) have no static import edges in the dependency graph.
 // They must be in the always-on set so test:changed cannot pass silently green.
 export const SOURCE_INSPECTING_GUARDS = [
+  // yqhb2: this suite WALKS scripts/ and extension/ to police a whole class of defect (a catch that
+  // discards a write failure), so it has no import edge to the files it inspects — exactly why the
+  // 2irv meta-guard demands an ALWAYS_ON consumer and its qcfc audit failed both legs when this was
+  // first written. It is a 120ms text scan with no browser and no build, so the cost is bounded; it
+  // must not be selectable-away, because the site it protects is silent data loss in evidence.
+  "tests/best-effort-write-guard.test.ts",
   // D2 scans tracked extension JS for every cap:enrollment authority reader.
   // A tools.js / memory.js / SW change has no import edge into that scan.
   "tests/enrollment-authority-reader-census.test.ts",

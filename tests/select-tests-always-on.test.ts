@@ -41,7 +41,10 @@ Deno.test("kz27: the tree-walking guards are IN the always-on list, and every en
       `${guard} reads the repo tree as data and must be always-on (kz27/ps2x8/zw8f0)`,
     );
   }
-  assertEquals(SOURCE_INSPECTING_GUARDS.length, 46,
+  // yqhb2: 46 -> 47 — tests/best-effort-write-guard.test.ts walks scripts/ and extension/ to police
+  // "a catch that discards a write failure", so selection must not be able to skip it (2irv demanded
+  // an always-on consumer and qcfc's audit failed both legs without this entry).
+  assertEquals(SOURCE_INSPECTING_GUARDS.length, 47,
     "reviewed static guards must not disappear silently; update this count when deliberately changing the list");
   // A list is only a list if its members are real: an entry naming a file that does not exist would
   // "cover" nothing while looking reassuring.
