@@ -82,7 +82,11 @@ skip it. A red gate is information, not an obstacle.
 - Close the bead ONLY if the complete fix (or complete test-pinning for a
   pre-existing feature) is on the pushed branch. Otherwise:
   `bd comment <id> "remaining: ..."` and leave it open/in_progress.
-- `bd dolt push` (a post-commit hook usually does this).
+- `scripts/bd-sync-bound.sh push` for the beads sync — NEVER a raw `bd dolt push`
+  (chrome-agent-platform-qhuf2/28hwd: the fleet shim bounds the flock WAIT, never the
+  HOLDER, so a raw push can hold the lock and the dolt DB for 25+ minutes while every
+  lane write fails with "database is locked"; the wrapper bounds the hold and names
+  the live holder pid). The post-commit hook usually runs it for you.
 
 ## 6. Review (coordinator runs this)
 A DIFFERENT model/session reviews the diff against the claims, falsification-focused.

@@ -23,7 +23,7 @@
 // changed file to a candidate suite, false when it could not and therefore ran everything. Absent
 // means the producer did not compute it, and an absent field is never read as a proof.
 import { isPassiveContentFile } from "./content-exemptions.mjs";
-import { isRepoMetadata } from "./changed-file-mapping.mjs";
+import { guardsForChangedFile, isRepoMetadata } from "./changed-file-mapping.mjs";
 import { suiteDurationsObject } from "./parallel-durations.mjs";
 import { ENVIRONMENTAL_REFUSAL_EXIT } from "./environmental-verdict.mjs";
 
@@ -90,8 +90,39 @@ export function explainChangedFileMapping({ changed = [], candidates = {}, execu
   // status from candidates-vs-ran here could only ever turn a policy into a gap.
   const policyByFile = new Set(unmappable.filter((u) => u?.kind === "policy").map((u) => u.file));
   return normalizeSuiteList(changed).map((file) => {
-    if (isRepoMetadata(file) || isPassiveContentFile(file)) {
-      return { file, status: "not-applicable", executed_suites: [], reason: "repo metadata or passive content; no executable suite required" };
+    const passive = isRepoMetadata(file) || isPassiveContentFile(file);
+    if (passive) {
+      // 4iyck: a PASSIVE CONTENT file (docs/**, .md) that owns a DEDICATED GUARD is not
+      // "not-applicable". The selector forces that guard into the selection when the file changes
+      // (guardsForChangedFile is consulted for every changed file — h346c), so the ledger must report
+      // the run that actually policed it. The blanket branch here used to hide exactly that: the
+      // runbook guard EXECUTED and the ledger still said "no executable suite required", which is the
+      // silent-skip shape this bead exists to remove. A passive file with NO guard keeps
+      // not-applicable, and now says WHY instead of implying nothing could ever read it.
+      const dedicated = guardsForChangedFile(file);
+      if (dedicated.length) {
+        const executed = dedicated.filter((suite) => ran.has(suite));
+        return {
+          file,
+          // The status vocabulary is closed (validateFileMapping below): a declared guard that did not
+          // run is an UNMAPPED GAP, not a new status.
+          status: executed.length ? "mapped" : "unmapped",
+          executed_suites: executed,
+          reason: executed.length
+            ? "dedicated guard executed (this file owns a suite that reads it, and it ran)"
+            : `dedicated guard declared but NOT executed: ${dedicated.join(", ")}`,
+        };
+      }
+      return {
+        file,
+        status: "not-applicable",
+        executed_suites: [],
+        reason: isRepoMetadata(file)
+          ? "repo metadata; no executable suite required"
+          : "passive content with NO dedicated guard — no suite reads this file, so a claim in it can " +
+            "rot with the gate colour unchanged (register a guard in DEDICATED_FILE_GUARDS if it " +
+            "carries claims a reader relies on)",
+      };
     }
     // An explicitly fail-closed path cannot certify its own subset, even if a
     // suite happens to import it. Full execution is not selector authority.

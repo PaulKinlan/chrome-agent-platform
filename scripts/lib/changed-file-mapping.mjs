@@ -125,11 +125,49 @@ export const DEDICATED_FILE_GUARDS = Object.freeze({
     // the tree with fs.readdirSync, so it has no static import edge from the file it
     // polices, and three consecutive sw.js deltas never selected it.
     "tests/onmessage-sender-guard.test.ts",
+    // 4iyck/67xsg: this suite READS service-worker.js as DATA (Deno.readTextFile + body
+    // extraction) to drive the cap:fetch route through its refusal legs. It is selected today
+    // only because the test file happens to contain the path as a literal — an incidental text
+    // match, not an ownership claim. A read that moves (dist, a helper, a computed path) drops
+    // it out of the selection SILENTLY, and the SW's credential-echo and redirect-refusal
+    // contract then has no selected guard at all.
+    "tests/cap-fetch-deny.test.ts",
+    // 4iyck/c60vo: the dispatcher's denial paths are driven by an extracted harness in this
+    // suite (it reads service-worker.js as text too). A refusal that stops emitting a
+    // securityEvent, or a dead branch that never runs, is visible only here.
+    "tests/settings-session.test.ts",
   ]),
   "extension/lib/script-host.js": Object.freeze([
     // The egress-confinement journey imports script-host dynamically INSIDE a test body,
     // so the static reverse map cannot see it either (a detection gap filed as ff920).
     "tests/sandbox-egress-confinement.test.ts",
+  ]),
+  // 4iyck/v8n9b: the trusted-SW sender predicate is DUPLICATED into the content script (a classic
+  // script cannot import ES modules) and the canonical copy moved out of pure.js into pure-trust.js
+  // (gzkmx). The fence that compares the two bodies has no import edge to either in the direction it
+  // polices, and nothing selected it for a change to EITHER side of the pair — so the port could
+  // drift from the predicate it claims to mirror with every gate green. Both ends are registry keys:
+  // a change to the port and a change to the canonical predicate must both carry the fence.
+  "extension/content/content-script.js": Object.freeze([
+    "tests/trusted-sender-port-fence.test.ts",
+  ]),
+  "extension/lib/pure-trust.js": Object.freeze([
+    "tests/trusted-sender-port-fence.test.ts",
+  ]),
+  // 4iyck/28hwd+qnci3: runbooks are PASSIVE CONTENT to the selector (isPassiveContentFile matches
+  // .md), so before this entry a landing-recipe change selected the always-on core and nothing that
+  // read it: a runbook could prescribe an unbounded raw `bd dolt push`, or lose the failed-helper
+  // fallback, with every gate green. The guard is one small suite shared by the three documents
+  // because they are one claim (AGENTS.md states the routing rule; the two runbooks are the
+  // instruction set that must not contradict it).
+  "docs/MERGER-PLAYBOOK.md": Object.freeze([
+    "tests/runbook-sync-commands.test.ts",
+  ]),
+  ".agents/skills/beads-flow/SKILL.md": Object.freeze([
+    "tests/runbook-sync-commands.test.ts",
+  ]),
+  "AGENTS.md": Object.freeze([
+    "tests/runbook-sync-commands.test.ts",
   ]),
 });
 
