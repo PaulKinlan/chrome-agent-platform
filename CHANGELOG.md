@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.751] — 2026-11-12
+- none — unreleased staging API surface renamed; nothing published changes hands.
+
 ## [0.3.750] — 2026-11-12
 - Extension modules were reorganized so shared helpers live in one place; ids, credential redaction and hashing behave exactly as before.
 
