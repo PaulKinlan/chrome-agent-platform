@@ -389,8 +389,12 @@ Deno.test("redaction: locator rows are two-tier — first-party producers assert
 
   const FIRST_PARTY = [
     { locator: "api[_-]?key", key: "apiKey", producerFile: "extension/lib/named-agents.js", producerPattern: "apiKey", where: "provider registry / providerConfig (kv read)" },
-    { locator: "token", key: "token", producerFile: "extension/lib/mcp-config.js", producerPattern: "headerName", where: "MCP server config auth.token (kv cap:mcpServers)" },
-    { locator: "authorization", key: "authorization", producerFile: "extension/lib/mcp-client-core.js", producerPattern: "Authorization", where: "owner-configured headers (mcp-client-core)" },
+    // chrome-agent-platform-ilpar: the producer pattern must be a LIVE occurrence
+    // of the key's own producer line, not a sibling-field or comment match —
+    // 'headerName' satisfied the old token pin while the token producer was
+    // renamed away, and 'Authorization' appeared ONLY in mcp-client-core JSDoc.
+    { locator: "token", key: "token", producerFile: "extension/lib/mcp-config.js", producerPattern: "server.auth = { headerName, token }", where: "MCP server config auth.token (kv cap:mcpServers)" },
+    { locator: "authorization", key: "authorization", producerFile: "extension/lib/model-catalog.js", producerPattern: "headers.Authorization", where: "owner-configured provider headers (model-catalog Bearer line; also provider-test/service-tools/routes-mcp)" },
   ];
   const PAGE_AUTHORED = [
     { locator: "secret", key: "client_secret" },
