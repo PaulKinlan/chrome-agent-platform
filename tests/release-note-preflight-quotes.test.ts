@@ -23,6 +23,9 @@
 
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { fileURLToPath } from "node:url";
+import { spawnSync } from "node:child_process";
+import { join } from "node:path";
+import { durableDir } from "../scripts/lib/durable-root.mjs";
 import * as acorn from "npm:acorn@8";
 import { classifyCommit } from "../scripts/check-release-note-preflight.mjs";
 
@@ -159,4 +162,63 @@ Deno.test("vggt7: the filter refusal quotes the LANDING sentence, not the hook's
     (result as { reason: string }).reason.includes('"landing note is empty or not user-facing"'),
     "the user-facing-filter refusal must quote bump-version's LANDING sentence",
   );
+});
+
+/**
+ * A throwaway git mirror that runs bump-version's LANDING validation for real.
+ * erfi7: the AST sweep can only prove a refusal is written down, not that it is
+ * reached — `false && console.error("…")` keeps the call in the tree and prints
+ * nothing. A quote is a claim about OUTPUT, so the claim is checked against output
+ * where that is achievable: this builds one commit per refusal shape and reads
+ * bump-version's actual stderr.
+ */
+async function landingRefusal(body: string): Promise<string> {
+  // durable-root convention: scratch lives under the durable evidence root, never /tmp.
+  const dir = await Deno.makeTempDir({ dir: durableDir("scratch"), prefix: "cap-vggt7-" });
+  await Deno.mkdir(join(dir, "scripts", "lib"), { recursive: true });
+  await Deno.mkdir(join(dir, "extension", "options"), { recursive: true });
+  await Deno.copyFile(join(ROOT, "scripts", "bump-version.mjs"), join(dir, "scripts", "bump-version.mjs"));
+  await Deno.copyFile(join(ROOT, "scripts", "lib", "release-note.mjs"), join(dir, "scripts", "lib", "release-note.mjs"));
+  await Deno.copyFile(
+    join(ROOT, "extension", "options", "changelog-filter.js"),
+    join(dir, "extension", "options", "changelog-filter.js"),
+  );
+  await Deno.writeTextFile(join(dir, "package.json"), JSON.stringify({ name: "t", version: "1.2.3" }, null, 2));
+  await Deno.writeTextFile(join(dir, "package-lock.json"), JSON.stringify({ name: "t", version: "1.2.3", packages: { "": { name: "t", version: "1.2.3" } } }, null, 2));
+  await Deno.writeTextFile(join(dir, "extension", "manifest.json"), JSON.stringify({ manifest_version: 3, version: "1.2.3" }, null, 2));
+  const git = (...args: string[]) =>
+    spawnSync("git", ["-c", "user.email=t@example.test", "-c", "user.name=t", ...args], { cwd: dir, encoding: "utf8" });
+  git("init", "-q");
+  git("add", "-A");
+  git("commit", "-q", "-m", "base");
+  await Deno.writeTextFile(join(dir, "extension", "x.js"), "// change\n");
+  git("add", "-A");
+  git("commit", "-q", "-m", `change\n\n${body}`);
+  const sha = git("rev-parse", "HEAD").stdout.trim();
+  const run = spawnSync(process.execPath, ["scripts/bump-version.mjs", "--landing", "--from", sha], {
+    cwd: dir,
+    encoding: "utf8",
+  });
+  const output = `${run.stdout}\n${run.stderr}`;
+  await Deno.remove(dir, { recursive: true }).catch(() => {});
+  return output;
+}
+
+Deno.test("erfi7: each refusal is EMITTED by a real bump-version landing run, not merely written in it", async () => {
+  // The three quotes the pre-flight makes, each driven through the real exit path:
+  //   - a product change carrying no trailer
+  //   - a trailer that declares itself internal
+  //   - a trailer the project's user-facing filter rejects
+  const cases: Array<{ quote: string; body: string }> = [
+    { quote: "has no Release-note trailer", body: "no trailer at all" },
+    { quote: "none: internal cannot mint a release; omit that trailer", body: "Release-note: none: internal refactor" },
+    { quote: "landing note is empty or not user-facing", body: "Release-note: internal: rewrote the guard" },
+  ];
+  for (const { quote, body } of cases) {
+    const output = await landingRefusal(body);
+    assert(
+      output.includes(quote),
+      `bump-version must actually PRINT ${JSON.stringify(quote)} for ${JSON.stringify(body)}; it printed: ${output.slice(0, 400)}`,
+    );
+  }
 });
