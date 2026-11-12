@@ -180,7 +180,11 @@ Deno.test("delegated WebMCP: lazy tool sources report ready when enrolled & appr
   const search = await protocol.search({ query: "book table" }, context);
   assertEquals(search.ok, true);
   assertEquals(search.results.length, 1);
-  assertEquals(search.results[0].name, "book_table_le_petit_bistro");
+  // 1p3r1: a webmcp result's name is fenced (the page authors it), so the hit is asserted by
+  // containment inside the fence rather than by bare equality. Dispatch still uses the RAW name
+  // (`dispatched[0].name` below, unchanged) — the fence is a presentation boundary, not a rename.
+  assert(String(search.results[0].name).includes("book_table_le_petit_bistro"),
+    `the name is still shown, inside the fence: ${String(search.results[0].name)}`);
   assertEquals(search.results[0].availability, "ready");
   assert(typeof search.results[0].selectionRef === "string", "selectionRef must be issued");
 
