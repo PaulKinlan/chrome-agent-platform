@@ -20,7 +20,7 @@
 // kept running the serial sweep per edit (Paul, 2026-09-04). The runner passes
 // --config deno.runner.jsonc to see every file.
 // This script is the merge gate via `npm test`; explicit files still run directly.
-import { existsSync, readdirSync, realpathSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { availableParallelism, constants as osConstants } from "node:os";
@@ -28,6 +28,9 @@ import { resolve as resolvePath } from "node:path";
 import { BUILD_GATE, BUILD_GATE_FILES, BUILD_GATE_REASONS, HEAVY_GATE, HEAVY_GATE_FILES, HEAVY_GATE_REASONS, READ_ONLY_DIST, SERIAL, partition } from "./test-partition.mjs";
 import { announce, runReadOnlyDistBatch, runSerialFiles, runSerialLanes } from "./lib/serial-phase.mjs";
 import { ALWAYS_ON } from "./select-tests.mjs";
+import { durableDir } from "./lib/durable-root.mjs";
+import { refusalsFromLedger } from "./lib/browser-harness-refusal.mjs";
+import { join } from "node:path";
 import { concurrencyNotice } from "./lib/chrome-slot-bound.mjs";
 import {
   certificationGaps,
@@ -51,6 +54,25 @@ export { DEFAULT_PARALLEL_TIMEOUT_MS, computeParallelPhaseTimeout, areAllFailure
 const PARALLEL_READY_FILE = process.env.CAP_PARALLEL_READY_FILE;
 const PARALLEL_READY_TIMEOUT_MS = Number(process.env.CAP_PARALLEL_READY_TIMEOUT_MS ?? 60_000);
 
+
+/**
+ * j5xbi: the real-browser suites that refused during THIS run, read back through the module's own
+ * reader (so the gate and any test exercise one code path). The ledger path must be the SAME one the
+ * suites write: reading only an env var that nothing sets made the receipt silent in exactly the case
+ * it exists for, and durableDir() creates a DIRECTORY, so the first version's path could never be
+ * appended to at all (EISDIR, swallowed). The env var is an override; the default is the suites' path.
+ */
+const RUN_STARTED_AT = Date.now() - 1000; // 1s of slack for a child that starts just before us
+
+function refusedBrowserSuites() {
+  const path = process.env.CAP_BROWSER_REFUSAL_LEDGER || join(durableDir("browser-harness"), "refusals.jsonl");
+  // dqk0e: scope to THIS run. The ledger is append-only, so a row from a previous run would
+  // otherwise declare a suite unmeasured on a run where it never refused (the reviewer bound a
+  // ledger and got two clean runs reporting a suite unmeasured). The process start is the boundary.
+  return refusalsFromLedger({ readFile: (p) => readFileSync(p, "utf8"), exists: existsSync }, path, {
+    since: RUN_STARTED_AT,
+  });
+}
 
 function runParallel(files, phase = "parallel phase", durationsOut = null, killedOut = null, neverRanOut = null) {
   if (!files || files.length === 0) return Promise.resolve(0);
@@ -567,6 +589,11 @@ export async function main(args = process.argv.slice(2)) {
       // The FAST tier certifies a lockfile delta by a closure; this tier must record the same trail
       // when a fail-closed FAST run hands its context across (chrome-agent-platform-lezl0).
       lockfileDelta: fileMappingContext?.lockfileDelta ?? [],
+      // chrome-agent-platform-j5xbi condition (4): a real-browser suite that REFUSED (could not
+      // stand its harness up on a measurably starved box) is named here as UNMEASURED. It is not a
+      // pass and not a coverage gap: the landing must be able to say which suites were not
+      // credentialed, by name, instead of folding them into a green line.
+      unmeasured: refusedBrowserSuites(),
     });
   }
   // chrome-agent-platform-5xg1w: the LAST line of an incomplete run is the marker the fleet's per-tree

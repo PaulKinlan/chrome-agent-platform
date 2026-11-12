@@ -120,6 +120,13 @@ export const HTML_EXPORT_ENTRY_GUARDS = Object.freeze({
  *  it. Adding one costs that suite's runtime to every delta touching the file, so it is
  *  a deliberate list, not a generated one. */
 export const DEDICATED_FILE_GUARDS = Object.freeze({
+  // j5xbi: the refusal module (when a starved box may refuse a browser harness) is exercised by the
+  // legs in serial-phase-resilience.test.ts, which drive it as DATA — there is no import edge from the
+  // module to the suite's own subject, so without this entry the file maps to nothing and the gate
+  // reports it as an unmapped coverage gap on every landing that touches it (measured twice).
+  "scripts/lib/browser-harness-refusal.mjs": Object.freeze([
+    "tests/serial-phase-resilience.test.ts",
+  ]),
   "extension/background/service-worker.js": Object.freeze([
     // cac6c: the AST census of EVERY runtime.onMessage listener in extension/. It walks
     // the tree with fs.readdirSync, so it has no static import edge from the file it

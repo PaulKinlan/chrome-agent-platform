@@ -19,6 +19,32 @@ import { captureSnapshotWithRetry } from "../scripts/lib/load-retry.ts";
 import { launchChrome, openCdp, computeUnpackedExtensionId, resolveChromiumBinaryReport, teardownChrome } from "../scripts/lib/chrome-launch.ts";
 import { chromeProfileDir } from "../scripts/lib/chrome-profile-dir.ts";
 import { STORE_SANDBOX_CSP } from "../scripts/store-target-policy.mjs";
+import { currentLoadPerCpu, currentStealFractionSync, serialFileTimeoutMs } from "../scripts/lib/serial-phase.mjs";
+import {
+  browserReadyTimeoutMs,
+  countRefusals,
+  exitWithRefusal,
+  currentAbsoluteLoad,
+  ENVIRONMENTAL_REFUSAL_EXIT,
+  recordRefusal,
+  refuseIfStarved,
+} from "../scripts/lib/browser-harness-refusal.mjs";
+import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
+import { dirname } from "node:path";
+import { durableDir } from "../scripts/lib/durable-root.mjs";
+
+// j5xbi: the running per-suite refusal count lives in the evidence dir, so a permanently broken
+// suite cannot hide behind a permanently loaded neighbour across gates.
+// NB: durableDir() CREATES A DIRECTORY, so it cannot be the ledger FILE itself — appending to it
+// raises EISDIR, which the ledger's best-effort catch swallowed, and the count silently stayed 0
+// (this is the same shape rev-j5xbi measured as refusal-with-persistentCount=0). The ledger is a
+// file INSIDE a durable dir.
+const refusalLedger = Deno.env.get("CAP_BROWSER_REFUSAL_LEDGER") ?? `${durableDir("browser-harness")}/refusals.jsonl`;
+const ledgerIo = {
+  readFile: (path: string) => readFileSync(path, "utf8"),
+  writeFile: (path: string, text: string) => appendFileSync(path, text),
+  ensureParent: (path: string) => { mkdirSync(dirname(path), { recursive: true }); },
+};
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url)).replace(/\/$/, "");
 const EXT = `${ROOT}/extension`;
@@ -85,10 +111,45 @@ Deno.test({
       });
 
       cdp = await openCdp(chromeInstance.wsUrl, { timeoutMs: 30000 });
+      // j5xbi: the readiness deadline scales with measured contention. Keyed on ABSOLUTE load,
+      // because on this 8-CPU box at absolute 9.8 the per-CPU reading is 1.22 — a factor that rounds
+      // almost to one while five browser suites were reddening on one gate.
+      const readyTimeoutMs = browserReadyTimeoutMs({
+        base: 10_000,
+        load: currentAbsoluteLoad(),
+        steal: currentStealFractionSync(),
+      });
       const sw = await cdp.serviceWorker({
-        timeoutMs: 10000,
+        timeoutMs: readyTimeoutMs,
         match: (t: any) => t.type === "service_worker" && String(t.url).includes("dist/background"),
       });
+      // j5xbi (coord's ruling): if the harness could not come up AND the box is measurably
+      // starved, this is an ENVIRONMENTAL REFUSAL (exit 75, requeue) — not a product red, and not a
+      // pass. The moment `sw` exists, every failure below is a product red: refuseIfStarved returns
+      // null for registered === true, so nothing after the harness is up can be excused.
+      if (!sw) {
+        const refusal = refuseIfStarved({
+          suite: "tests/sandbox-egress-confinement.test.ts",
+          registered: false,
+          waitedMs: readyTimeoutMs,
+          boundMs: readyTimeoutMs,
+          contention: { loadPerCpu: currentLoadPerCpu(), load: currentAbsoluteLoad(), steal: currentStealFractionSync() },
+          priorRefusals: countRefusals(ledgerIo, refusalLedger, "tests/sandbox-egress-confinement.test.ts"),
+        });
+        if (refusal) {
+          recordRefusal(ledgerIo, refusalLedger, "tests/sandbox-egress-confinement.test.ts");
+          // rev-j5xbi2: Deno.exit() does NOT run finally blocks, so exiting here leaked the Chrome
+          // process, its profile and the local server. exitWithRefusal runs the cleanup the finally
+          // below would do, then leaves with 75 — a refusal must not be a resource leak.
+          await exitWithRefusal({
+            receipt: refusal.receipt,
+            cleanup: async () => {
+              if (chromeInstance) await teardownChrome(chromeInstance.proc, profile);
+              await server.shutdown();
+            },
+          });
+        }
+      }
       assert(sw, "Service worker must be running");
       const extId = await computeUnpackedExtensionId(EXT);
 
