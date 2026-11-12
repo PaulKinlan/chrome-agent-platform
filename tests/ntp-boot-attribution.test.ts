@@ -834,7 +834,8 @@ Deno.test("mujlt runner boundary: abnormal exit before test summary preserves ex
     assertEquals(code, 143, `runner must preserve abrupt termination signal exit code (143 for SIGTERM), got ${code}:\n${out}`);
     assertStringIncludes(out, "fixture: abnormal exit after marker");
     assertStringIncludes(out, ENVIRONMENTAL_REFUSAL_MARKER);
-    assertStringIncludes(out, "missing test summary — preserving exit 143");
+    // kdeqx: a signalled child is never classified at all — the guard announces itself.
+    assertStringIncludes(out, "NOT classified, a killed run is not a verdict (kdeqx)");
   } finally {
     try { Deno.removeSync(scratch, { recursive: true }); } catch {}
   }

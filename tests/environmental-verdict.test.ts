@@ -319,3 +319,21 @@ It most likely originated from a dangling promise, event/timeout handler or top-
   // The refusal on its own is still a refusal — the fix must not make everything a failure.
   assertEquals(areAllFailuresEnvironmental(` ERRORS ${REFUSAL_BLOCK}\n FAILURES \n`), true);
 });
+
+Deno.test("kdeqx: the FULL tier (run-tests.mjs) has the same signal guard — the class, not the instance", async () => {
+  const src = await Deno.readTextFile(new URL("../scripts/run-tests.mjs", import.meta.url));
+  assert(src.includes("const signalledOrBounded = effectiveCode === 124 || effectiveCode >= 128;"),
+    "run-tests.mjs must not classify a signal-derived or timeout code as a refusal");
+  assert(src.includes("NOT classified, a killed run is not a verdict"),
+    "the guard announces itself — a skipped classification is never silent");
+});
+
+Deno.test("kdeqx: a SIGNAL-killed phase is never classified — 128+signal is preserved, not softened to 75", () => {
+  // The erxkj reviewer edge: a deno child killed AFTER printing an all-environmental
+  // summary carries rc 137; fleet-check treats 137 as KILLED (not a verdict, not
+  // cached) but 75 as a cached FAIL — classifying the kill erases that distinction.
+  assertEquals(classifyPhaseExitFromOutput(137, REFUSAL_ONLY_OUTPUT).code, 137, "SIGKILL is not a refusal");
+  assertEquals(classifyPhaseExitFromOutput(143, REFUSAL_ONLY_OUTPUT).code, 143, "SIGTERM is not a refusal");
+  assertEquals(classifyPhaseExitFromOutput(139, REFUSAL_ONLY_OUTPUT).code, 139, "SIGSEGV is not a refusal");
+  assertEquals(classifyPhaseExitFromOutput(124, REFUSAL_ONLY_OUTPUT).code, 124, "a timeout bound is not a refusal");
+});

@@ -296,7 +296,14 @@ function runParallel(files, phase = "parallel phase", durationsOut = null, kille
         capturedOutput.includes("ENVIRONMENT: machine is not quiet enough for this gate") ||
         capturedOutput.includes("ENVIRONMENT: ntp-boot-staging refusal") ||
         capturedOutput.includes("ENVIRONMENT: the fleet-wide heavy-gate slot is busy");
-      if (effectiveCode !== 0 && hasEnvironmentalMarker) {
+      // kdeqx: a signal-derived code (128+n) or the 124 bound means the child did
+      // not exit normally and its captured output is partial BY DEFINITION — the
+      // classification must not run on it (a killed run is not a verdict; the same
+      // guard the subset path gets from classifyPhaseExitFromOutput).
+      const signalledOrBounded = effectiveCode === 124 || effectiveCode >= 128;
+      if (effectiveCode !== 0 && signalledOrBounded && hasEnvironmentalMarker) {
+        announce(`\nrun-tests: ${phase} exited ${effectiveCode} (signal or bound) with refusal markers in partial output — NOT classified, a killed run is not a verdict (kdeqx)`);
+      } else if (effectiveCode !== 0 && hasEnvironmentalMarker) {
         // Finding P1 (Round 4 review): A passing test emitting a marker must NOT allow a
         // failing product test to exit 75. Every failed test under ERRORS must carry
         // verified environmental refusal evidence.
