@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.747] — 2026-11-12
+- The live model list in Settings no longer sends your provider key anywhere it could be redirected to a private address, and it can never send the key to a private, loopback or link-local host.
+
 ## [0.3.746] — 2026-11-12
 - When you approve a model-written script update, the card now lists the sites the script will fetch from — the same disclosure you already get when a script is created.
 - Skills from sources the extension does not recognise are treated as untrusted data, so their descriptions can no longer issue instructions to the agent.
