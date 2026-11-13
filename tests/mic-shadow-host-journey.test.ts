@@ -27,6 +27,23 @@ import {
   resolveChromiumBinaryReport,
 } from "../scripts/lib/chrome-launch.ts";
 import { chromeProfileDir } from "../scripts/lib/chrome-profile-dir.ts";
+import { awaitServiceWorkerOrRefuse } from "../scripts/lib/browser-harness-refusal.mjs";
+import { durableDir } from "../scripts/lib/durable-root.mjs";
+import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
+import { dirname } from "node:path";
+
+// chrome-agent-platform-2syam: this journey loads a PLAIN page over http://127.0.0.1 and never uses
+// the extension, so its precondition is not a service worker — it is the browser's CDP endpoint. That
+// is what the shared helper waits for here (`observed=no-cdp-target`), so the same boundary applies:
+// measured starvation + an endpoint that never came up is an environmental refusal (exit 75, named in
+// the tier ledger); on a quiet box it is a PRODUCT red, because a journey that cannot attach to a
+// browser nothing is contending for is a defect.
+const refusalLedger = Deno.env.get("CAP_BROWSER_REFUSAL_LEDGER") ?? `${durableDir("browser-harness")}/refusals.jsonl`;
+const ledgerIo = {
+  readFile: (path: string) => readFileSync(path, "utf8"),
+  writeFile: (path: string, text: string) => appendFileSync(path, text),
+  ensureParent: (path: string) => { mkdirSync(dirname(path), { recursive: true }); },
+};
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const BROWSER_RESOLUTION = resolveChromiumBinaryReport();
@@ -135,7 +152,29 @@ Deno.test({
           "about:blank",
         ],
       });
-      cdp = await openCdp(chromeInstance.wsUrl, { timeoutMs: 30_000 });
+      // 2syam: the readiness wait and its refusal decision, through the shared helper. `wait` returns
+      // null when the endpoint did not come up inside the contention-scaled bound; the helper decides
+      // what that MEANS (refusal only under measured starvation).
+      cdp = await awaitServiceWorkerOrRefuse({
+        suite: "tests/mic-shadow-host-journey.test.ts",
+        observed: "no-cdp-target",
+        base: 30_000, // this journey's own CDP budget, scaled by measured contention
+        ledgerIo,
+        ledgerPath: refusalLedger,
+        wait: async (boundMs: number) => {
+          try {
+            return await openCdp(chromeInstance.wsUrl, { timeoutMs: boundMs });
+          } catch {
+            return null;
+          }
+        },
+        cleanup: async () => {
+          try { cdp?.close(); } catch { /* closed */ }
+          await teardownChrome(chromeInstance, profile);
+          await server.shutdown();
+        },
+      }) as any;
+      assert(cdp, "the browser's CDP endpoint must come up");
       const { sessionId } = await cdp.open(`${base}/journey.html`);
 
       // Bounded poll helper: contention moves the deadline, not the verdict.
