@@ -291,6 +291,28 @@ Deno.test("h346c: a guard-owning changed file carries its dedicated guard even w
   );
 });
 
+Deno.test("wwgnm: the two incidental-instrument surfaces carry their guard, and removal is a named stop signal", () => {
+  // wwgnm: settings-view.js and directory.js are the user-facing surfaces whose only selected suite
+  // reached them by an instrument that happens to sit in the test file (a dynamic import specifier, a
+  // path literal). That is a coverage claim by coincidence, so it is registered — and the registry's
+  // own rule then holds for them exactly as it does for the SW: the guard is forced in, and removing
+  // it is the merger's stop signal naming the guard.
+  for (const file of ["extension/options/settings-view.js", "extension/directory/directory.js"]) {
+    const plan = planSelection({ changedFiles: () => [file] });
+    assertEquals(plan.kind, "subset", `${file}: import-reachable, so still a certifiable subset`);
+    assert(
+      plan.files!.includes("tests/settings-client-view.test.ts"),
+      `${file} must carry its dedicated guard`,
+    );
+    assertEquals(plan.guardGap, [], `${file}: after enforcement no guard gap remains`);
+    assertEquals(
+      guardGapFor([file], (plan.files ?? []).filter((f) => f !== "tests/settings-client-view.test.ts")),
+      [{ file, guard: "tests/settings-client-view.test.ts" }],
+      `${file}: dropping the guard must be reported, not silent`,
+    );
+  }
+});
+
 Deno.test("h346c: a registry entry naming a suite the tree does not have FAILS CLOSED and names the guard", () => {
   const plan = planSelection({
     changedFiles: () => ["extension/lib/script-host.js"],

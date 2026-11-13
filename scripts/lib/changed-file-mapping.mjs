@@ -185,6 +185,26 @@ export const DEDICATED_FILE_GUARDS = Object.freeze({
   "extension/lib/pure-trust.js": Object.freeze([
     "tests/trusted-sender-port-fence.test.ts",
   ]),
+  // wwgnm: two user-facing surfaces whose ONLY selected suite reaches them by an incidental
+  // instrument, which is the 4iyck/67xsg argument verbatim — the edge exists today because a path
+  // literal happens to be in the file, so it disappears SILENTLY the moment that read moves into a
+  // helper, a computed path or a fixture (exactly how cap-fetch-deny fell out of the SW's selection).
+  // Both files are otherwise reachable, so these entries are about the DRIFT, not today's coverage.
+  "extension/options/settings-view.js": Object.freeze([
+    // The only suite that touches the settings view at all: it imports the module by a
+    // DYNAMIC specifier inside a test body (`await import("../extension/options/settings-view.js")`),
+    // which the graph counts only because the string is right there. A rewrite to a helper drops the
+    // edge and this surface then has no selected guard at all. Basename-legal (settings-view is not a
+    // substring of settings-client-view), so the table's anti-coincidence rule allows the claim.
+    "tests/settings-client-view.test.ts",
+  ]),
+  "extension/directory/directory.js": Object.freeze([
+    // Read as TEXT by a path literal (`readFileSync(join(ROOT, "extension/directory/directory.js"))`)
+    // in this suite, plus the directory-client-view suite whose own basename would be an illegal
+    // coincidence. The directory view is the other UI surface that changes ~4-5x/month, so the
+    // incidental-edge risk is worth one suite's runtime.
+    "tests/settings-client-view.test.ts",
+  ]),
   // 4iyck/28hwd+qnci3: runbooks are PASSIVE CONTENT to the selector (isPassiveContentFile matches
   // .md), so before this entry a landing-recipe change selected the always-on core and nothing that
   // read it: a runbook could prescribe an unbounded raw `bd dolt push`, or lose the failed-helper

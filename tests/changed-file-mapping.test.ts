@@ -661,6 +661,12 @@ Deno.test("h346c: the dedicated-guard registry is path-keyed, ownership-based an
     "the HTML entry table is consulted by the same helper",
   );
 
+  // wwgnm: the two surfaces whose only selected suite reached them by an incidental instrument
+  // (a dynamic import specifier, a path literal). Asserted as ownership so a later "tidying" of
+  // either entry says so here rather than quietly dropping a user-facing surface's guard.
+  assertEquals(guardsForChangedFile("extension/options/settings-view.js"), ["tests/settings-client-view.test.ts"]);
+  assertEquals(guardsForChangedFile("extension/directory/directory.js"), ["tests/settings-client-view.test.ts"]);
+
   // No entry, no claim — an unregistered file owns no KNOWN guard, and the helper must not invent one.
   assertEquals(guardsForChangedFile("extension/lib/pure.js"), []);
   assertEquals(guardsForChangedFile(undefined), []);
