@@ -38,3 +38,21 @@ export function dispatchRunIdOrNull(value) {
   if (typeof value !== "string" || !value) return null;
   return validExecutionId(value) || PREVIEW_RUN_ID.test(value) ? value : null;
 }
+
+// The canonical MINTERS for the two preview run-id shapes (chrome-agent-platform-n6aj1
+// round 3: the settings-preview mint used randomUUID().slice(0, 12), whose 12-char
+// window is '8 hex + hyphen + 3 hex' — the hyphen failed PREVIEW_RUN_ID and 100% of
+// real settings previews were refused. The minters and the predicates now live in ONE
+// module and the tests derive their inputs from the minters, so a hyphen, a length
+// change or a prefix change reds the suite instead of shipping).
+const uuidHex = (n) => crypto.randomUUID().replace(/-/gu, "").slice(0, n);
+
+/** Mint a model-run dispatch id: 'model-run-' + 8 hex (hyphen-free). */
+export function mintModelRunRunId() {
+  return `model-run-${uuidHex(8)}`;
+}
+
+/** Mint a settings-preview dispatch id: 'settings-preview-' + 12 hex (hyphen-free). */
+export function mintSettingsPreviewRunId() {
+  return `settings-preview-${uuidHex(12)}`;
+}

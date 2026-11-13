@@ -479,7 +479,7 @@ import {
 import { readSkillFile, writeSkillFiles, removeSkillFiles } from "../lib/skill-files.js";
 import { attachedSkillRefs, JOURNALED_SKILLS_CAP } from "../lib/skill-promotion.js";
 import { durableRuns, sweepOrphanAgentData } from "../lib/durable-runs.js";
-import { dispatchRunIdOrNull, streamOwnerRunIdOrNull } from "../lib/run-id-gate.js";
+import { dispatchRunIdOrNull, mintModelRunRunId, mintSettingsPreviewRunId, streamOwnerRunIdOrNull } from "../lib/run-id-gate.js";
 import { replaySafetyForTool } from "../lib/tool-replay-safety.js";
 import { createAlarmPermissionLifecycle } from "../lib/alarm-permission-lifecycle.js";
 import {
@@ -8792,7 +8792,7 @@ const handlers = mergeRouteMaps(
           operationId,
           args: validated.data?.args ?? [],
           context: {
-            runId: `model-run-${crypto.randomUUID().slice(0, 8)}`,
+            runId: mintModelRunRunId(),
             agentId: "hub",
             origin: "https://agent.cap",
             documentId: String(context.documentId),
@@ -8801,7 +8801,7 @@ const handlers = mergeRouteMaps(
         });
       }
       return await record.dispatch(validated.data, {
-        runId: `model-run-${crypto.randomUUID().slice(0, 8)}`,
+        runId: mintModelRunRunId(),
         agentId: "hub",
         origin: "https://agent.cap",
         documentId: String(context.documentId),
@@ -8817,7 +8817,7 @@ const handlers = mergeRouteMaps(
       operationId,
       args: Array.isArray(args) ? args : [],
       context: {
-        runId: `settings-preview-${crypto.randomUUID().slice(0, 12)}`,
+        runId: mintSettingsPreviewRunId(),
         origin: "https://agent.cap",
         documentId: String(context.documentId),
       },

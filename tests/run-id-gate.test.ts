@@ -44,3 +44,44 @@ Deno.test("n6aj1 r2: every gated derivation still yields an encodable owner for 
   const owner = encodeModelStreamOwner(streamOwnerRunIdOrNull(id) ?? "", "hub");
   assertEquals(owner, "agent:v2:12:acp:aaaaaaaa" + "hub");
 });
+
+// chrome-agent-platform-n6aj1 round 3: the round-2 suite fed HAND-WRITTEN shapes and
+// passed while the real settings-preview mint ('settings-preview-' + uuid.slice(0,12),
+// whose window contains a hyphen) failed the gate — 100% of real previews refused.
+// These tests derive their inputs from the ACTUAL minters, so a hyphen, a length
+// change or a prefix change reds here instead of shipping.
+import { mintModelRunRunId, mintSettingsPreviewRunId } from "../extension/lib/run-id-gate.js";
+
+Deno.test("n6aj1 r3: every REAL settings-preview mint passes the dispatch gate (50 mints)", () => {
+  for (let i = 0; i < 50; i++) {
+    const minted = mintSettingsPreviewRunId();
+    assertEquals(
+      dispatchRunIdOrNull(minted),
+      minted,
+      `a real settings-preview mint must dispatch, got refusal for ${JSON.stringify(minted)} — the mint and the gate disagree`,
+    );
+    assertEquals(minted.startsWith("settings-preview-"), true);
+    assertEquals(minted.replace("settings-preview-", "").includes("-"), false, "the id body must be hyphen-free — the slice window must not straddle the uuid's hyphen");
+  }
+});
+
+Deno.test("n6aj1 r3: every REAL model-run mint passes the dispatch gate (50 mints)", () => {
+  for (let i = 0; i < 50; i++) {
+    const minted = mintModelRunRunId();
+    assertEquals(
+      dispatchRunIdOrNull(minted),
+      minted,
+      `a real model-run mint must dispatch, got refusal for ${JSON.stringify(minted)}`,
+    );
+    assertEquals(minted.replace("model-run-", "").includes("-"), false, "the id body must be hyphen-free");
+  }
+});
+
+Deno.test("n6aj1 r3: the mints stay inside the SW's Settings dispatch paths (static, mint-level)", async () => {
+  const sw = await Deno.readTextFile(new URL("../extension/background/service-worker.js", import.meta.url));
+  // The mints are the SW's ONLY source of preview ids: no inline uuid-slice mint may
+  // return (an inline slice is how the hyphen shipped).
+  assertEquals((sw.match(/randomUUID\(\)\.slice/g) ?? []).length, 0, "inline uuid-slice run-id mints must not return — use the run-id-gate minters");
+  assertEquals((sw.match(/mintSettingsPreviewRunId\(\)/g) ?? []).length, 1, "the settings-preview dispatch must mint through the canonical minter");
+  assertEquals((sw.match(/mintModelRunRunId\(\)/g) ?? []).length, 2, "both model-run dispatch legs must mint through the canonical minter");
+});
