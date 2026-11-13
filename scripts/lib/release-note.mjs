@@ -12,7 +12,11 @@ import { execFileSync } from "node:child_process";
 /** Every `Release-note:` trailer in a commit body (bump-version.mjs's landing
  *  mode reads exactly these). */
 export function releaseNoteTrailers(body) {
-  return [...String(body ?? "").matchAll(/^Release-note:\s*(.*)$/gim)].map((match) => match[1]);
+  // chrome-agent-platform-k5p3z: `[ \t]*`, never `\s*`. `\s` matches the NEWLINE, so an EMPTY
+  // `Release-note:` captured the line BELOW it and the note looked non-empty to every caller — the
+  // empty-note refusal could not fire, and git's own `%(trailers)` (which correctly reports an empty
+  // value) disagreed with this view. A trailer's value is on its own line by construction.
+  return [...String(body ?? "").matchAll(/^Release-note:[ \t]*(.*)$/gim)].map((match) => match[1]);
 }
 
 /** The same notes as GIT ITSELF reads them — `git interpret-trailers --parse`,
@@ -32,11 +36,16 @@ export function releaseNoteTrailers(body) {
  *  must treat null as "no verdict", never as "no note". */
 export function trailerParserNotes(body) {
   try {
-    const parsed = execFileSync("git", ["interpret-trailers", "--parse"], {
+    // chrome-agent-platform-w5716: `--no-divider`, because `%(trailers)` reads a COMMIT body, where a
+    // `---` line is not the mailed-patch divider interpret-trailers assumes by default. Without it, a
+    // note placed after a `---` line was accepted by the stamp and invisible to git — the exact
+    // accepted-and-invisible class this shape check exists to catch. Also `[ \t]*`, never `\s*`
+    // (chrome-agent-platform-k5p3z): `\s` swallows the newline, so an EMPTY note read the next line.
+    const parsed = execFileSync("git", ["interpret-trailers", "--parse", "--no-divider"], {
       input: String(body ?? ""),
       encoding: "utf8",
     });
-    return [...parsed.matchAll(/^Release-note:\s*(.*)$/gim)].map((match) => match[1]);
+    return [...parsed.matchAll(/^Release-note:[ \t]*(.*)$/gim)].map((match) => match[1]);
   } catch {
     return null;
   }

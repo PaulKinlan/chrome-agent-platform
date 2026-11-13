@@ -239,6 +239,27 @@ Deno.test("g0bfz: a note in the MIDDLE of the body, and a WRAPPED note, are RED 
   }
 });
 
+Deno.test("k5p3z: an EMPTY Release-note reads as empty, so the next line is never taken as its value", async () => {
+  // chrome-agent-platform-k5p3z: `\s*` matched the newline, so `Release-note:` followed by `Bead: abc`
+  // captured "Bead: abc" in BOTH views — the shape check saw agreement while git's `%(trailers)`
+  // reported an empty value, and the existing "sanitises to EMPTY" refusal could never fire.
+  const { releaseNoteTrailers } = await import("../scripts/lib/release-note.mjs");
+  const body = "fix: x\n\nprose\n\nRelease-note:\nBead: abc\n";
+  assertEquals(releaseNoteTrailers(body), [""], "an empty note is an empty VALUE, not the line below it");
+});
+
+Deno.test("w5716: a note placed after a '---' line is invisible to git, so the shape check refuses it", () => {
+  // chrome-agent-platform-w5716: interpret-trailers assumes the mailed-patch divider unless told
+  // otherwise, while %(trailers) on a COMMIT does not. Without --no-divider this body was accepted by
+  // the stamp and invisible to git: accepted-and-invisible, the class g0bfz exists to close.
+  const verdict = classifyCommit({
+    files: PRODUCT,
+    body: `fix(x): thing\n\nbody prose\n\nRelease-note: ${USER_WORDS}.\n\n---\nfoo\n`,
+  });
+  assertEquals(verdict.ok, false, "a note git cannot see must not pass the authoring check");
+  if (!verdict.ok) assertStringIncludes(verdict.reason, "shape is not one both readers accept");
+});
+
 Deno.test("g0bfz: a note in the trailing trailer block is still GREEN — the rule is the shape, not a ban", () => {
   const verdict = classifyCommit({ files: PRODUCT, body: `fix(x): thing\n\nbody prose\n\nRelease-note: ${USER_WORDS}.\n` });
   assertEquals(verdict, { ok: true });
