@@ -178,6 +178,8 @@ Deno.test({
     Deno.writeTextFileSync(other, "");
     let lockFd = -1;
     let otherFd = -1;
+    const sentinel = `${dir}/sentinel-file`;
+    const sentinels: number[] = [];
     const holder = new Deno.Command("flock", {
       args: ["-x", lock, "sh", "-c", "echo held; cat >/dev/null"],
       stdin: "piped",
@@ -234,8 +236,37 @@ Deno.test({
       closeSync(otherFd);
       const closedFd = otherFd;
       otherFd = -1;
+      // chrome-agent-platform-of6w9 (P2, three full-gate reds): a JUST-CLOSED fd
+      // number is freed and the very next internal open (Deno's async machinery,
+      // this verify's own /dev/fd re-open) reclaims it — the old assertion raced
+      // that reuse and read WRONG_TARGET for a descriptor it expected MISSING.
+      // Two deterministic cases now, no race in either:
+      //
+      // (1) CLOSED-VS-REUSED are different cases. The reclaim is done
+      //     SYNCHRONOUSLY in this turn (no await between close and open, so no
+      //     internal open can win the number): the sentinel occupies closedFd on
+      //     a DIFFERENT file, and the honest verdict for a reused number is
+      //     WRONG_TARGET — never MISSING. The old expectation, if restored,
+      //     reds here deterministically instead of flaking.
+      const sentinelFd = openSync(sentinel, "a");
+      sentinels.push(sentinelFd);
+      assertEquals(
+        sentinelFd,
+        closedFd,
+        "fixture: the lowest-free allocator must hand the just-closed number to the synchronous sentinel reclaim",
+      );
       assertEquals(
         await verifyInheritedCanonicalLock(closedFd, real),
+        WRONG_TARGET,
+        "a REUSED descriptor number reads wrong-target — 'closed' and 'reused for something else' are different cases",
+      );
+      // (2) The CONTRACT ('not open -> missing') is asserted on a descriptor that
+      //     is NEVER OPENED by construction: far beyond every plausible fd
+      //     allocation (soft limits are 256-7168; no process opens 65535 files),
+      //     so its /dev/fd stat is a stable EBADF and the verdict a stable
+      //     MISSING — the property without the race.
+      assertEquals(
+        await verifyInheritedCanonicalLock(65535, real),
         MISSING,
         "a descriptor that is not open must be reported missing",
       );
@@ -249,7 +280,7 @@ Deno.test({
         "a lock nobody holds must be refused even with the right descriptor",
       );
     } finally {
-      for (const fd of [lockFd, otherFd]) {
+      for (const fd of [lockFd, otherFd, ...sentinels]) {
         if (fd >= 0) {
           try { closeSync(fd); } catch { /* already closed */ }
         }
