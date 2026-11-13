@@ -184,10 +184,20 @@ Deno.test({
       ],
     });
 
+    // 2syam: ONE physical teardown per launch (assigned just below, after the launch, so the teardown
+    // guard can associate it). Declared here so both the refusal path and `finally` can call it.
+    let closeBrowser = async () => {};
     const ws = new WebSocket(launched.wsUrl);
     await new Promise((r) => (ws.onopen = r));
     let id = 0;
     const pending = new Map();
+    // 2syam: the ONE physical teardown for this launch — the refusal path calls it (Deno.exit() skips
+    // `finally`) and so does normal completion, so the teardown call site is not duplicated
+    // (tests/real-browser-teardown.test.ts:8ue3 counts exactly one per launch).
+    closeBrowser = async () => {
+      try { ws.close(); } catch { /* closed */ }
+      await teardownChrome(launched, profile);
+    };
     const send = (method: string, params: any = {}, sessionId?: string) =>
       new Promise<any>((res) => {
         const mid = ++id;
@@ -216,10 +226,7 @@ Deno.test({
         base: 10_000, // this journey's own readiness budget, scaled by measured contention
         ledgerIo,
         ledgerPath: refusalLedger,
-        cleanup: async () => {
-          try { ws.close(); } catch { /* closed */ }
-          await teardownChrome(launched, profile);
-        },
+        cleanup: closeBrowser,
       });
       assert(sw, "Service worker must be running");
       const extId = new URL(sw.url).host;
@@ -327,8 +334,7 @@ Deno.test({
       assertEquals(titleAfter, "ZZZ Renamed Name", "Thread header must show updated name after reload");
       assertEquals(stateAfter, "ZZZ Renamed Name", "History state must be updated to fresh name");
     } finally {
-      try { ws.close(); } catch { /* closed */ }
-      await teardownChrome(launched, profile);
+      await closeBrowser();
     }
   },
 });
@@ -361,10 +367,20 @@ Deno.test({
       ],
     });
 
+    // 2syam: ONE physical teardown per launch (assigned just below, after the launch, so the teardown
+    // guard can associate it). Declared here so both the refusal path and `finally` can call it.
+    let closeBrowser = async () => {};
     const ws = new WebSocket(launched.wsUrl);
     await new Promise((r) => (ws.onopen = r));
     let id = 0;
     const pending = new Map();
+    // 2syam: the ONE physical teardown for this launch — the refusal path calls it (Deno.exit() skips
+    // `finally`) and so does normal completion, so the teardown call site is not duplicated
+    // (tests/real-browser-teardown.test.ts:8ue3 counts exactly one per launch).
+    closeBrowser = async () => {
+      try { ws.close(); } catch { /* closed */ }
+      await teardownChrome(launched, profile);
+    };
     const send = (method: string, params: any = {}, sessionId?: string) =>
       new Promise<any>((res) => {
         const mid = ++id;
@@ -393,10 +409,7 @@ Deno.test({
         base: 10_000, // this journey's own readiness budget, scaled by measured contention
         ledgerIo,
         ledgerPath: refusalLedger,
-        cleanup: async () => {
-          try { ws.close(); } catch { /* closed */ }
-          await teardownChrome(launched, profile);
-        },
+        cleanup: closeBrowser,
       });
       assert(sw, "Service worker must be running");
       const extId = new URL(sw.url).host;
@@ -485,8 +498,7 @@ Deno.test({
       assertEquals(title, "V2", "the header must read the newer list-resolved name, never the stale caller name");
       assertEquals(stateName, "V2", "history.state must agree with the header after the surface settles");
     } finally {
-      try { ws.close(); } catch { /* closed */ }
-      await teardownChrome(launched, profile);
+      await closeBrowser();
     }
   },
 });

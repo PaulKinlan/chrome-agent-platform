@@ -102,6 +102,7 @@ Deno.test({
       ],
     });
 
+    let closeBrowser = async () => {};
     const ws = new WebSocket(launched.wsUrl);
     await new Promise((r) => (ws.onopen = r));
     let id = 0;
@@ -119,6 +120,13 @@ Deno.test({
         pending.delete(String(j.id));
       }
     };
+    // 2syam: ONE physical teardown site, called by the refusal path and by normal completion alike.
+    // Declared after the launch: the teardown guard associates a cleanup with the launch before it.
+    closeBrowser = async () => {
+      try { ws.close(); } catch { /* closed */ }
+      await teardownChrome(launched, profile);
+      await Deno.remove(downloads, { recursive: true }).catch(() => {});
+    };
 
     try {
       // chrome-agent-platform-2syam: wired to j5xbi's reference pattern (suite 4/6). The extension's
@@ -134,11 +142,7 @@ Deno.test({
         base: 10_000, // this journey's own readiness budget, scaled by measured contention
         ledgerIo,
         ledgerPath: refusalLedger,
-        cleanup: async () => {
-          try { ws.close(); } catch { /* closed */ }
-          await teardownChrome(launched, profile);
-          await Deno.remove(downloads, { recursive: true }).catch(() => {});
-        },
+        cleanup: closeBrowser,
       });
       assert(sw, "Service worker must be running");
       const extId = new URL(sw.url).host;
@@ -276,9 +280,7 @@ Deno.test({
       assertEquals(imported.role, card.role, "imported role equals the exported card's role");
       assertEquals(imported.skills ?? [], card.skills ?? [], "imported skills equal the exported card's skills");
     } finally {
-      try { ws.close(); } catch { /* closed */ }
-      await teardownChrome(launched, profile);
-      await Deno.remove(downloads, { recursive: true }).catch(() => {});
+      await closeBrowser();
     }
   },
 });

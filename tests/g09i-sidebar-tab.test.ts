@@ -40,10 +40,20 @@ Deno.test({
     // closure, and control-flow inference cannot follow an assignment inside `try` into a closure.
     let chrome: Awaited<ReturnType<typeof launchChrome>> | undefined;
     let cdp: Awaited<ReturnType<typeof openCdp>> | undefined;
+    let closeBrowser = async () => {};
     try {
       chrome = await launchChrome({ binary: BINARY!, args: ["--headless=new", "--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu",
         `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`, `--user-data-dir=${profile}`, "--window-size=1400,900", "about:blank"] });
       cdp = await openCdp(chrome.wsUrl, { timeoutMs: 15000 });
+      // 2syam: ONE physical teardown site, shared by the refusal path and the finally. It is declared
+      // AFTER the launch because tests/real-browser-teardown.test.ts associates a teardown with the
+      // launch that precedes it — a cleanup defined above its launch reads as "no teardown at all".
+      closeBrowser = async () => {
+        cdp?.close();
+        // NB: written as a bare identifier on purpose — tests/real-browser-teardown.test.ts reads the
+        // teardown's target syntactically, and `chrome!` is not a target it can associate with a launch.
+        if (chrome) await teardownChrome(chrome, profile);
+      };
       // 2syam: the readiness wait and its refusal decision are the reference pattern, in one helper
       // (scripts/lib/browser-harness-refusal.mjs) so six more journeys cannot each grow their own
       // slightly-different version of "is this machine too slow?". The bound scales with measured
@@ -54,10 +64,7 @@ Deno.test({
         base: 15_000, // this journey's own readiness budget, scaled by contention, not a fixed 15s
         ledgerIo,
         ledgerPath: refusalLedger,
-        cleanup: async () => {
-          cdp?.close();
-          if (chrome) await teardownChrome(chrome, profile);
-        },
+        cleanup: closeBrowser,
       });
       assert(sw, "the current extension service worker must register");
       const swTarget = sw as { url: string };
@@ -135,8 +142,7 @@ Deno.test({
       await Deno.writeTextFile(`${evidence}/focus.json`, JSON.stringify({ before, focus }, null, 2));
       console.log(`g09i native Tab browser evidence: ${evidence}`);
     } finally {
-      cdp?.close();
-      if (chrome) await teardownChrome(chrome, profile);
+      await closeBrowser();
     }
   },
 });
