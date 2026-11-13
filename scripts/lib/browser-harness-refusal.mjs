@@ -134,24 +134,12 @@ export function refuseIfStarved({
   };
 }
 
-/**
- * Condition 4: the unmeasured declaration for the tier ledger. A refused suite is named
- * individually — never folded into a pass, never into an "unmapped" coverage gap.
- *
- * @param {Array<{suite: string, refusals?: number}>} refusals
- * @returns {string|null}
- */
-export function formatUnmeasuredSuites(refusals = []) {
-  const named = refusals
-    .map((r) => String(r?.suite ?? "").trim())
-    .filter(Boolean)
-    .map((suite) => {
-      const count = Number(refusals.find((r) => r?.suite === suite)?.refusals);
-      return Number.isFinite(count) && count > 1 ? `${suite}(refused ${count}x)` : suite;
-    });
-  if (!named.length) return null;
-  return `fast-gate: unmeasured: ${named.join(" ")}`;
-}
+// amupt: there is exactly ONE renderer for condition 4 and it lives in gate-manifest.mjs
+// (`formatGateUnmeasured`, beside GATE_UNMEASURED_PREFIX and the other `fast-gate:` markers). A second
+// copy here — same prefix, same `(refused Nx)` shape, pinned by its own test — was two answers to "how
+// is unmeasured rendered": identical output today, silent divergence the first time either side was
+// edited. The consumer (emitGateLedger) was already the gate-manifest one, so this is the copy that
+// goes; the prefix constant is NOT redeclared anywhere.
 
 /**
  * Per-suite running refusal count, append-only in the evidence dir, so condition 3 has a number to

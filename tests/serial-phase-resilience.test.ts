@@ -1,4 +1,4 @@
-import { emitGateLedger } from "../scripts/lib/gate-manifest.mjs";
+import { emitGateLedger, formatGateUnmeasured } from "../scripts/lib/gate-manifest.mjs";
 // tests/serial-phase-resilience.test.ts — chrome-agent-platform-6yrq
 //
 // Proves the serial gate phase is resilient against indefinite wedges:
@@ -16,6 +16,7 @@ import { assert, assertEquals } from "jsr:@std/assert@1";
 import {
   classifyReadyMarkerTimeout,
   currentStealFractionSync,
+  MAX_LOAD_SCALE,
   readinessStealSignal,
   stealSampleSync,
   runSerialFile,
@@ -25,14 +26,14 @@ import {
   browserReadyTimeoutMs,
   CAP_ENVIRONMENTAL_REFUSAL,
   countRefusals,
+  ENVIRONMENTAL_REFUSAL_EXIT,
+  exitWithRefusal,
   refusalsFromLedger,
   currentAbsoluteLoad,
-  formatUnmeasuredSuites,
   recordRefusal,
   refuseIfStarved,
 } from "../scripts/lib/browser-harness-refusal.mjs";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
-
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 
 /**
@@ -1130,9 +1131,12 @@ Deno.test("j5xbi refusal (3): starvation cannot mask a broken suite - a quiet bo
 });
 
 Deno.test("j5xbi refusal (4): a refused suite is DECLARED unmeasured, named individually, never folded into a pass", () => {
-  assertEquals(formatUnmeasuredSuites([]), null, "no refusals means no line");
+  // amupt: `formatUnmeasuredSuites` (a second, test-only renderer with the same prefix and the same
+  // `(refused Nx)` shape) is gone. Condition 4 has ONE renderer — `formatGateUnmeasured`, beside
+  // GATE_UNMEASURED_PREFIX — and this leg is what pins its output, so the two cannot drift.
+  assertEquals(formatGateUnmeasured([]), null, "no refusals means no line");
   assertEquals(
-    formatUnmeasuredSuites([
+    formatGateUnmeasured([
       { suite: "tests/agent-header-rename-reload.test.ts", refusals: 1 },
       { suite: "tests/mic-shadow-host-journey.test.ts", refusals: 3 },
     ]),
@@ -1229,4 +1233,94 @@ Deno.test("j5xbi refusal (dqk0e): a row from a PREVIOUS run cannot declare a sui
   // A row with no parseable timestamp is excluded when a scope is given: we cannot prove it is ours.
   const untimed = JSON.stringify({ suite: "tests/agent-share-import.test.ts" });
   assertEquals(refusalsFromLedger({ readFile: () => untimed, exists: () => true }, "l", { since }), []);
+});
+
+Deno.test("j5xbi helper (f8li1): the browser readiness deadline IS the serial deadline — one scale, one ceiling, NaN-safe", () => {
+  // f8li1: the fc6d8e8b1 hand-off claimed "a leg asserts they agree on identical inputs" and no such
+  // leg existed at any commit (grep -c browserReadyTimeoutMs == 1, the import line). Both helpers are
+  // on a production path, so the claim becomes committed coverage here — names, not prose.
+  //
+  // `load` is the ABSOLUTE 1-minute load and only browserReadyTimeoutMs reads it (a browser start is
+  // slowed by how many runnable tasks contend, regardless of core count); with `load` absent the two
+  // functions must be the SAME function, because a repo holding two answers to "how slow may this
+  // machine make us" is the drift shape this crate of beads exists to remove.
+  const base = 10_000;
+  const cases: Array<{ what: string; load: number | null; loadPerCpu: number | null; steal: number | null }> = [
+    { what: "quiet box", load: null, loadPerCpu: 1, steal: null },
+    { what: "idle load average", load: 1, loadPerCpu: 1, steal: null },
+    { what: "per-CPU load only", load: null, loadPerCpu: 2.5, steal: null },
+    { what: "past the ceiling", load: null, loadPerCpu: 99, steal: 0.9 },
+    { what: "steal is the only measured signal", load: null, loadPerCpu: 1, steal: 0.647 },
+    { what: "steal inside the dead band is noise", load: null, loadPerCpu: 1, steal: 0.01 },
+    { what: "unmeasurable everything", load: null, loadPerCpu: null, steal: null },
+    { what: "NaN on every signal", load: NaN, loadPerCpu: NaN, steal: NaN },
+  ];
+  for (const c of cases) {
+    const browser = browserReadyTimeoutMs({ base, load: c.load, loadPerCpu: c.loadPerCpu, steal: c.steal });
+    const serial = serialFileTimeoutMs({ base, loadPerCpu: c.loadPerCpu ?? undefined, steal: c.steal });
+    assert(Number.isFinite(browser), `${c.what}: a readiness deadline must be a number, got ${browser}`);
+    assertEquals(
+      browser,
+      serial,
+      `${c.what}: the browser and serial deadlines must agree on identical inputs (${browser} vs ${serial}) — ` +
+        "a second scale factor here is a second answer to how slow this machine may make us",
+    );
+  }
+  // The ceiling is MAX_LOAD_SCALE (x4), shared with serialFileTimeoutMs, not a number of its own.
+  assertEquals(browserReadyTimeoutMs({ base, load: 99, loadPerCpu: 99, steal: 0.99 }), base * MAX_LOAD_SCALE);
+  // The ONE intended divergence, pinned as two literals rather than described: the browser deadline
+  // ALSO reads the ABSOLUTE 1-minute load, because a Chromium start is slowed by how many runnable
+  // tasks contend regardless of core count — on this 8-CPU box at absolute 9.8 the per-CPU reading is
+  // 1.22, a factor that rounds almost to one while five browser suites were reddening on one gate
+  // (measured, and the reason this parameter exists at all). serialFileTimeoutMs is per-CPU only, so
+  // on the same box it reads 14.4s and the browser deadline takes the x4 ceiling. Same ceiling
+  // constant, one extra measured signal — not two answers to the same question.
+  const starved = { load: 9.8, loadPerCpu: 1.22, steal: 0.306 };
+  assertEquals(serialFileTimeoutMs({ base, loadPerCpu: starved.loadPerCpu, steal: starved.steal }), 14_409);
+  assertEquals(browserReadyTimeoutMs({ base, ...starved }), 40_000, "the reviewer's starved box: abs 9.8 + steal 0.306 -> the 40s ceiling");
+  // A base override scales, it does not bypass the measurement.
+  assertEquals(browserReadyTimeoutMs({ base: 1_000, load: 4, loadPerCpu: 1, steal: null }), 4_000);
+});
+
+Deno.test("j5xbi helper (f8li1): exitWithRefusal tears down BEFORE it leaves, and a failing teardown still refuses", async () => {
+  // f8li1: xff9d's fix (cleanup runs before the refusal exit) was pinned only by a manual probe
+  // quoted in a bead comment. The ordering is the entire point — Deno.exit() skips `finally`, so a
+  // refusal that exits first leaks the Chromium process, its profile and the suite's HTTP server —
+  // so it gets a committed leg with the exit injected (no process leaves during the test).
+  const receipt = `${CAP_ENVIRONMENTAL_REFUSAL} exitWithRefusal leg: cleanup ran first`;
+  const realError = console.error;
+  const realLog = console.log;
+  const order: string[] = [];
+  let code: number | null = null;
+  const exit = ((c: number) => {
+    code = c;
+    order.push("exit");
+    return undefined as never;
+  }) as never;
+  try {
+    console.error = (...args: unknown[]) => order.push(`receipt:${args.map(String).join(" ")}`);
+    console.log = console.error;
+
+    // (a) a clean teardown: cleanup -> receipt -> exit(75), in that order.
+    await exitWithRefusal({ receipt, cleanup: async () => { order.push("cleanup"); }, exit });
+    assertEquals(code, ENVIRONMENTAL_REFUSAL_EXIT, "a refusal must leave with 75, not 1 (a red) and not 0 (a pass)");
+    assertEquals(order, ["cleanup", `receipt:${receipt}`, "exit"], `cleanup must run BEFORE the exit: ${order.join(" -> ")}`);
+
+    // (b) a teardown that THROWS must not turn the refusal into a red: the process still leaves 75.
+    order.length = 0;
+    code = null;
+    await exitWithRefusal({
+      receipt,
+      cleanup: () => {
+        order.push("cleanup");
+        throw new Error("teardown failed (the leak this leg exists to prevent)");
+      },
+      exit,
+    });
+    assertEquals(code, ENVIRONMENTAL_REFUSAL_EXIT, "a failing cleanup must not soften or harden the refusal code");
+    assertEquals(order, ["cleanup", `receipt:${receipt}`, "exit"], `a throwing cleanup still leaves AFTER trying: ${order.join(" -> ")}`);
+  } finally {
+    console.error = realError;
+    console.log = realLog;
+  }
 });
