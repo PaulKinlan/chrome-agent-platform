@@ -98,14 +98,6 @@ Deno.test("weights bookkeeping (jw8a6): the committed table equals a fresh deriv
 // and it is self-cleaning: an entry whose file is measured again, or no longer live, reds, so the
 // table empties itself when the digest is next re-cut.
 const UNMEASURED_POPULATION_CHANGES = new Map<string, { secs: number; why: string }>([
-  // yqhb2: a population change AFTER the digest tree was cut, declared with its measurement rather
-  // than left as a silent hole. It is a text scan over scripts/+extension/ with no browser and no
-  // build: measured 111-127ms in four local runs. This entry is self-cleaning — the assertion below
-  // reds once the file is measured again, so the next digest re-cut must delete it.
-  ["tests/best-effort-write-guard.test.ts", {
-    secs: 0.12,
-    why: "yqhb2: added after the digest on tree 9a6fc7ab184c; a text-only sweep (~120ms), no browser/build",
-  }],
   // EMPTY, and that is the point (re-cut 2026-11-12 on tree 9a6fc7ab184c, the six-bead landing):
   // every entry here is a self-cleaning exemption that must be DELETED the moment the digest is
   // re-cut, because a declaration is only valid while it is true. The re-cut measured all of them,
