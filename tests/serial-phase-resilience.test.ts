@@ -763,22 +763,37 @@ Deno.test("lzccc: a WINDOWED stolen wait earns the grace end-to-end, from counte
   // soft deadline. Whatever moment the runner samples, the pair straddles growth, and the growth
   // is overwhelmingly steal (~300 steal jiffies per 305 total => ~98%). No schedule of this
   // process can put both samples on the same value.
-  const advance = new Deno.Command("sh", {
+  const advanceCommand = new Deno.Command("sh", {
     // NB: the payload is a shell SINGLE-QUOTED literal, not JSON.stringify — JSON quoting would
     // put literal quotes and a literal backslash-n into the stat file, the parser would reject
     // the line, and the leg would fail with steal=0 while looking like a runner fault (measured).
+    //
+    // 1ycrd: write the snapshot to a SIBLING temp file and rename it ONTO the stat file. A plain
+    // `> statFile` redirection truncates first, and the runner samples this file twice from another
+    // process; a read landing in the truncate->write gap parsed as "" -> null sample -> the window
+    // was unusable -> instant fallback -> the leg red-ed (~0.05%/read measured, higher under steal —
+    // the same machine-state flake class 6qnjf exists to remove). rename(2) within a directory is
+    // atomic, so no schedule of writer and reader can observe a partial file.
     args: ["-c", `i=0; while [ $i -le 120 ]; do
-      printf 'cpu  0 0 0 %s 0 0 0 %s 0 0\\n' "$((i*5))" "$((i*300))" > ${JSON.stringify(statFile)}
+      printf 'cpu  0 0 0 %s 0 0 0 %s 0 0\\n' "$((i*5))" "$((i*300))" > ${JSON.stringify(`${statFile}.tmp`)}
+      mv -f ${JSON.stringify(`${statFile}.tmp`)} ${JSON.stringify(statFile)}
       i=$((i+1)); sleep 0.1
     done`],
     stdout: "null",
     stderr: "null",
-  }).spawn();
-  await Deno.writeTextFile(tempTest, `${selfReapWatchdog(`${tempTest}.runner`)}await new Promise((resolve) => setTimeout(resolve, ${softMs + lateMarginMs}));
+  });
+  // rbpb1: the writer must outlive the runner's TWO samples, not the leg. It started life outside
+  // the try and was only awaited in `finally`, so every run paid its full ~12s ramp even though
+  // runSerialFile returns after ~soft+1.5s (leg 5s -> 13s, measured by rev-6qnjf2). Spawning inside
+  // the try and KILLING it in `finally` keeps the guarantee and gives back ~8s of a parallel slot
+  // per gate — and it also means a throw between spawn and the run cannot leak the writer.
+  let advance: Deno.ChildProcess | undefined;
+  try {
+    advance = advanceCommand.spawn();
+    await Deno.writeTextFile(tempTest, `${selfReapWatchdog(`${tempTest}.runner`)}await new Promise((resolve) => setTimeout(resolve, ${softMs + lateMarginMs}));
 await Deno.writeTextFile(${JSON.stringify(readyFile)}, "ready");
 Deno.test("passes after late marker", () => {});
 `);
-  try {
     const res = runSerialFile(tempTest, {
       timeoutMs: 2_000,
       readyFile,
@@ -796,7 +811,10 @@ Deno.test("passes after late marker", () => {});
     assert(named, `the receipt names the steal it measured: ${err}`);
     assert(Number(named[1]) > 0.4, `the named steal must be the WINDOW's, not an instant: ${err}`);
   } finally {
-    await advance.status.catch(() => {});
+    // rbpb1: stop the ramp the moment the runner has taken its samples; `status` still resolves so
+    // no zombie or unawaited child outlives the leg. kill() on an already-exited child is caught.
+    try { advance?.kill(); } catch { /* already gone: the ramp finished or the sh exited */ }
+    await advance?.status.catch(() => {});
     await Deno.remove(tempDir, { recursive: true }).catch(() => {});
   }
 });
