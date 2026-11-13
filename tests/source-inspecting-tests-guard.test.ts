@@ -247,9 +247,122 @@ export function findUnclassifiedSourceScanners(
   // `walk(fileURLToPath(new URL("../extension", import.meta.url)))`, and an identifier-only rule misses
   // both. Argument extraction does not demand a closing paren either: `walk(root, opts)` and
   // `walk(abs, rel)` are ordinary calls (reviewer P1/P2).
+  // chrome-agent-platform-n2u40: the HELPER'S NAME is not the signal either. tests/onmessage-sender-guard.test.ts
+  // walks extension/ through a LOCAL helper — `walkJsFiles(dir)`, whose body calls
+  // `fs.readdirSync(dir, { withFileTypes: true })` — so the walk is ONE CALL AWAY from the name list above
+  // and `walkJsFiles(EXTENSION_DIR)` matched none of those patterns. It sat outside SOURCE_INSPECTING_GUARDS
+  // and three consecutive service-worker.js deltas gated without it (cac6c added it by hand); this closes the
+  // detector so the next readdirSync-shaped census cannot hide.
+  // The rule generalises WITHOUT reopening the over-match the p1lp notes above are about, because it keeps
+  // both halves that made the rule sound: a function DEFINED IN THIS FILE whose body reads a directory is a
+  // walk whatever it is called, AND the call site's first argument must still DENOTE a source root. A
+  // fixture-reading helper called with a fixture dir stays out, exactly as a DOM walk does.
+  const DIRECTORY_READ_RE = /\b(?:readdir|readdirSync|opendir|opendirSync|readDir|readDirSync)\s*\(/;
+  /** The braced body starting at `open` (a "{" index), brace-matched. */
+  const bracedBodyFrom = (code: string, open: number): string | null => {
+    if (code[open] !== "{") return null;
+    let depth = 0;
+    for (let i = open; i < code.length; i++) {
+      if (code[i] === "{") depth++;
+      else if (code[i] === "}") {
+        depth--;
+        if (depth === 0) return code.slice(open, i + 1);
+      }
+    }
+    return null;
+  };
+  /** The body after an arrow's `=>`: a braced block, or the EXPRESSION up to the end of its statement. */
+  const arrowBodyFrom = (code: string, afterArrow: number): string => {
+    let i = afterArrow;
+    while (i < code.length && /\s/.test(code[i])) i++;
+    if (code[i] === "{") return bracedBodyFrom(code, i) ?? "";
+    // Expression body: read to a `;` or a newline at depth 0 (a call that wraps lines keeps its depth).
+    let depth = 0;
+    const start = i;
+    for (; i < code.length; i++) {
+      const c = code[i];
+      if (c === "(" || c === "[" || c === "{") depth++;
+      else if (c === ")" || c === "]" || c === "}") {
+        if (depth === 0) break;
+        depth--;
+      } else if (depth === 0 && (c === ";" || c === "\n")) break;
+    }
+    return code.slice(start, i);
+  };
+  /**
+   * EVERY body `code` gives the identifier `name`, across the spellings a local helper actually takes:
+   * a function declaration, a function expression assigned to it, a named arrow (braced OR
+   * expression-bodied), and an object-method/class-method shorthand. The first version of this rule read
+   * only `function name(` and `=> {` bodies, and the delta review (chrome-agent-platform-5b15m) proved it
+   * still missed three same-class spellings — `const scanDir = (dir) => fs.readdirSync(dir, …)`,
+   * `const scanDir = function (dir) { … }`, and `const h = { scanDir(dir) { … } }` with `h.scanDir(…)` —
+   * each a local directory-reading helper seeded with a source root, i.e. precisely the hole n2u40 exists
+   * to close. Enumerating DEFINITION spellings is what kept missing them, so the bodies are gathered
+   * from the callee NAME instead: any body this file gives that name counts.
+   */
+  /**
+   * Every body `code` gives each identifier, across the spellings a local helper actually takes: a
+   * function declaration, a function expression assigned to it, a named arrow (braced OR
+   * expression-bodied), and an object-method/class-method shorthand. The first version of this rule read
+   * only `function name(` and `=> {` bodies, and the delta review (chrome-agent-platform-5b15m) proved it
+   * still missed three same-class spellings — `const scanDir = (dir) => fs.readdirSync(dir, …)`,
+   * `const scanDir = function (dir) { … }`, and `const h = { scanDir(dir) { … } }` with `h.scanDir(…)` —
+   * each a local directory-reading helper seeded with a source root, i.e. exactly the hole n2u40 exists to
+   * close. Enumerating DEFINITION spellings is what kept missing them, so bodies are collected from the
+   * whole file ONCE, by NAME, in a single pass: one regex per spelling rather than one per name (the
+   * per-name form cost this always-on audit 37s a gate — measured 48s vs 11s on the suite).
+   */
+  const bodiesByName = (code: string): Map<string, string[]> => {
+    const bodies = new Map<string, string[]>();
+    const add = (name: string, body: string | null) => {
+      if (!body) return;
+      const list = bodies.get(name);
+      if (list) list.push(body);
+      else bodies.set(name, [body]);
+    };
+    /** The body that follows a declaration's parameter list: braced, skipping whitespace. */
+    const after = (index: number) => {
+      let i = index;
+      while (i < code.length && /\s/.test(code[i])) i++;
+      return bracedBodyFrom(code, i);
+    };
+    for (const m of code.matchAll(/\bfunction\s+([A-Za-z_$][\w$]*)\s*\([^)]*\)/g)) add(m[1], after(m.index + m[0].length));
+    for (const m of code.matchAll(/\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?function\s*\([^)]*\)/g)) add(m[1], after(m.index + m[0].length));
+    for (const m of code.matchAll(/\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*=>/g)) add(m[1], arrowBodyFrom(code, m.index + m[0].length));
+    // Object-method shorthand (`{ scanDir(dir) { … } }`) and class methods: the call site reaches the
+    // method as `obj.name(`, so matching the DECLARATION by name is enough — the verdict still requires a
+    // source root at the call site.
+    for (const m of code.matchAll(/(?:^|[{,;])\s*(?:async\s+)?(?:get\s+|set\s+)?([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*\{/gm)) {
+      add(m[1], bracedBodyFrom(code, code.indexOf("{", m.index + m[0].length - 1)));
+    }
+    return bodies;
+  };
+  /** Names of functions DEFINED IN THIS FILE whose body calls a directory-read API. */
+  const localDirectoryReaders = (code: string): string[] => {
+    // Most files never touch a directory API; bail before building anything.
+    if (!DIRECTORY_READ_RE.test(code)) return [];
+    const found: string[] = [];
+    for (const [name, list] of bodiesByName(code)) {
+      if (list.some((body) => DIRECTORY_READ_RE.test(body))) found.push(name);
+    }
+    return found;
+  };
   const walkOrReadRoots = (code: string, rel: string) =>
-    ["walk", "readDir", "readDirSync", "readdir", "readdirSync", "opendir", "opendirSync"].flatMap((name) => firstArgs(code, name))
+    ["walk", "readDir", "readDirSync", "readdir", "readdirSync", "opendir", "opendirSync"]
+      .flatMap((name) => firstArgs(code, name))
       .filter((arg) => (/^[A-Za-z_$][\w$]*$/.test(arg) ? identifierIsSourceRoot(arg, code, rel) : denotesSourceRoot(arg, rel)));
+  // The LOCAL-HELPER rule is scoped to TEST files on purpose. Out in scripts/, a tree-copying or
+  // tree-digesting helper (`treeRecords(root)`, `copyTree(source, dest)`) is a PRODUCTION function whose
+  // argument is an ordinary parameter, not a census of the repo's source — applying the helper rule there
+  // flagged scripts/emscripten-abi-loaded.ts and demanded an always-on consumer for a build/verify helper
+  // (measured while widening: 2irv and i0rf N2 both reddened). The hole this closes is a TEST guard's, so
+  // the test tree is where it applies; non-test helpers keep the definition-based rules they already had.
+  const localHelperRoots = (code: string, rel: string) =>
+    IS_TEST_RE.test(rel)
+      ? localDirectoryReaders(code)
+        .flatMap((name) => firstArgs(code, name))
+        .filter((arg) => (/^[A-Za-z_$][\w$]*$/.test(arg) ? identifierIsSourceRoot(arg, code, rel) : denotesSourceRoot(arg, rel)))
+      : [];
   for (const { rel, code } of testFiles) {
     const isTest = IS_TEST_RE.test(rel);
     // Non-test support modules INSIDE tests/** cannot be silenced by ALWAYS_ON or
@@ -267,7 +380,7 @@ export function findUnclassifiedSourceScanners(
     // prose patterns (SCAN_DIRS, git ls-files, GUARD_ROOTS) cannot match support modules because
     // helpers have no exemption path and comment mentions must not cause unactionable reds (afpl Finding 2).
     const matchesScanner = isTest
-      ? (SCANNER_PATTERNS.some((pat) => pat.test(code)) || walkOrReadRoots(code, rel).length > 0)
+      ? (SCANNER_PATTERNS.some((pat) => pat.test(code)) || walkOrReadRoots(code, rel).length > 0 || localHelperRoots(code, rel).length > 0)
       : (walkOrReadRoots(code, rel).length > 0);
     if (matchesScanner) {
       unclassified.push(rel);
@@ -708,6 +821,100 @@ Deno.test("p1lp: REAL-TREE symmetry — a lowercase-alias source-root walk is fl
     findUnclassifiedSourceScanners([read("tests/agent-permissions-panel.test.ts")], unlisted),
     [],
     "a walk over a NON-source identifier (a DOM node) must NOT be flagged — admitting it is the over-match that cost 23s a gate",
+  );
+});
+
+Deno.test("n2u40: a LOCAL dir-reading helper called with a source root is a scanner — the shape that hid a guard for three SW deltas", () => {
+  // chrome-agent-platform-n2u40. tests/onmessage-sender-guard.test.ts walks extension/ through a LOCAL
+  // helper, `walkJsFiles(dir)`, whose body calls fs.readdirSync(dir, { withFileTypes: true }), and is
+  // seeded as `walkJsFiles(EXTENSION_DIR)`. Every pattern the audit had matched a walk by its NAME, so
+  // this one matched nothing: the guard sat outside SOURCE_INSPECTING_GUARDS while three consecutive
+  // service-worker.js deltas gated without it (cac6c listed it by hand). The rule is now "a function
+  // DEFINED IN THE FILE whose body reads a directory, called with an argument that DENOTES a source
+  // root" — both halves, which is what keeps the p1lp over-match out.
+  const rel = "tests/fake-local-helper-walk.test.ts";
+  const code = [
+    'import * as fs from "node:fs";',
+    'function scanDir(dir: string) {',
+    '  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {',
+    '    if (entry.isDirectory) scanDir(path.join(dir, entry.name));',
+    '  }',
+    '}',
+    'scanDir(EXTENSION_DIR);',
+  ].join("\n");
+  assertEquals(
+    findUnclassifiedSourceScanners([{ rel, code }], new Set()),
+    [rel],
+    "a local dir-reading helper seeded with EXTENSION_DIR must be flagged — the n2u40 hole",
+  );
+
+  // 5b15m (delta review of n2u40): the SAME helper spelled three other ways must be flagged too. The
+  // first version of the rule read only named function declarations and braced arrows, so these three —
+  // each a local directory-reading helper seeded with a source root — still escaped. Enumerating
+  // definition spellings is what kept missing them; bodies are now collected from the whole file by name.
+  const spellings: [string, string][] = [
+    ["expression-bodied arrow", 'const scanDir = (dir: string) => fs.readdirSync(dir, { withFileTypes: true });\nscanDir(EXTENSION_DIR);'],
+    ["anonymous function expression", 'const scanDir = function (dir: string) { for (const e of fs.readdirSync(dir)) void e; };\nscanDir(EXTENSION_DIR);'],
+    ["object-method shorthand", 'const h = { scanDir(dir: string) { for (const e of fs.readdirSync(dir)) void e; } };\nh.scanDir(EXTENSION_DIR);'],
+  ];
+  for (const [label, spelling] of spellings) {
+    assertEquals(
+      findUnclassifiedSourceScanners([{ rel: "tests/zz-5b15m-probe.test.ts", code: spelling }], new Set()),
+      ["tests/zz-5b15m-probe.test.ts"],
+      `the ${label} spelling of a local directory-reading helper must be flagged`,
+    );
+  }
+
+  // OVER-MATCH 1: the same helper reading a FIXTURE directory is not a census of tracked source.
+  const fixtureOnly = [
+    'import * as fs from "node:fs";',
+    'function readFixtureDir(dir: string) { for (const e of fs.readdirSync(dir)) void e; }',
+    'readFixtureDir(FIXTURES);',
+  ].join("\n");
+  assertEquals(
+    findUnclassifiedSourceScanners([{ rel: "tests/fake-fixture-reader.test.ts", code: fixtureOnly }], new Set()),
+    [],
+    "a fixture-directory reader must NOT be admitted — the fgik/p1lp over-match class",
+  );
+
+  // OVER-MATCH 2, measured while widening: a PRODUCTION helper out in scripts/ (treeRecords(root) over
+  // Deno.readDir, called as treeRecords(EXTENSION)) is a build/verify function, not a guard. Applying the
+  // helper rule outside the test tree flagged scripts/emscripten-abi-loaded.ts and reddened the 2irv and
+  // i0rf N2 legs, so the rule is scoped to TEST files; the SAME code as a test file is flagged, which is
+  // what proves the scoping is deliberate rather than an accident of the pattern.
+  const helperCode = [
+    'const ROOT = fileURLToPath(new URL("..", import.meta.url));',
+    'const EXTENSION = join(ROOT, "extension");',
+    'async function treeRecords(root: string) { for await (const e of Deno.readDir(join(root, ""))) void e; }',
+    'await treeRecords(EXTENSION);',
+  ].join("\n");
+  assertEquals(
+    findUnclassifiedSourceScanners([{ rel: "scripts/zz-lib-helper.ts", code: helperCode }], new Set()),
+    [],
+    "a production tree helper outside tests/ is not a source-scanning TEST guard",
+  );
+  assertEquals(
+    findUnclassifiedSourceScanners([{ rel: "tests/zz-lib-helper.test.ts", code: helperCode }], new Set()),
+    ["tests/zz-lib-helper.test.ts"],
+    "the same shape in the test tree IS the scanner the audit exists for",
+  );
+
+  // REAL TREE: the shape the bead exists for, found by the widened detector in a file this repo ships.
+  // The file itself is DECLARED (SCANNER_EXCLUSIONS skips a classified file whatever the alwaysOn set
+  // says), so detection is proved by feeding its REAL source under an unclassified name — that shows the
+  // widened rule against shipped code rather than against a synthetic string, while the declaration below
+  // shows the verdict was written down (reason + bead) instead of the file being quietly skipped.
+  const realRel = "tests/unbuilt-tree-imports.test.ts";
+  const realCode = readFileSync(join(ROOT, realRel), "utf8");
+  const probeRel = "tests/zz-unbuilt-tree-imports-probe.test.ts";
+  assertEquals(
+    findUnclassifiedSourceScanners([{ rel: probeRel, code: realCode }], new Set()),
+    [probeRel],
+    "the widened detector must flag a REAL local-helper walk (scanDir(EXTENSION_DIR)) when it is not declared",
+  );
+  assert(
+    Object.hasOwn(SCANNER_EXCLUSIONS, realRel),
+    "and its adjudication is WRITTEN DOWN (SCANNER_EXCLUSIONS) rather than left as a silent hole",
   );
 });
 

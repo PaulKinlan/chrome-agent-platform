@@ -96,8 +96,8 @@ export const SOURCE_INSPECTING_GUARDS = [
   "tests/sw-dispatch-authority-census.test.ts",
   // cac6c: the AST census of EVERY runtime.onMessage listener in extension/ walks the
   // tree with fs.readdirSync — no static import edge from the files it polices (and the
-  // source-inspecting meta-guard's walk detector does not recognise that shape, a
-  // detection gap filed separately). THREE consecutive deltas edited service-worker.js
+  // source-inspecting meta-guard's walk detector does not recognise that shape until
+  // n2u40 closed it — the manual entry stays as the second line of defence). THREE consecutive deltas edited service-worker.js
   // (lrhyl, hvd4s, khwi9) with this guard never selected, and a P1 reply-before-trust
   // dispatcher hole reached main and lived there until the merger's full suite caught
   // it. A SW-only edit must select the listener census, exactly like the o75bp entries.
@@ -265,6 +265,19 @@ export const SOURCE_INSPECTING_GUARDS = [
  * audit FAIL CLOSED, which is the detector working as intended.
  */
 export const SCANNER_EXCLUSIONS = Object.freeze({
+  // chrome-agent-platform-n2u40: the WIDENED detector's first new find. tests/unbuilt-tree-imports.test.ts
+  // is a genuine repo census — `scanDir(dir)` calls fs.readdirSync(dir) and is invoked as
+  // `scanDir(EXTENSION_DIR)`, exactly the local-helper shape that hid tests/onmessage-sender-guard.test.ts
+  // until cac6c listed it by hand. It is a 127ms browser-free text scan and it OUGHT to be always-on, but
+  // it cannot be: its assertions quote the string "dist/shared/diff-core.bundle.js", so
+  // findDistConsumers' `referencesDistTree` reads the guard that FORBIDS dist imports as a CONSUMER of the
+  // built dist tree, and tests/source-inspecting-tests-guard.test.ts luq4w fails — an always-on member
+  // cannot force a store build into every fast gate. Excluded with this reason rather than promoted
+  // red; unblocking it needs the reference/read distinction in scripts/build-if-needed.mjs, filed as its
+  // own bead. Do not delete this entry without that fix.
+  "tests/unbuilt-tree-imports.test.ts":
+    "chrome-agent-platform-n2u40: a real repo census (scanDir/fs.readdirSync over EXTENSION_DIR) that cannot be always-on yet — its own assertions mention dist/ paths, so findDistConsumers counts this FORBIDDING guard as a dist consumer and luq4w would demand a store build in every fast gate. 127ms text scan, no browser. Promote the moment build-if-needed.mjs distinguishes a dist reference from a read.",
+
   // chrome-agent-platform-luq4w: the original file also materializes the entire source tree
   // and runs generated-package verification twice. Its text-path check is always-on in
   // evidence-durable-static; its binary/verification coverage stays in the full suite.
