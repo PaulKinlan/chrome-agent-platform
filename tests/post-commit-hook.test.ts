@@ -355,3 +355,21 @@ Deno.test("uikt5: a self-declared internal note aborts the entire union before s
     await assertUnstamped(dir);
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
+
+// chrome-agent-platform-g0bfz: the stamp reads a Release-note line ANYWHERE in a
+// message; git reads only a trailer block at the end. The stamp must not become
+// unlandable over that (existing cleared branches carry the shape), so at landing
+// it WARNS and names the disagreement — while the lane pre-flight REFUSES the
+// shape at authoring time (tests/release-note-preflight.test.ts).
+Deno.test("g0bfz: a note git cannot parse as a trailer still stamps, with the disagreement printed", async () => {
+  const dir = await mirror();
+  try {
+    const subjectNote = commit(dir, "Release-note: you can export conversations");
+    const result = stamp(dir, "--from", subjectNote);
+    assertEquals(result.status, 0, result.stderr);
+    assertEquals(await version(dir), "1.2.4", "the stamp still mints the release");
+    assert(/WARNING: candidate/.test(result.stderr), result.stderr);
+    assert(/git's trailer parser reads 0/.test(result.stderr), result.stderr);
+    assert(/TRAILER BLOCK at the END/.test(result.stderr), "names the accepted shape");
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});

@@ -206,3 +206,40 @@ Deno.test("2h4j7 CLI: commitsInRange skips merge commits and reads files per com
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+// chrome-agent-platform-g0bfz: ONE note, TWO readers. The stamp greps the body;
+// git reads a trailer block at the END of it. A note in the SUBJECT (gzkmx) or in
+// the MIDDLE of a body (0740d9df0, grep line 44) satisfied the stamp and was
+// invisible to `git log --format=%(trailers)` — "a note exists and does not
+// exist". Coord's ruling: reject the shape at AUTHORING time, naming the shape,
+// because a note written as the subject is the natural mistake (both sightings
+// did exactly that).
+Deno.test("g0bfz: a note in the SUBJECT is RED at authoring time, naming the accepted shape", () => {
+  const verdict = classifyCommit({
+    files: PRODUCT,
+    body: "Release-note: Extension modules were reorganized so shared helpers live in one place\n\nSome body text after the note.\n",
+  });
+  assertEquals(verdict.ok, false);
+  if (!verdict.ok) {
+    assertStringIncludes(verdict.reason, "shape is not one both readers accept");
+    assertStringIncludes(verdict.reason, "TRAILER BLOCK at the END");
+    assertStringIncludes(verdict.reason, "SUBJECT");
+    assertStringIncludes(verdict.reason, "%(trailers)");
+  }
+});
+
+Deno.test("g0bfz: a note in the MIDDLE of the body, and a WRAPPED note, are RED for the same reason", () => {
+  for (const body of [
+    `fix(x): thing\n\nRelease-note: ${USER_WORDS}.\nand then more prose after it\n`,
+    `fix(x): thing\n\nRelease-note: ${USER_WORDS}\nand the sentence wraps onto a second line\n`,
+  ]) {
+    const verdict = classifyCommit({ files: PRODUCT, body });
+    assertEquals(verdict.ok, false, body);
+    if (!verdict.ok) assertStringIncludes(verdict.reason, "shape is not one both readers accept");
+  }
+});
+
+Deno.test("g0bfz: a note in the trailing trailer block is still GREEN — the rule is the shape, not a ban", () => {
+  const verdict = classifyCommit({ files: PRODUCT, body: `fix(x): thing\n\nbody prose\n\nRelease-note: ${USER_WORDS}.\n` });
+  assertEquals(verdict, { ok: true });
+});
