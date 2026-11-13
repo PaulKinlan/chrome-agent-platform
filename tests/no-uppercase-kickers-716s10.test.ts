@@ -3,10 +3,23 @@
 // Remove uppercase-tracked kicker labels across Hub, Settings, Directory, Sidepanel, and Privacy.
 
 import { assertEquals } from "jsr:@std/assert@1";
-import { readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { appendFileSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { launchChrome, openCdp, computeUnpackedExtensionId, resolveChromiumBinaryReport, teardownChrome } from "../scripts/lib/chrome-launch.ts";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
+import { awaitServiceWorkerOrRefuse } from "../scripts/lib/browser-harness-refusal.mjs";
+
+// chrome-agent-platform-2syam: wired to j5xbi's reference pattern. The service worker is the
+// journey's precondition, so its absence is decided by the shared helper: under MEASURED starvation
+// (loadPerCpu >= 1.5 or steal >= 0.25) that is an ENVIRONMENTAL REFUSAL (exit 75, named individually
+// in the tier ledger as `fast-gate: unmeasured: tests/no-uppercase-kickers-716s10.test.ts(refused Nx)`);
+// on a quiet box the helper returns null and the assertion below reds this suite as a PRODUCT defect.
+const refusalLedger = Deno.env.get("CAP_BROWSER_REFUSAL_LEDGER") ?? `${durableDir("browser-harness")}/refusals.jsonl`;
+const ledgerIo = {
+  readFile: (path: string) => readFileSync(path, "utf8"),
+  writeFile: (path: string, text: string) => appendFileSync(path, text),
+  ensureParent: (path: string) => { mkdirSync(dirname(path), { recursive: true }); },
+};
 
 // THE BROWSER IS RESOLVED, NOT PINNED (voicebox-beads-i76t). This test carried an absolute macOS
 // Chrome-for-Testing path: it existed on exactly one machine, so everywhere else the in-body statSync
@@ -121,7 +134,17 @@ Deno.test("716s.10: browser verification of sentence-case kickers and no upperca
   const cdp = await openCdp(wsUrl);
 
   try {
-    const sw = await cdp.serviceWorker({ timeoutMs: 15000 });
+    const sw = await awaitServiceWorkerOrRefuse({
+      suite: "tests/no-uppercase-kickers-716s10.test.ts",
+      cdp: cdp as unknown as { serviceWorker: (args: { timeoutMs: number }) => Promise<unknown> },
+      base: 15_000, // this journey's own readiness budget, scaled by measured contention
+      ledgerIo,
+      ledgerPath: refusalLedger,
+      cleanup: async () => {
+        cdp.close();
+        await teardownChrome(launched, tmpProfile);
+      },
+    });
     assertEquals(sw !== null, true, "Service worker target must register");
 
     const extId = await computeUnpackedExtensionId(join(Deno.cwd(), "extension"));
