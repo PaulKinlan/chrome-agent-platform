@@ -192,6 +192,24 @@ node scripts/bump-version.mjs patch --landing --from <candidate-sha> [--from <ne
 # The shared .git/hooks/post-commit dispatcher runs the tracked hook from the
 # committing worktree. Confirm the union contains the new hook before the
 # landing commit; an older worktree can still amend/stamp commits.
+#
+# WHEN TO CHECK THE OWED-CHANGELOG LEDGER (chrome-agent-platform-v822k): run
+# `node scripts/check-owed-changelog.mjs` AFTER this stamp, never before it. On an
+# UN-STAMPED union that contains a product commit the check says OWED-CHANGELOG
+# FAIL and names that commit — that is the pre-stamp state by construction, not a
+# defect in the commit. Two landings (the 4smxg merge-fold and 1p3r1) lost a round
+# trip to reading it the other way. The pre-stamp run is good for exactly one
+# thing: identifying WHICH commits are product changes, i.e. whether a stamp is
+# needed at all. A union of tests/scripts/docs only needs no stamp, and there a
+# pre-stamp clean IS the answer.
+#
+# A NOTE YOU CANNOT SEE IS NOT ABSENT (v822k/g0bfz): do not decide whether a
+# Release-note exists with a git TRAILER query. `%(trailers:key=Release-note,`
+# `valueonly)` returns EMPTY for a commit whose body carries a Release-note line
+# that this stamp accepts (measured on 0740d9df0: `git show -s --format=%B | grep
+# -n -i release-note` finds it on line 44). A note in the subject, or in the middle
+# of the body, is accepted-and-invisible to git's parser. If you need to know,
+# grep the body — or just run the stamp, which either finds a note or refuses.
 
 # 4. Sync changelog and verify order/vocabulary
 npm run sync:changelog
@@ -255,6 +273,16 @@ npm run test:heavy > /tmp/npm-test-heavy-<bead>.log 2>&1
 # durations from a starved run are not evidence, and re-running on an idle box is what buys one.
 
 # 9. Push explicit SHA to main
+# BEFORE writing the landing message, READ the gate count — never compose it
+# (chrome-agent-platform-v822k). Paste the gate's own verdict line verbatim
+# (e.g. `ok | 7587 passed (121 steps) | 0 failed`), taken from the log the gate
+# wrote, in a step SEPARATE from the one that produced it. `gate-count <tree-sha
+# | log-path>` prints that line verbatim and exits non-zero when there is none
+# (fleet tooling; if it is not installed, read the verdict line out of the gate
+# log by hand). Three landings on 2026-11-12 carried a wrong number — 7584 vs
+# 7582, 7588 vs 7587, 7567 vs 7566 — and every time the cause was identical: the
+# number was written from expectation, not read. Never type a count in the step
+# that produced it.
 git push origin <commit-sha>:main
 
 # 9a. Tag the release (the repo's release identity — xe11). The tag points at the
