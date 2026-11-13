@@ -15,6 +15,18 @@ import { assert, assertEquals } from "jsr:@std/assert@1";
 import { launchChrome, waitForServiceWorker, resolveChromiumBinaryReport, teardownChrome } from "../scripts/lib/chrome-launch.ts";
 import { chromeProfileDir } from "../scripts/lib/chrome-profile-dir.ts";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
+import { awaitServiceWorkerOrRefuse } from "../scripts/lib/browser-harness-refusal.mjs";
+import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
+import { dirname } from "node:path";
+
+// chrome-agent-platform-2syam: the per-suite refusal ledger (append-only, durable) — the same file the
+// rest of the refusal plumbing uses; CAP_BROWSER_REFUSAL_LEDGER is an override, never a requirement.
+const refusalLedger = Deno.env.get("CAP_BROWSER_REFUSAL_LEDGER") ?? `${durableDir("browser-harness")}/refusals.jsonl`;
+const ledgerIo = {
+  readFile: (path: string) => readFileSync(path, "utf8"),
+  writeFile: (path: string, text: string) => appendFileSync(path, text),
+  ensureParent: (path: string) => { mkdirSync(dirname(path), { recursive: true }); },
+};
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url)).replace(/\/$/, "");
 const EXT = `${ROOT}/extension`;
@@ -109,9 +121,24 @@ Deno.test({
     };
 
     try {
-      const sw = await waitForServiceWorker(send, {
-        timeoutMs: 10000,
-        match: (t: any) => t.type === "service_worker" && String(t.url).includes("dist/background"),
+      // chrome-agent-platform-2syam: wired to j5xbi's reference pattern (suite 4/6). The extension's
+      // service worker is this journey's precondition; the shared helper decides what its absence
+      // MEANS. Measured starvation -> environmental refusal (exit 75, named individually in the tier
+      // ledger); quiet box -> null, and the assert below reds this leg as a PRODUCT defect.
+      const sw = await awaitServiceWorkerOrRefuse({
+        suite: "tests/agent-share-import.test.ts",
+        wait: (boundMs: number) => waitForServiceWorker(send, {
+          timeoutMs: boundMs,
+          match: (t: any) => t.type === "service_worker" && String(t.url).includes("dist/background"),
+        }),
+        base: 10_000, // this journey's own readiness budget, scaled by measured contention
+        ledgerIo,
+        ledgerPath: refusalLedger,
+        cleanup: async () => {
+          try { ws.close(); } catch { /* closed */ }
+          await teardownChrome(launched, profile);
+          await Deno.remove(downloads, { recursive: true }).catch(() => {});
+        },
       });
       assert(sw, "Service worker must be running");
       const extId = new URL(sw.url).host;
