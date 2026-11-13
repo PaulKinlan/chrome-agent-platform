@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.752] — 2026-11-13
+- none
+
 ## [0.3.751] — 2026-11-12
 - none — unreleased staging API surface renamed; nothing published changes hands.
 
