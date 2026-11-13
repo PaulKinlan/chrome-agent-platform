@@ -33,9 +33,11 @@ import * as acorn from "npm:acorn";
 import {
   isTrustedServiceWorkerSender,
   isOwnExtensionSender,
+  isExactOptionsSender,
   authorizeToolReport,
   SERVICE_WORKER_BUNDLE_PATH,
 } from "../extension/lib/pure.js";
+import { errorDetail } from "../extension/lib/error-report.js";
 import { registerPythonHost } from "../extension/lib/python-host.js";
 import { registerWasmJobHost, WASI_JOB_RUN_TYPE } from "../extension/lib/wasm-job-host.js";
 import { registerAgentWorkerHost } from "../extension/lib/agent-worker-host.js";
@@ -1420,4 +1422,84 @@ Deno.test("cac6c r4: the FIRST reply the dispatcher emits to an unauthorised sen
     { ok: false, error: "unknown message" },
     "the FIRST emitted reply must be the deny() literal — a reply emitted BEFORE the sender decision (j677e class: a source pin standing in for an observed emission) REDS this assertion",
   );
+});
+
+// yp31/chrome-agent-platform-ypz31 — the r4 probe's foreign sender carried NO id, so
+// isOwnExtensionSender refused it for the WRONG reason: Mutant A (false && !isOwn...)
+// still refused every sender and Mutant B (predicate weakened to an always-true id
+// compare) still refused the id-less shape. These two dispatches close both: an OWN
+// sender with a KNOWN route must reach the handler (route knowledge reachable —
+// Mutant A reds, because it denies even own senders), and a FOREIGN-ID sender must
+// get only the deny literal with the handler never run (Mutant B reds, because a
+// weakened predicate admits it into the classifier's route knowledge).
+Deno.test("ypz31: route knowledge is reachable for own senders and unreachable for foreign-id senders", async () => {
+  const src = await Deno.readTextFile(new URL("../extension/background/service-worker.js", import.meta.url));
+  const anchor = src.indexOf('routeLog.debug("route"');
+  assert(anchor > 0, "the central dispatcher's routeLog anchor must exist");
+  const bodyStart = src.indexOf("{", src.lastIndexOf("addListener(", anchor));
+  let depth = 0;
+  let bodyEnd = -1;
+  for (let i = bodyStart; i < src.length; i++) {
+    if (src[i] === "{") depth++;
+    else if (src[i] === "}") { depth--; if (depth === 0) { bodyEnd = i; break; } }
+  }
+  assert(bodyEnd > bodyStart);
+  const body = src.slice(bodyStart + 1, bodyEnd);
+  const factory = new Function(
+    "routeLog",
+    "chrome",
+    "isOwnExtensionSender",
+    "isExactOptionsSender",
+    "authorizeToolReport",
+    "canonicalOrigin",
+    "errorDetail",
+    "dispatchRoute",
+    "handlers",
+    "return function yp31DispatchProbe(message, sender, sendResponse) {\n" + body + "\n};",
+  );
+  // The mutants under test (A: 'false && !isOwn...', B: weakened id compare) act
+  // BEFORE route resolution, so everything after the sender decision is a faithful
+  // recording stub: dispatchRoute observes whether an admitted sender reaches the
+  // route layer at all.
+  let handlerRan = 0;
+  const dispatchRoute = (route: string) => {
+    handlerRan++;
+    return Promise.resolve({ ok: true, route });
+  };
+  const dispatch = factory(
+    { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} },
+    { runtime: { id: "cac6c-runtime-probe", getURL: (path: string) => `chrome-extension://cac6c-runtime-probe/${path}` } },
+    isOwnExtensionSender,
+    isExactOptionsSender,
+    authorizeToolReport,
+    "chrome-extension://cac6c-runtime-probe/options/options.html",
+    errorDetail,
+    dispatchRoute,
+    // The route must EXIST for the dispatcher to pass its existence check; the
+    // observable "route layer reached" is dispatchRoute's counter above.
+    { "memory/status": () => ({}) },
+  );
+  // 1) OWN sender + known route: the handler must run — route knowledge is real.
+  const ownReplies: unknown[] = [];
+  dispatch(
+    { type: "memory/status", origin: "chrome-extension://cac6c-runtime-probe/options/options.html" },
+    { id: "cac6c-runtime-probe", url: "chrome-extension://cac6c-runtime-probe/options/options.html" },
+    (reply: unknown) => ownReplies.push(reply),
+  );
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assertEquals(handlerRan, 1, "an own-sender known-route dispatch must reach the route layer (Mutant A 'false && !isOwn' denies own senders and REDS here)");
+  assertEquals(ownReplies, [{ ok: true, route: "memory/status" }]);
+  // 2) FOREIGN-ID sender + the same route: the handler must NEVER run, and the
+  // only reply is the generic deny literal (Mutant B — a weakened id compare —
+  // admits the foreign sender into the classifier and REDS here).
+  const foreignReplies: unknown[] = [];
+  dispatch(
+    { type: "memory/status", origin: "chrome-extension://foreign-extension-id/options/options.html" },
+    { id: "foreign-extension-id" },
+    (reply: unknown) => foreignReplies.push(reply),
+  );
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assertEquals(handlerRan, 1, "the foreign-id dispatch must not reach the route layer");
+  assertEquals(foreignReplies.length, 1, "exactly one reply to the foreign-id sender");
+  assertEquals(foreignReplies[0], { ok: false, error: "unknown message" }, "the foreign-id sender gets only the generic deny literal");
 });
