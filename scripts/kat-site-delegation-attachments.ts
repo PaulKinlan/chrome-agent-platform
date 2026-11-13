@@ -13,6 +13,19 @@ import {
 } from "./lib/chrome-launch.ts";
 import { textToDataUrl } from "../extension/lib/attachments.js";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
+import { awaitServiceWorkerOrRefuse } from "./lib/browser-harness-refusal.mjs";
+import { durableDir } from "./lib/durable-root.mjs";
+import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
+import { dirname } from "node:path";
+
+// chrome-agent-platform-2syam: the per-suite refusal ledger (append-only, durable); the same file the
+// rest of the refusal plumbing writes and the gate reads back with a since-scope.
+const refusalLedger = Deno.env.get("CAP_BROWSER_REFUSAL_LEDGER") ?? `${durableDir("browser-harness")}/refusals.jsonl`;
+const ledgerIo = {
+  readFile: (path: string) => readFileSync(path, "utf8"),
+  writeFile: (path: string, text: string) => appendFileSync(path, text),
+  ensureParent: (path: string) => { mkdirSync(dirname(path), { recursive: true }); },
+};
 import {
   createClassifiedCdpClient,
   CdpEvaluateLoadTimeoutError,
@@ -82,9 +95,24 @@ let exitCode = 0;
 let exitLine: string | null = null;
 
 try {
-  const sw = await waitForServiceWorker(send, {
-    timeoutMs: 15_000,
-    match: SW_MATCH,
+  // chrome-agent-platform-2syam (suite 6/6): the service worker is this journey's precondition, and
+  // its absence used to be a PLAIN Error — product red, unconditionally, even on a box that was
+  // measurably too starved to start a browser (the misclassification this bead exists to remove).
+  // The shared helper decides what the absence MEANS, and it names the suite the GATE knows: the
+  // wrapper tests/site-agent-delegation-attachments.test.ts converts this child's exit 75 into a pass,
+  // so the ledger row is the only place the unmeasured suite can appear.
+  const sw = await awaitServiceWorkerOrRefuse({
+    suite: "tests/site-agent-delegation-attachments.test.ts",
+    wait: (boundMs: number) => waitForServiceWorker(send, { timeoutMs: boundMs, match: SW_MATCH }),
+    base: 15_000,
+    ledgerIo,
+    ledgerPath: refusalLedger,
+    cleanup: async () => {
+      try { client?.close(); } catch { /* closed */ }
+      try { ws?.close(); } catch { /* closed */ }
+      await teardownChrome(proc, profile);
+      await Deno.remove(profile, { recursive: true }).catch(() => {});
+    },
   });
   if (!sw) throw new Error("extension service worker did not register");
   const extId = new URL(sw.url).host;
