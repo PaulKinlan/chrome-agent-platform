@@ -236,3 +236,61 @@ Deno.test("2h4j7 CLI: commitsInRange skips merge commits and reads files per com
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+// chrome-agent-platform-g0bfz: ONE note, TWO readers. The stamp greps the body;
+// git reads a trailer block at the END of it. A note in the SUBJECT (gzkmx) or in
+// the MIDDLE of a body (0740d9df0, grep line 44) satisfied the stamp and was
+// invisible to `git log --format=%(trailers)` — "a note exists and does not
+// exist". Coord's ruling: reject the shape at AUTHORING time, naming the shape,
+// because a note written as the subject is the natural mistake (both sightings
+// did exactly that).
+Deno.test("g0bfz: a note in the SUBJECT is RED at authoring time, naming the accepted shape", () => {
+  const verdict = classifyCommit({
+    files: PRODUCT,
+    body: "Release-note: Extension modules were reorganized so shared helpers live in one place\n\nSome body text after the note.\n",
+  });
+  assertEquals(verdict.ok, false);
+  if (!verdict.ok) {
+    assertStringIncludes(verdict.reason, "shape is not one both readers accept");
+    assertStringIncludes(verdict.reason, "TRAILER BLOCK at the END");
+    assertStringIncludes(verdict.reason, "SUBJECT");
+    assertStringIncludes(verdict.reason, "%(trailers)");
+  }
+});
+
+Deno.test("g0bfz: a note in the MIDDLE of the body, and a WRAPPED note, are RED for the same reason", () => {
+  for (const body of [
+    `fix(x): thing\n\nRelease-note: ${USER_WORDS}.\nand then more prose after it\n`,
+    `fix(x): thing\n\nRelease-note: ${USER_WORDS}\nand the sentence wraps onto a second line\n`,
+  ]) {
+    const verdict = classifyCommit({ files: PRODUCT, body });
+    assertEquals(verdict.ok, false, body);
+    if (!verdict.ok) assertStringIncludes(verdict.reason, "shape is not one both readers accept");
+  }
+});
+
+Deno.test("k5p3z: an EMPTY Release-note reads as empty, so the next line is never taken as its value", async () => {
+  // chrome-agent-platform-k5p3z: `\s*` matched the newline, so `Release-note:` followed by `Bead: abc`
+  // captured "Bead: abc" in BOTH views — the shape check saw agreement while git's `%(trailers)`
+  // reported an empty value, and the existing "sanitises to EMPTY" refusal could never fire.
+  const { releaseNoteTrailers } = await import("../scripts/lib/release-note.mjs");
+  const body = "fix: x\n\nprose\n\nRelease-note:\nBead: abc\n";
+  assertEquals(releaseNoteTrailers(body), [""], "an empty note is an empty VALUE, not the line below it");
+});
+
+Deno.test("w5716: a note placed after a '---' line is invisible to git, so the shape check refuses it", () => {
+  // chrome-agent-platform-w5716: interpret-trailers assumes the mailed-patch divider unless told
+  // otherwise, while %(trailers) on a COMMIT does not. Without --no-divider this body was accepted by
+  // the stamp and invisible to git: accepted-and-invisible, the class g0bfz exists to close.
+  const verdict = classifyCommit({
+    files: PRODUCT,
+    body: `fix(x): thing\n\nbody prose\n\nRelease-note: ${USER_WORDS}.\n\n---\nfoo\n`,
+  });
+  assertEquals(verdict.ok, false, "a note git cannot see must not pass the authoring check");
+  if (!verdict.ok) assertStringIncludes(verdict.reason, "shape is not one both readers accept");
+});
+
+Deno.test("g0bfz: a note in the trailing trailer block is still GREEN — the rule is the shape, not a ban", () => {
+  const verdict = classifyCommit({ files: PRODUCT, body: `fix(x): thing\n\nbody prose\n\nRelease-note: ${USER_WORDS}.\n` });
+  assertEquals(verdict, { ok: true });
+});

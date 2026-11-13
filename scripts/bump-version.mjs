@@ -48,7 +48,7 @@ import { isUserFacingEntry, parseChangelog } from "../extension/options/changelo
 // The trailer matcher and sanitiser are shared with the lane's pre-flight gate
 // (scripts/check-release-note-preflight.mjs, chrome-agent-platform-2h4j7) — one
 // implementation, so what the lane checks is what the merger's stamp applies.
-import { declaresNoUserFacingChange, releaseNoteTrailers, sanitizeEntry } from "./lib/release-note.mjs";
+import { declaresNoUserFacingChange, releaseNoteShapeProblems, releaseNoteTrailers, sanitizeEntry } from "./lib/release-note.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 
@@ -119,6 +119,14 @@ for (let i = 0; i < argv.length; i++) {
     const sha = commitSha(argv[++i], "--from");
     const body = execFileSync("git", ["show", "-s", "--format=%B", sha], { cwd: ROOT, encoding: "utf8" });
     const trailers = releaseNoteTrailers(body);
+    // g0bfz: the stamp reads a `Release-note:` line ANYWHERE in the message; git
+    // reads only a trailer block at the end. Warn, never refuse — an existing
+    // cleared branch must not become unlandable — but name the disagreement so
+    // the note is never accepted-and-invisible. The lane pre-flight REFUSES this
+    // shape at authoring time; this is the landing-time backstop.
+    if (landingMode) {
+      for (const problem of releaseNoteShapeProblems(body)) console.error(`[bump-version] WARNING: candidate ${sha} — ${problem}`);
+    }
     candidates.push({ sha, trailers });
     notes.push(...trailers);
   }

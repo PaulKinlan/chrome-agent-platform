@@ -41,7 +41,7 @@ import { explainUserFacingEntry, isInternalEntry } from "../extension/options/ch
 // bump-version.mjs's OWN trailer matcher and sanitiser (2h4j7 extraction), and
 // the "declares no user-facing change" predicate 2rfyx added there — the same
 // one call decides both gates, so they cannot disagree about a spelling.
-import { declaresNoUserFacingChange, releaseNoteTrailers, sanitizeEntry } from "./lib/release-note.mjs";
+import { declaresNoUserFacingChange, releaseNoteShapeProblems, releaseNoteTrailers, sanitizeEntry } from "./lib/release-note.mjs";
 // The owed ledger's OWN product-path ruling: what a user can get.
 import { commitOwesProductChange } from "./check-owed-changelog.mjs";
 
@@ -111,6 +111,24 @@ export function classifyCommit({ files, body }, filter = { explainUserFacingEntr
           `bump-version refuses the landing: "landing note is empty or not user-facing".`,
       };
     }
+  }
+  // g0bfz: the same note must exist for BOTH readers — the stamp greps the body,
+  // git reads a trailer block at the end. A note in the SUBJECT (gzkmx) or in the
+  // MIDDLE of a body (0740d9df0, where grep finds it at line 44) is accepted by
+  // the stamp and invisible to `git log --format=%(trailers)`, which is how "a
+  // note exists and does not exist" happened twice. This runs LAST, after the
+  // value-level refusals: an empty note or one the filter rejects already has a
+  // more actionable message, and only a note that would otherwise be PUBLISHED
+  // reaches here.
+  const shape = releaseNoteShapeProblems(body);
+  if (shape.length) {
+    return {
+      ok: false,
+      reason:
+        `Release-note trailer shape is not one both readers accept: ${shape[0]} ` +
+        `(chrome-agent-platform-g0bfz). The stamp would publish this note while git's trailer ` +
+        `parser — and every tool that reads %(trailers), fleet-land-message included — sees nothing.`,
+    };
   }
   return { ok: true };
 }
