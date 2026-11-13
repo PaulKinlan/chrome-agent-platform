@@ -17,17 +17,23 @@ import { dirname } from "node:path";
 // not start a browser, which is not a claim about this code. On a QUIET box the same observation is
 // a PRODUCT red (the helper returns null and the assert below fails): a journey that cannot get a
 // service worker when nothing is contending is a defect, never a re-run.
+const EXT = fileURLToPath(new URL("../extension/", import.meta.url)).replace(/\/$/, "");
+const RESOLUTION = resolveChromiumBinaryReport();
+const BINARY = isUsableBinary(RESOLUTION.binary) ? RESOLUTION.binary : null;
+if (!BINARY) console.warn(`g09i native Tab: no usable Chrome (${RESOLUTION.tried.join("; ")}); browser test IGNORED, not passed`);
+
+// 2syam: the per-suite refusal ledger. Declared HERE rather than beside the imports on purpose:
+// tests/test-partition-guard.test.ts (via scripts/test-partition.mjs writesTree) classifies a file as a
+// build-artifact hazard when a write call sits within 300 chars of an `extension/` literal, and the
+// `"../extension/"` constant is at the top of this file — the ledger's `appendFileSync(path, text)`
+// landed inside that window and put this journey in the serial phase for no reason. It is a durable
+// evidence file, not a write into the tree.
 const refusalLedger = Deno.env.get("CAP_BROWSER_REFUSAL_LEDGER") ?? `${durableDir("browser-harness")}/refusals.jsonl`;
 const ledgerIo = {
   readFile: (path: string) => readFileSync(path, "utf8"),
   writeFile: (path: string, text: string) => appendFileSync(path, text),
   ensureParent: (path: string) => { mkdirSync(dirname(path), { recursive: true }); },
 };
-
-const EXT = fileURLToPath(new URL("../extension/", import.meta.url)).replace(/\/$/, "");
-const RESOLUTION = resolveChromiumBinaryReport();
-const BINARY = isUsableBinary(RESOLUTION.binary) ? RESOLUTION.binary : null;
-if (!BINARY) console.warn(`g09i native Tab: no usable Chrome (${RESOLUTION.tried.join("; ")}); browser test IGNORED, not passed`);
 
 Deno.test({
   name: "g09i: native Tab from collapsed sidebar toggle reaches Tasks and the rail, not the composer",
