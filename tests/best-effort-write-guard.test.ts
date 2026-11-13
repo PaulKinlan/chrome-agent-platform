@@ -19,7 +19,12 @@ import {
 } from "../scripts/lib/best-effort-write.mjs";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
-const SCAN_DIRS = ["scripts", "scripts/lib", "extension/lib", "extension/background"];
+// chrome-agent-platform-aaakp: the sweep is RECURSIVE over these roots — the flat
+// list missed nested route dirs (extension/background/routes/*) entirely and never
+// scanned tests/fixtures, where real swallowed writes lived (acp-fake-adapter,
+// build-once, fake-acp-harness under scripts/fixtures). Recursion, not a longer
+// flat list, is what keeps the next nested tree covered.
+const SCAN_DIRS = ["scripts", "scripts/lib", "extension/lib", "extension/background", "tests/fixtures"];
 
 /** Write calls that a discarded catch could silently lose. */
 const WRITE_CALL = /\b(appendFileSync|writeFileSync|writeTextFileSync|Deno\.writeTextFile|appendFile|createWriteStream)\s*\(/;
@@ -36,6 +41,14 @@ const ALLOWED = new Map<string, string>([
   [
     "scripts/lib/best-effort-write.mjs",
     "yqhb2: this module IS the counter; its catch increments `failed` and logs, which the regex cannot see through the helper call",
+  ],
+  [
+    // chrome-agent-platform-aaakp: surfaced by the recursive sweep. Deliberate BY
+    // IMPACT: the record is a build ledger whose loss costs nothing the caller
+    // does not already hold — the comment on the catch says exactly that, and the
+    // swallowed value is a duplicate of output the caller returns in-process.
+    "tests/fixtures/build-once.mjs",
+    "aaakp: the build-record write is a cache/ledger ('a record we cannot write is not fatal: the caller already has the output'); the real output travels in-process, so a lost record changes no verdict",
   ],
 ]);
 
@@ -88,18 +101,33 @@ export function swallowedWriteCatches(source: string): number[] {
   return hits;
 }
 
+/**
+ * chrome-agent-platform-aaakp: recurse a scan root, yielding RELATIVE paths of
+ * code files at every depth. The flat one-level loop this replaces skipped
+ * nested route dirs and test-fixture trees wholesale.
+ */
+export async function* recurse(root: string): AsyncGenerator<string> {
+  let entries;
+  try {
+    entries = Deno.readDir(join(ROOT, root));
+  } catch {
+    return; // a directory that does not exist in this layout is not an offender
+  }
+  for await (const entry of entries) {
+    const rel = `${root}/${entry.name}`;
+    if (entry.isDirectory) {
+      yield* recurse(rel);
+    } else if (entry.isFile && /\.(mjs|ts|js)$/.test(entry.name)) {
+      yield rel;
+    }
+  }
+}
+
 Deno.test("yqhb2 guard: no catch may swallow a write in silence", async () => {
   const offenders: string[] = [];
   for (const dir of SCAN_DIRS) {
-    let entries: AsyncIterable<{ name: string; isFile: boolean }>;
-    try {
-      entries = Deno.readDir(join(ROOT, dir));
-    } catch {
-      continue; // a directory that does not exist in this layout is not an offender
-    }
-    for await (const entry of entries) {
-      if (!entry.isFile || !/\.(mjs|ts|js)$/.test(entry.name)) continue;
-      const rel = `${dir}/${entry.name}`;
+    // recurse() already yields ROOT-relative paths — do not re-prefix.
+    for await (const rel of recurse(dir)) {
       if (ALLOWED.has(rel)) continue;
       const source = await Deno.readTextFile(join(ROOT, rel));
       const hits = swallowedWriteCatches(source);
@@ -170,4 +198,44 @@ Deno.test("yqhb2: a write whose loss changes a VERDICT reports a refusal instead
   // It must not throw: a crash would take the whole gate down for an unwritable disk.
   const ok = requireWrite({ write: () => {}, log: () => {} }, "/evidence/ok.jsonl", "{}\n");
   assertEquals(ok, { ok: true, refused: false });
+});
+
+
+// chrome-agent-platform-aaakp — the RECURSION proofs, coord-shaped: a swallowed
+// write under a NESTED ROUTE dir and one under a NESTED TEST-FIXTURE tree must
+// each be flagged. The flat one-level loop this replaces saw neither (routes/*
+// was a directory entry it skipped wholesale; tests/fixtures was not a scan
+// root at all), so removing the recursion reds BOTH cases here.
+Deno.test("aaakp: the sweep recurses — nested route dirs and nested fixture trees are covered", async () => {
+  const swallowedFixture = `try {
+  writeFileSync(path, state);
+} catch { /* best-effort */ }
+`;
+  const probeRoutes = join(ROOT, "extension/background/routes/aaakp-recursion-probe");
+  const probeFixtures = join(ROOT, "tests/fixtures/aaakp-recursion-probe/nested");
+  try {
+    Deno.mkdirSync(probeRoutes, { recursive: true });
+    Deno.mkdirSync(probeFixtures, { recursive: true });
+    await Deno.writeTextFile(join(probeRoutes, "zz-probe-route.mjs"), swallowedFixture);
+    await Deno.writeTextFile(join(probeFixtures, "zz-probe-fixture.mjs"), swallowedFixture);
+
+    const offenders: string[] = [];
+    for (const dir of SCAN_DIRS) {
+      for await (const rel of recurse(dir)) {
+        if (rel.includes("aaakp-recursion-probe")) offenders.push(rel);
+      }
+    }
+    assert(
+      offenders.some((f) => f.startsWith("extension/background/routes/")),
+      `a swallowed write under a NESTED ROUTE dir must be flagged, got ${JSON.stringify(offenders)}`,
+    );
+    assert(
+      offenders.some((f) => f.startsWith("tests/fixtures/")),
+      `a swallowed write under a NESTED TEST-FIXTURE tree must be flagged, got ${JSON.stringify(offenders)}`,
+    );
+    assertEquals(offenders.length, 2, `exactly the two probe files may be flagged, got ${JSON.stringify(offenders)}`);
+  } finally {
+    await Deno.remove(join(ROOT, "extension/background/routes/aaakp-recursion-probe"), { recursive: true });
+    await Deno.remove(join(ROOT, "tests/fixtures/aaakp-recursion-probe"), { recursive: true });
+  }
 });

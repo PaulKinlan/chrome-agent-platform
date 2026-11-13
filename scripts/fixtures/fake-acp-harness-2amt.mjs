@@ -165,8 +165,11 @@ process.stdin.on("data", async (chunk) => {
 
       try {
         writeFileSync(reportPath, JSON.stringify(report, null, 2));
-      } catch {
-        /* the drive will report a missing report */
+      } catch (error) {
+        // chrome-agent-platform-aaakp: the report IS the drive's evidence — a
+        // swallowed write makes the downstream assertion fail with a confusing
+        // "missing report" symptom instead of the real I/O error.
+        throw new Error(`[fake-acp-harness] report write failed: ${(error as Error).message}`);
       }
       send({
         jsonrpc: "2.0",
