@@ -127,6 +127,16 @@ export const DEDICATED_FILE_GUARDS = Object.freeze({
   "scripts/lib/browser-harness-refusal.mjs": Object.freeze([
     "tests/serial-phase-resilience.test.ts",
   ]),
+  // 2syam: the site-delegation journey runs in a SPAWNED harness, so nothing has an import edge to it —
+  // the wrapper test names it as a subprocess argument and the gate reported it as an unmapped coverage
+  // gap on the delta that wired it. Three suites police it: the wrapper that spawns and asserts it, the
+  // retry guard that reads its source (zq76k), and the teardown census that lists it as a spawned
+  // real-browser harness. Each is cheap, and the alternative is a landing over a harness nobody ran.
+  "scripts/kat-site-delegation-attachments.ts": Object.freeze([
+    "tests/site-agent-delegation-attachments.test.ts",
+    "tests/transient-context-retry.test.ts",
+    "tests/real-browser-teardown.test.ts",
+  ]),
   // yqhb2: the write-visibility primitive is driven as DATA by the guard that enforces its rule (no
   // catch may swallow a write, and an unaccounted attempt is named). No import edge exists from the
   // module to the sweep that scans for its use, so it is declared here for the same reason as above.
