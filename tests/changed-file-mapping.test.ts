@@ -12,6 +12,7 @@
 // @ts-nocheck
 
 import { assert, assertEquals, assertThrows } from "jsr:@std/assert@1";
+import { BASENAME_RULE_RUNTIME_VERIFIED, DECLARED_NO_GUARD } from "../scripts/lib/changed-file-mapping.mjs";
 import { fileURLToPath } from "node:url";
 import {
   BOOKKEEPING_FILES,
@@ -665,7 +666,7 @@ Deno.test("h346c: the dedicated-guard registry is path-keyed, ownership-based an
   // (a dynamic import specifier, a path literal). Asserted as ownership so a later "tidying" of
   // either entry says so here rather than quietly dropping a user-facing surface's guard.
   assertEquals(guardsForChangedFile("extension/options/settings-view.js"), ["tests/settings-client-view.test.ts"]);
-  assertEquals(guardsForChangedFile("extension/directory/directory.js"), ["tests/settings-client-view.test.ts"]);
+  assertEquals(guardsForChangedFile("extension/directory/directory.js"), ["tests/directory-client-view.test.ts"]);
 
   // No entry, no claim — an unregistered file owns no KNOWN guard, and the helper must not invent one.
   assertEquals(guardsForChangedFile("extension/lib/pure.js"), []);
@@ -677,10 +678,49 @@ Deno.test("h346c: the dedicated-guard registry is path-keyed, ownership-based an
   // OWNERSHIP, not filenames (cac6c): the guard that polices service-worker.js shares no basename
   // with it, so a naming convention would never have found it — and nothing may be keyed to a line
   // number, which khwi9 rotted by moving a policed listener 14 lines.
+  // chrome-agent-platform-wwgnm r2: the rule admits the DECLARED runtime-verified keys
+  // (the async proof of that claim lives in the test below); anything else stays a
+  // refused coincidence.
   for (const [file, guards] of entries) {
+    const runtimeVerified = BASENAME_RULE_RUNTIME_VERIFIED.includes(file);
     for (const guard of guards) {
       const basenameMatch = guard.includes(file.split("/").pop().replace(/\.js$/, ""));
-      assert(!basenameMatch || file.endsWith(".html"), `${file} -> ${guard}: the entry is not a filename coincidence`);
+      assert(
+        !basenameMatch || file.endsWith(".html") || runtimeVerified,
+        `${file} -> ${guard}: the entry is a filename coincidence (declare it in BASENAME_RULE_RUNTIME_VERIFIED with a pinned runtime proof if it is not)`,
+      );
     }
+  }
+});
+
+
+Deno.test("wwgnm r2: the runtime-verified carve-out is proven, and every declaration names a checkable suite", async () => {
+  // The basename rule's exception is a claim about RUNTIME exercise: each declared
+  // key's guard must reference the module it claims to exercise, pinned here so the
+  // carve-out cannot quietly grow or go stale.
+  for (const file of BASENAME_RULE_RUNTIME_VERIFIED) {
+    const guards = DEDICATED_FILE_GUARDS[file];
+    assert(guards && guards.length > 0, `${file} is declared runtime-verified but has NO entry — the declaration is stale`);
+    for (const guard of guards) {
+      const guardSource = await Deno.readTextFile(new URL(`../${guard}`, import.meta.url));
+      const moduleRef = file.split("/").pop();
+      assert(
+        guardSource.includes(moduleRef),
+        `${file} -> ${guard}: claimed runtime-verified, but the suite never references the module it claims to exercise`,
+      );
+    }
+  }
+  // Every DECLARED_NO_GUARD reason must name a suite that EXISTS in the tree, or state
+  // the barrel/always-on mechanism explicitly — a reason naming nothing checkable is
+  // prose, not a declaration.
+  for (const [file, reason] of Object.entries(DECLARED_NO_GUARD)) {
+    const suiteRefs = reason.match(/tests\/[a-z0-9.-]+\.test\.ts/g) ?? [];
+    for (const ref of suiteRefs) {
+      await Deno.stat(new URL(`../${ref}`, import.meta.url));
+    }
+    assert(
+      suiteRefs.length > 0 || reason.includes("barrel") || reason.includes("ALWAYS_ON") || reason.includes("MAPPED"),
+      `${file}: the declaration names no existing suite and no structural mechanism — it is not a declaration`,
+    );
   }
 });

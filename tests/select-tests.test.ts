@@ -291,26 +291,66 @@ Deno.test("h346c: a guard-owning changed file carries its dedicated guard even w
   );
 });
 
-Deno.test("wwgnm: the two incidental-instrument surfaces carry their guard, and removal is a named stop signal", () => {
-  // wwgnm: settings-view.js and directory.js are the user-facing surfaces whose only selected suite
-  // reached them by an instrument that happens to sit in the test file (a dynamic import specifier, a
-  // path literal). That is a coverage claim by coincidence, so it is registered — and the registry's
-  // own rule then holds for them exactly as it does for the SW: the guard is forced in, and removing
-  // it is the merger's stop signal naming the guard.
-  for (const file of ["extension/options/settings-view.js", "extension/directory/directory.js"]) {
+Deno.test("wwgnm: the incidental-instrument surfaces carry their guard, and removal is a named stop signal", () => {
+  // wwgnm: settings-view.js is registered because its only touching suite reaches it by a dynamic
+  // import specifier (a coincidence edge); directory.js is registered on the REAL runtime suite
+  // through the basename rule's declared runtime-verified carve-out (round 2: the round-1 binding
+  // pointed at a suite that only STRING-CHECKS the file — coverage that cannot red).
+  for (const [file, guard] of [
+    ["extension/options/settings-view.js", "tests/settings-client-view.test.ts"],
+    ["extension/directory/directory.js", "tests/directory-client-view.test.ts"],
+  ] as Array<[string, string]>) {
     const plan = planSelection({ changedFiles: () => [file] });
     assertEquals(plan.kind, "subset", `${file}: import-reachable, so still a certifiable subset`);
     assert(
-      plan.files!.includes("tests/settings-client-view.test.ts"),
-      `${file} must carry its dedicated guard`,
+      plan.files!.includes(guard),
+      `${file} must carry its dedicated guard (${guard})`,
     );
     assertEquals(plan.guardGap, [], `${file}: after enforcement no guard gap remains`);
     assertEquals(
-      guardGapFor([file], (plan.files ?? []).filter((f) => f !== "tests/settings-client-view.test.ts")),
-      [{ file, guard: "tests/settings-client-view.test.ts" }],
+      guardGapFor([file], (plan.files ?? []).filter((f) => f !== guard)),
+      [{ file, guard }],
       `${file}: dropping the guard must be reported, not silent`,
     );
   }
+});
+
+// chrome-agent-platform-wwgnm round 2, coord acceptance 1: NO SILENCE. A changed PRODUCT file
+// with neither a guard entry nor a declaration must be NAMED by a refusal — an unmapped product
+// file is how an ntp.js delta once selected one of three suites with the gate green. A DECLARED
+// file must sail through (its answer is the declaration), which is what keeps the gate honest
+// without refusing the world.
+Deno.test("wwgnm r2: an unmapped, undeclared product file is refused BY NAME; a declared file is not", () => {
+  // The injected empty declared-map: extension/shared/schedule-parser.js has an entry-free
+  // existence in this plan (no declaration), so it must fail closed and be named.
+  const refused = planSelection({
+    changedFiles: () => ["extension/shared/schedule-parser.js"],
+    declaredNoGuard: {},
+  });
+  assertEquals(refused.kind, "full", "an unmapped+undeclared product file must refuse, not fall back silently");
+  assert(
+    refused.failClosedHeader?.includes("no guard binding and no declaration"),
+    `the refusal must say why: ${refused.failClosedHeader ?? ""}`,
+  );
+  assertEquals(
+    refused.unmappable.map((row: { file: string }) => row.file),
+    ["extension/shared/schedule-parser.js"],
+    "the refusal must name the file",
+  );
+  assert(
+    refused.unmappable[0].mechanism.includes("DECLARED_NO_GUARD"),
+    "the mechanism must point the reader at the two registers that fix it",
+  );
+  // The SAME file WITH its declaration is a certifiable subset — declarations answer.
+  const declared = planSelection({ changedFiles: () => ["extension/shared/schedule-parser.js"] });
+  assertEquals(declared.kind, "subset", "a declared file must not be refused");
+  assertEquals(
+    (declared.unmappable ?? []).filter((row: { file: string }) => row.file === "extension/shared/schedule-parser.js"),
+    [],
+  );
+  // And a DECLARED file from the shipped map (ntp.js) is not named either.
+  const ntp = planSelection({ changedFiles: () => ["extension/ntp/ntp.js"] });
+  assertEquals(ntp.kind, "subset", "ntp.js is declared (runtime-exercised by ntp-agent-route-execution) — no refusal");
 });
 
 Deno.test("h346c: a registry entry naming a suite the tree does not have FAILS CLOSED and names the guard", () => {

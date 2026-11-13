@@ -198,12 +198,13 @@ export const DEDICATED_FILE_GUARDS = Object.freeze({
     // substring of settings-client-view), so the table's anti-coincidence rule allows the claim.
     "tests/settings-client-view.test.ts",
   ]),
+  // chrome-agent-platform-wwgnm round 2: the round-1 binding pointed this file at a suite
+  // that only STRING-CHECKS it ('!directoryJs.includes("#section-agents")') — an entry that
+  // looks like coverage and cannot red on a regression, which is worse than no entry. The
+  // real suite runtime-exercises the module, and it is registered through the basename
+  // rule's declared exception (BASENAME_RULE_RUNTIME_VERIFIED below), not by dodging the rule.
   "extension/directory/directory.js": Object.freeze([
-    // Read as TEXT by a path literal (`readFileSync(join(ROOT, "extension/directory/directory.js"))`)
-    // in this suite, plus the directory-client-view suite whose own basename would be an illegal
-    // coincidence. The directory view is the other UI surface that changes ~4-5x/month, so the
-    // incidental-edge risk is worth one suite's runtime.
-    "tests/settings-client-view.test.ts",
+    "tests/directory-client-view.test.ts",
   ]),
   // 4iyck/28hwd+qnci3: runbooks are PASSIVE CONTENT to the selector (isPassiveContentFile matches
   // .md), so before this entry a landing-recipe change selected the always-on core and nothing that
@@ -226,6 +227,65 @@ export const DEDICATED_FILE_GUARDS = Object.freeze({
  *  guard, and which?". Both tables are consulted so callers never have to know that the
  *  HTML entries live in their own table (h346c: a rule that only read one of them would
  *  have re-created the gap it exists to close). */
+/**
+ * chrome-agent-platform-wwgnm round 2 (coord acceptance 2): the anti-coincidence rule
+ * refuses entries whose guard filename contains the key's basename, because a
+ * same-named suite is presumed already selected by its import edge. That presumption
+ * is FALSE for suites that exercise the file at RUNTIME through a dynamic or
+ * computed specifier the static graph cannot see. A file may therefore be registered
+ * here: its guard is runtime-verified (the registry test pins the specifier that
+ * proves it), and the basename rule admits exactly these keys and no others.
+ */
+export const BASENAME_RULE_RUNTIME_VERIFIED = Object.freeze([
+  "extension/directory/directory.js",
+]);
+
+/**
+ * chrome-agent-platform-wwgnm round 2 (coord acceptance 3): the files the changed-file
+ * map deliberately does NOT bind, each with a FILE-based reason — what actually polices
+ * it and by which mechanism. This is the loud answer to "why is this file unmapped";
+ * an import-graph rationale ("something reaches it") is not a reason and does not
+ * belong here. planSelection refuses a product file that has neither an entry in
+ * DEDICATED_FILE_GUARDS nor a declaration here, naming it — silence is the defect
+ * the review found.
+ */
+export const DECLARED_NO_GUARD = Object.freeze({
+  // wwgnm r2, measured: the suite imports the module with a runtime specifier
+  // (`await import("../extension/ntp/ntp.js?exec=...")`) — it EXECUTES ntp.js per boot.
+  // ntp-boot-staging polices ntp-boot-scheduler.js and ntp-sidebar-collapsible polices
+  // pure.js re-exports; neither changes when ntp.js does, so binding them here would
+  // cost their runtime for no coverage gain.
+  "extension/ntp/ntp.js":
+    "runtime-exercised by tests/ntp-agent-route-execution.test.ts (dynamic import, per-boot execution)",
+  "extension/lib/pure-hash.js":
+    "re-exported through the pure.js barrel (single-source invariant, tests/single-source-helpers.test.ts ALWAYS_ON); its functions are pinned via the barrel in tests/pure.test.ts",
+  "extension/lib/pure-redact.js":
+    "re-exported through the pure.js barrel; redaction behaviour pinned via the barrel in tests/secret-redaction.test.ts and tests/pure.test.ts",
+  "extension/lib/pure-schema.js":
+    "re-exported through the pure.js barrel; schema behaviour pinned via the barrel in tests/pure.test.ts",
+  "extension/lib/pure-tabs.js":
+    "re-exported through the pure.js barrel; pinned via the barrel in tests/pure.test.ts",
+  "extension/lib/pure-text.js":
+    "re-exported through the pure.js barrel; pinned via the barrel in tests/pure.test.ts",
+  "extension/lib/pure-trust.js":
+    "MAPPED above (trusted-sender-port-fence); the barrel path is additional, not the claim",
+  "extension/shared/components-core.js":
+    "statically imported and rendered by tests/a11y-structure.test.ts and tests/activity-liveness.test.ts (measured reverse closure)",
+  "extension/shared/components-hub.js":
+    "statically imported and rendered by tests/a11y-structure.test.ts and tests/activity-liveness.test.ts (measured reverse closure)",
+  "extension/lib/table-extractor.js":
+    "statically imported by tests/extract-tables-3p3e8.test.ts, which drives the extractor directly",
+  "extension/lib/user-wasm-host.js":
+    "statically imported by tests/user-wasm-execution.test.ts, which drives the host directly",
+  "extension/lib/thread-export-redact.js":
+    "statically imported by tests/thread-export-html.test.ts, which drives the redaction directly",
+  "extension/lib/schedule-preview.js":
+    "exercised by tests/agent-alarms.test.ts (the schedule-preview rendering legs; the bead's extension/options path was a typo — this module never existed there)",
+  "scripts/check-reachability.mjs":
+    "statically imported by tests/main-module-check-guard.test.ts (ALWAYS_ON core), which executes the checker",
+  "extension/shared/schedule-parser.js":
+    "statically imported by tests/schedule-parser.test.ts, which drives the parser directly",
+});
 export function guardsForChangedFile(rel, tables = { dedicated: DEDICATED_FILE_GUARDS, html: HTML_EXPORT_ENTRY_GUARDS }) {
   const path = String(rel ?? "").replace(/\\/g, "/");
   const out = [];

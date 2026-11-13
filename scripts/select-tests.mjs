@@ -49,6 +49,7 @@ import { partition } from "./test-partition.mjs";
 import { announce, runSerialFiles } from "./lib/serial-phase.mjs";
 import {
   DEDICATED_FILE_GUARDS,
+  DECLARED_NO_GUARD,
   HTML_EXPORT_ENTRY_GUARDS,
   guardsForChangedFile,
   isRepoMetadata,
@@ -1284,7 +1285,7 @@ export function exitGate(rc, { graph, ran, changed = null, failed = null }, seam
  * The selector's decision, pure of printing and of running (chrome-agent-platform-0eq00 plan mode).
  * `kind: "full"` means the subset cannot validate this change: callers must run the full suite.
  *
- * @param {{ base?: string, changedFiles?: (base: string) => string[], reverseGraph?: () => any, lockfileOptions?: any, dedicatedGuards?: Record<string, readonly string[]>, htmlGuards?: Record<string, readonly string[]> }} [opts]
+ * @param {{ base?: string, changedFiles?: (base: string) => string[], reverseGraph?: () => any, lockfileOptions?: any, dedicatedGuards?: Record<string, readonly string[]>, htmlGuards?: Record<string, readonly string[]>, declaredNoGuard?: Record<string, string> }} [opts]
  * @returns {{
  *   kind: "subset" | "full",
  *   files: string[] | null,
@@ -1313,6 +1314,10 @@ export function planSelection({
   // the tree) is testable without inventing a real broken entry in the shipped table.
   dedicatedGuards = DEDICATED_FILE_GUARDS,
   htmlGuards = HTML_EXPORT_ENTRY_GUARDS,
+  // chrome-agent-platform-wwgnm round 2: the declared-no-guard map is a seam so the
+  // fail-closed leg (an unmapped+undeclared product file) is testable without
+  // inventing real tree state.
+  declaredNoGuard = DECLARED_NO_GUARD,
 } = {}) {
   const changed = changedFilesFn(base);
   const notices = [];
@@ -1413,6 +1418,39 @@ export function planSelection({
   // owns onmessage-sender-guard.test.ts).
   const guardRequirements = changed.flatMap((file) =>
     guardsForChangedFile(file, { dedicated: dedicatedGuards, html: htmlGuards }).map((guard) => ({ file, guard })));
+
+  // chrome-agent-platform-wwgnm round 2 (coord acceptance 1): NO SILENCE. A changed
+  // PRODUCT file with neither a registered guard nor a declaration is named and the
+  // plan refuses: an unmapped product file is exactly how an ntp.js delta once selected
+  // one of its three suites with the gate green. Declared files are answered (their
+  // reason is in the table) — only the UNDECLARED case refuses, by name.
+  const unmappedProduct = changed.filter((file) =>
+    (file.startsWith("extension/") || file.startsWith("scripts/")) &&
+    !file.endsWith(".md") &&
+    !file.endsWith(".html") &&
+    (dedicatedGuards[file] ?? htmlGuards[file]) === undefined &&
+    declaredNoGuard[file] === undefined &&
+    !isSelectorInfrastructure(file)
+  );
+  if (unmappedProduct.length) {
+    return {
+      kind: "full",
+      files: null,
+      changed,
+      reverse,
+      uncovered,
+      mapped,
+      unmappable: unmappedProduct.map((file) => ({
+        file,
+        kind: "policy",
+        mechanism: "no dedicated-guard entry and no declared reason — register the suite that polices it (DEDICATED_FILE_GUARDS) or declare why none does (DECLARED_NO_GUARD), in changed-file-mapping.mjs",
+      })),
+      notices,
+      lockfileDelta: lockfile?.ledger ?? [],
+      failClosedHeader: "select-tests: FAIL CLOSED — changed product file(s) with no guard binding and no declaration (chrome-agent-platform-wwgnm):",
+      reason: "changed product file(s) unmapped and undeclared",
+    };
+  }
   const unresolvableGuard = guardRequirements.find(({ guard }) => !existsSync(join(ROOT, guard)));
   if (unresolvableGuard) {
     return {
