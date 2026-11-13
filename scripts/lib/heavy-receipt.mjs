@@ -92,6 +92,102 @@ export function receiptPath(tree) {
   return join(receiptDir(), `${tree}.json`);
 }
 
+/** chrome-agent-platform-qg9xa: HOW a heavy run ENDED when it wrote no receipt.
+ *
+ *  A killed run writes no receipt (the process dies before the writer), so the gate command can
+ *  only say "no receipt". The fleet narrator then supplies a cause it cannot know: measured on the
+ *  erxkj run (2026-11-12), a run SIGTERMed from OUTSIDE after 135s was reported as "KILLED by the
+ *  3600s bound" — a bound that had not fired and could not have. exit 143 was right; the sentence
+ *  was invented.
+ *
+ *  So the producer records the distinction itself, in its own words, next to the receipts and in a
+ *  file that can never be mistaken for one (`.killed.json`, not `.json`): the stage knows its own
+ *  deadline and its own elapsed time, which is exactly what the narrator lacks.
+ *
+ *  NEVER a verdict: a death note says the run is UNKNOWN. It exists so a reader can tell an
+ *  operator kill / reaper kill from a timeout. */
+export const DEATH_NOTE_OUTCOMES = ["killed-external", "killed-bound"];
+
+export function deathNotePath(tree) {
+  return join(receiptDir(), `${tree}.killed.json`);
+}
+
+/** Record how the run died. Best-effort BY CONTRACT: this is written from a signal handler and from
+ *  the bound's own timer, where throwing would replace the run's real exit status with a new crash.
+ *  Returns the path written, or null when nothing could be recorded.
+ *  @param {{ tree: string, outcome: "killed-external" | "killed-bound", signal?: string | null,
+ *    phase?: string | null, elapsedMs?: number | null, boundMs?: number | null,
+ *    command?: string, producer?: string }} args */
+export function writeDeathNote({
+  tree,
+  outcome,
+  signal = null,
+  phase = null,
+  elapsedMs = null,
+  boundMs = null,
+  command = "unknown",
+  producer = process.env.FLEET_LANE ?? "unknown",
+}) {
+  if (!tree || !DEATH_NOTE_OUTCOMES.includes(outcome)) return null;
+  try {
+    const path = deathNotePath(tree);
+    mkdirSync(receiptDir(), { recursive: true });
+    const payload = {
+      version: 1,
+      kind: "heavy-gate-death-note",
+      verdict: "unknown",
+      tree,
+      outcome,
+      signal,
+      phase,
+      elapsedMs,
+      boundMs,
+      // The sentence the reader needs, composed HERE, from a fact the producer has: the run's own
+      // clock against the bound it was given.
+      headline: (() => {
+        const secs = elapsedMs === null ? "an unknown time" : `${Math.round(elapsedMs / 1000)}s`;
+        const where = phase ? ` during ${phase}` : "";
+        const ending = " (not a pass or fail)";
+        return outcome === "killed-external"
+          ? `heavy-gate was killed by an EXTERNAL signal${signal ? ` (${signal})` : ""} after ${secs}${where}` +
+            `${boundMs === null ? "" : ` — its own bound was ${Math.round(boundMs / 1000)}s and had not fired`}${ending}`
+          : `heavy-gate hit its OWN ${boundMs === null ? "" : `${Math.round(boundMs / 1000)}s `}bound after ${secs}${where}${ending}`;
+      })(),
+      command,
+      producer,
+      host: process.env.HOSTNAME ?? "unknown",
+      at: Date.now(),
+    };
+    const tmp = `${path}.${process.pid}.tmp`;
+    const fd = openSync(tmp, "w");
+    try {
+      writeSync(fd, `${JSON.stringify(payload, null, 2)}\n`);
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+    renameSync(tmp, path);
+    return path;
+  } catch (error) {
+    // A death note that cannot be written must not change how the run ends, but it must not be
+    // silent either: the reader is about to be told nothing.
+    console.error(`heavy-receipt: could not record the death note (${error?.message ?? error})`);
+    return null;
+  }
+}
+
+/** The death note on disk for this tree, or null. A malformed note is reported, never guessed at. */
+export function readDeathNote(tree) {
+  const path = deathNotePath(tree);
+  if (!existsSync(path)) return null;
+  try {
+    return JSON.parse(readFileSync(path, "utf8"));
+  } catch (error) {
+    console.error(`heavy-receipt: the death note for tree ${String(tree).slice(0, 12)} is unreadable (${error?.message ?? error})`);
+    return null;
+  }
+}
+
 /** `git rev-parse HEAD^{tree}` — the content identity of the checked-out tree. */
 export function currentTreeHash(cwd) {
   return execFileSync("git", ["rev-parse", "HEAD^{tree}"], {
