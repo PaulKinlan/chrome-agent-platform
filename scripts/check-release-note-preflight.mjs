@@ -6,8 +6,11 @@
 // check existed a lane learned about every one of them only when the merge
 // refused — five branches in one queue round, each fixed by a one-line author
 // edit plus a fresh pinned gate:
-//   1. a `Release-note: none: internal …` trailer (bump-version: "cannot mint
-//      a release; omit that trailer");
+//   1. a `Release-note:` trailer that declares no user-facing change in ANY
+//      spelling — `none: internal …`, `none — …`, `none - …`, a bare `none`
+//      (bump-version: "cannot mint a release; omit that trailer"). The
+//      colon-only form was the original text; 2rfyx found the prose spelling
+//      walking through both gates and publishing a What's-new bullet;
 //   2. a trailer the user-facing filter rejects (the merger cannot mint a
 //      release the reader cannot read);
 //   3. a PRODUCT commit (extension/ surface, per the owed ledger's own
@@ -35,8 +38,10 @@ import { execFileSync } from "node:child_process";
 import { pathToFileURL, fileURLToPath } from "node:url";
 // bump-version.mjs's OWN user-facing filter — the single source of truth.
 import { explainUserFacingEntry, isInternalEntry } from "../extension/options/changelog-filter.js";
-// bump-version.mjs's OWN trailer matcher and sanitiser (2h4j7 extraction).
-import { releaseNoteTrailers, sanitizeEntry } from "./lib/release-note.mjs";
+// bump-version.mjs's OWN trailer matcher and sanitiser (2h4j7 extraction), and
+// the "declares no user-facing change" predicate 2rfyx added there — the same
+// one call decides both gates, so they cannot disagree about a spelling.
+import { declaresNoUserFacingChange, releaseNoteTrailers, sanitizeEntry } from "./lib/release-note.mjs";
 // The owed ledger's OWN product-path ruling: what a user can get.
 import { commitOwesProductChange } from "./check-owed-changelog.mjs";
 
@@ -85,13 +90,15 @@ export function classifyCommit({ files, body }, filter = { explainUserFacingEntr
           `bump-version refuses the landing: "landing note is empty or not user-facing".`,
       };
     }
-    if (/^none:\s*internal\b/i.test(note)) {
+    if (declaresNoUserFacingChange(note)) {
       return {
         ok: false,
         reason:
-          `Release-note trailer declares "none: internal". bump-version refuses it ` +
-          `verbatim: "none: internal cannot mint a release; omit that trailer". ` +
-          `Internal-only work carries NO trailer.`,
+          `Release-note trailer declares no user-facing change ("${note.slice(0, 72)}"). ` +
+          `bump-version refuses it verbatim: "a note that declares no user-facing change ` +
+          `(none: internal, none — …) cannot mint a release; omit that trailer". ` +
+          `Internal-only work carries NO trailer — and a trailer that says so in prose is ` +
+          `refused too, whatever dash or colon it used.`,
       };
     }
     const verdict = filter.explainUserFacingEntry(note);

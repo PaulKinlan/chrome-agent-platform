@@ -44,11 +44,11 @@ import { execSync, execFileSync } from "child_process";
 // `internal:` notes as release entries and burned a version on one of them. The
 // mirrors now copy the module too, so the standalone rationale no longer applies —
 // a second copy of a rule is how two gates drift apart.
-import { isInternalEntry, isUserFacingEntry, parseChangelog } from "../extension/options/changelog-filter.js";
+import { isUserFacingEntry, parseChangelog } from "../extension/options/changelog-filter.js";
 // The trailer matcher and sanitiser are shared with the lane's pre-flight gate
 // (scripts/check-release-note-preflight.mjs, chrome-agent-platform-2h4j7) — one
 // implementation, so what the lane checks is what the merger's stamp applies.
-import { releaseNoteTrailers, sanitizeEntry } from "./lib/release-note.mjs";
+import { declaresNoUserFacingChange, releaseNoteTrailers, sanitizeEntry } from "./lib/release-note.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 
@@ -163,9 +163,12 @@ const finalNote = userNote ? userNote.trim() : (hookMode || !message ? null : me
 const cleanNote = finalNote ? sanitizeEntry(finalNote) : null;
 const landingNotes = landingMode ? notes.map((note) => sanitizeEntry(note ?? "")) : [];
 // Reject the whole union before writing any surface; a self-declared internal
-// note cannot be hidden behind another branch's legitimate release note.
-if (landingMode && landingNotes.some((note) => /^none:\s*internal\b/i.test(note))) {
-  console.error("[bump-version] ERROR: none: internal cannot mint a release; omit that trailer");
+// note cannot be hidden behind another branch's legitimate release note. The
+// declaration is recognised in every spelling (2rfyx): the colon-only test let
+// `none — internal gate classification; no user surface.` through as a
+// user-facing bullet.
+if (landingMode && landingNotes.some((note) => declaresNoUserFacingChange(note))) {
+  console.error("[bump-version] ERROR: a note that declares no user-facing change (none: internal, none — …) cannot mint a release; omit that trailer");
   process.exit(1);
 }
 if (landingMode && landingNotes.some((note) => !note || !isUserFacingEntry(note))) {
@@ -173,9 +176,9 @@ if (landingMode && landingNotes.some((note) => !note || !isUserFacingEntry(note)
   process.exit(1);
 }
 
-if (cleanNote && !isUserFacingEntry(cleanNote)) {
-  if (isInternalEntry(cleanNote) && /^none:\s*internal\b/i.test(cleanNote)) {
-    console.error(`[bump-version] ERROR: note "${cleanNote}" declares no user-facing change (none: internal); omit the Release-note trailer for internal work.`);
+if (cleanNote && (declaresNoUserFacingChange(cleanNote) || !isUserFacingEntry(cleanNote))) {
+  if (declaresNoUserFacingChange(cleanNote)) {
+    console.error(`[bump-version] ERROR: note "${cleanNote}" declares no user-facing change; omit the Release-note trailer for internal work.`);
     process.exit(1);
   }
   if (skipIfNoNote) {
