@@ -172,6 +172,40 @@ Deno.test("uvtk4: a merged one-patch surface collision cannot silently skip the 
   assertEquals(union.bullet, note, "the changelog and surfaces advance together");
 });
 
+// chrome-agent-platform-2rfyx (+ltamb, found while reviewing kdeqx's trailer):
+// the refusal was COLON-specific (`/^none:\s*internal\b/i`), so the spelling a
+// lane naturally reaches for — 'Release-note: none — internal gate
+// classification; no user surface.' — satisfied the user-facing filter and was
+// published as a What's-new bullet by the landing stamp. The declaration is the
+// word, not the punctuation, so every spelling now takes the same exit.
+Deno.test("2rfyx: a prose 'none — …' note is refused exactly like 'none: internal' — no version, no bullet", async () => {
+  const notes = [
+    "none — internal gate classification; no user surface.",
+    "none — unreleased staging API surface renamed; nothing published changes hands.",
+    "none - internal",
+    "none",
+  ];
+  for (const note of notes) {
+    for (const flags of [["--hook", "--user-note", note], ["--user-note", note]]) {
+      const r = await bump("not a release", ...flags);
+      assertEquals(r.status, 1, `refused: ${note} ${flags} — ${r.stderr}`);
+      assertEquals(r.version, "1.2.3", `no version consumed: ${note}`);
+      assertEquals(r.bullet, null, `no release published: ${note}`);
+      assert(/declares no user-facing change/.test(r.stderr), `names the declaration: ${r.stderr}`);
+    }
+  }
+});
+
+// The predicate is the DECLARATION, not the first word: a note that merely
+// starts with 'none' and carries on in prose is a real note and still ships.
+Deno.test("2rfyx: a note that merely starts with the word 'none' is still user-facing and still publishes", async () => {
+  const words = "none of the exporters can be re-pointed at a different folder";
+  const r = await bump(words, "--skip-if-no-note");
+  assertEquals(r.status, 0, r.stderr);
+  assertEquals(r.version, "1.2.4", "a real note still consumes a version");
+  assertEquals(r.bullet, words, "and still publishes its bullet");
+});
+
 Deno.test("bump-version: a user-facing note still bumps in hook mode, so syncing the filter did not just disable the hook", async () => {
   const r = await bump(WORDS, "--skip-if-no-note");
   assertEquals(r.status, 0, r.stderr);

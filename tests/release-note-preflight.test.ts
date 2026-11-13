@@ -74,9 +74,39 @@ Deno.test("2h4j7: a 'none: internal' trailer is RED with bump-version's exact re
     const verdict = classifyCommit({ files, body: "fix(rs78b): tooling honesty\n\nRelease-note: none: internal (test-weights tooling honesty).\n" });
     assertEquals(verdict.ok, false);
     if (!verdict.ok) {
-      assertStringIncludes(verdict.reason, "none: internal cannot mint a release; omit that trailer");
+      assertStringIncludes(verdict.reason, "a note that declares no user-facing change");
+      assertStringIncludes(verdict.reason, "cannot mint a release; omit that trailer");
     }
   }
+});
+
+// chrome-agent-platform-2rfyx (+ltamb): the same declaration in prose. The guard
+// used to test the colon form only, so 'none — internal …' was reported GREEN by
+// this very pre-flight and then published by the landing stamp as a user bullet.
+Deno.test("2rfyx: a prose 'none — …' trailer is RED with the same refusal, on any delta", () => {
+  for (const files of [SCRIPTS_ONLY, PRODUCT]) {
+    for (const note of [
+      "none — internal gate classification; no user surface.",
+      "none — unreleased staging API surface renamed; nothing published changes hands.",
+    ]) {
+      const verdict = classifyCommit({ files, body: `fix(kdeqx): gate honesty\n\nRelease-note: ${note}\n` });
+      assertEquals(verdict.ok, false, note);
+      if (!verdict.ok) {
+        assertStringIncludes(verdict.reason, "a note that declares no user-facing change");
+        assertStringIncludes(verdict.reason, "cannot mint a release; omit that trailer");
+      }
+    }
+  }
+});
+
+// The other half: the predicate must not swallow real copy that happens to begin
+// with the word. 'none of the exporters …' is a note about the product.
+Deno.test("2rfyz: a note that merely starts with 'none' stays GREEN", () => {
+  const verdict = classifyCommit({
+    files: PRODUCT,
+    body: "fix(2rfyx): exporter honesty\n\nRelease-note: none of the exporters can be re-pointed at a different folder.\n",
+  });
+  assertEquals(verdict, { ok: true });
 });
 
 Deno.test("2h4j7: an 'internal:'-marked trailer is RED (the marker is for changelog bullets, not trailers), and an empty-after-sanitise trailer is RED", () => {

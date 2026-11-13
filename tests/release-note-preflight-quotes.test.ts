@@ -117,8 +117,10 @@ Deno.test("vggt7: each refusal classifyCommit prints is a sentence bump-version 
     { what: "missing trailer", commit: { files: ["extension/lib/x.js"], body: "no trailer here" } },
     // A trailer that sanitises to nothing.
     { what: "empty after sanitise", commit: { files: ["extension/lib/x.js"], body: "Release-note:   " } },
-    // The self-declared internal form (refused verbatim, not by the filter).
+    // The self-declared internal form (refused verbatim, not by the filter) —
+    // in both spellings, since 2rfyx made the declaration punctuation-agnostic.
     { what: "none: internal", commit: { files: ["extension/lib/x.js"], body: "Release-note: none: internal refactor" } },
+    { what: "none — … prose", commit: { files: ["extension/lib/x.js"], body: "Release-note: none — internal gate classification; no user surface." } },
     // A note the project's user-facing filter rejects — the vggt7 quote.
     {
       what: "filter rejection",
@@ -211,7 +213,10 @@ Deno.test("erfi7: each refusal is EMITTED by a real bump-version landing run, no
   //   - a trailer the project's user-facing filter rejects
   const cases: Array<{ quote: string; body: string }> = [
     { quote: "has no Release-note trailer", body: "no trailer at all" },
-    { quote: "none: internal cannot mint a release; omit that trailer", body: "Release-note: none: internal refactor" },
+    { quote: "a note that declares no user-facing change", body: "Release-note: none: internal refactor" },
+    // 2rfyx (+ltamb): the prose spelling must reach the SAME emitted refusal — it
+    // used to pass this guard entirely and be published as a user bullet.
+    { quote: "a note that declares no user-facing change", body: "Release-note: none — internal gate classification; no user surface." },
     { quote: "landing note is empty or not user-facing", body: "Release-note: internal: rewrote the guard" },
   ];
   for (const { quote, body } of cases) {

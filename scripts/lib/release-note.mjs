@@ -13,6 +13,26 @@ export function releaseNoteTrailers(body) {
   return [...String(body ?? "").matchAll(/^Release-note:\s*(.*)$/gim)].map((match) => match[1]);
 }
 
+/** A release note that DECLARES there is no user-facing change.
+ *
+ *  The declaration is the word "none"; the punctuation after it is prose. The
+ *  guards used to test the colon form only (`/^none:\s*internal\b/i`), so the
+ *  spelling a lane naturally reaches for — `Release-note: none — internal gate
+ *  classification; no user surface.` — passed BOTH the lane pre-flight and the
+ *  landing stamp, satisfied the user-facing filter, and was published as a
+ *  What's-new bullet (chrome-agent-platform-2rfyx, ltamb, qiq8l). A trailer that
+ *  says there is nothing for the reader to see must never mint one, whatever
+ *  dash or spacing it used to say so.
+ *
+ *  Matches `none`, `none: …`, `none — …`, `none – …`, `none - …`. A note that
+ *  merely START with the word and then carries on in prose ('none of the
+ *  exporters …') is not a declaration and is left to the user-facing filter.
+ *  Callers pass a SANITISED note (sanitizeEntry), so the leading conventional
+ *  prefix and bead ids are already gone. */
+export function declaresNoUserFacingChange(note) {
+  return /^none\b(?:\s*$|\s*[:—–-])/i.test(String(note ?? "").trim());
+}
+
 /** Release notes are for the person using the extension, not the VCS: strip
  *  conventional-commit prefixes, bare SHAs and CAP-FB tracker ids so the
  *  automated plain-language check (tests/changelog.test.ts) keeps passing no

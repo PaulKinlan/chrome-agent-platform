@@ -344,6 +344,26 @@ Deno.test("uikt5: legacy one-patch surface skew reconciles during landing withou
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
+Deno.test("2rfyx: a prose 'none — …' note aborts the union exactly like 'none: internal'", async () => {
+  const dir = await mirror();
+  try {
+    const good = commit(dir, "visible", "you can export conversations");
+    // The two spellings that reached CHANGELOG-adjacent commits: kdeqx's gate
+    // classification note and 9lptq's staging-surface note. Both declare the
+    // same thing, neither used a colon, and both used to pass the landing guard.
+    for (const note of [
+      "none — internal gate classification; no user surface.",
+      "none — unreleased staging API surface renamed; nothing published changes hands.",
+    ]) {
+      const bad = commit(dir, "internal prose", note);
+      const result = stamp(dir, "--from", good, "--from", bad);
+      assert(result.status !== 0, `refused: ${note} — ${result.stderr}`);
+      assert(/declares no user-facing change/.test(result.stderr), result.stderr);
+      await assertUnstamped(dir);
+    }
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
 Deno.test("uikt5: a self-declared internal note aborts the entire union before stamping", async () => {
   const dir = await mirror();
   try {
@@ -351,7 +371,7 @@ Deno.test("uikt5: a self-declared internal note aborts the entire union before s
     const bad = commit(dir, "internal", "none: internal tooling");
     const result = stamp(dir, "--from", good, "--from", bad);
     assert(result.status !== 0);
-    assert(/none: internal/.test(result.stderr), result.stderr);
+    assert(/declares no user-facing change/.test(result.stderr), result.stderr);
     await assertUnstamped(dir);
   } finally { await rm(dir, { recursive: true, force: true }); }
 });

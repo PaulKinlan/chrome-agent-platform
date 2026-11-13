@@ -183,8 +183,10 @@ node scripts/bump-version.mjs patch --landing --from <candidate-sha> [--from <ne
 # losing a user-facing change under another candidate's release heading.
 # If the union has an additional synthesized user-facing effect, pass
 # --user-note "<what the user gets>" explicitly. A union with only explicit
-# internal candidates mints nothing; 'Release-note: none: internal' is an
-# ERROR, not a release. For a
+# internal candidates mints nothing; a Release-note that DECLARES no user-facing
+# change ('none: internal …', 'none — …', a bare 'none') is an
+# ERROR, not a release. The declaration is the word, not the punctuation: a
+# prose spelling is refused exactly like the colon form (2rfyx/ltamb). For a
 # legacy union with surfaces ONE patch ahead of the latest CHANGELOG entry,
 # add --reconcile-merge to this command rather than hand-resetting six files.
 # The shared .git/hooks/post-commit dispatcher runs the tracked hook from the
