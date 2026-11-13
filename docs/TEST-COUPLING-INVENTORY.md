@@ -241,14 +241,21 @@ whole-suite mutant run); **inspection** means read from the source, not executed
   `launchChrome({ requireQuiet: true })` + a `loadSensitive` reason in the registry in
   the same commit, and maps its refusal to exit 75 + an `ENVIRONMENT:` line — never
   relabelled EXPECTED-RED, never manufactured by killing another lane's processes.
-  Anything that moves the journeys' abort path owes `git grep -n "measureEvaluateTimeout\\|evaluateTimeoutReport\\|environmentalAbort"`: an evaluate timeout is classified by
-  MEASUREMENT (`loaded` / `idle-never-settled` / `unmeasurable`), and only the first and
-  last are environmental — an idle box that never settled is a product red and its line
-  must not carry `CAP_ENVIRONMENTAL_REFUSAL`. Real-browser CDP operations (`waitForServiceWorker`,
-  `openCdp` send, `kat-evaluate`) use `classifyCdpTimeout` (`chrome-agent-platform-56hfm`),
-  requiring contemporaneous evidence of a named heavy builder job (`activeBuilderJobs > 0`
-  or non-empty `compilerNames`) before granting `loaded` / `environmental: true`; unnamed parallel-phase
-  load alone strictly remains `PRODUCT RED`.
+  Anything that moves the journeys' abort path owes `git grep -n "measureEvaluateTimeout\\|evaluateTimeoutReport\\|environmentalAbort"`: there are TWO classifiers and they differ
+  (chrome-agent-platform-zen14). `classifyEvaluateTimeout` (the journey abort path) has THREE causes:
+  `loaded` (environmental — quietReasons includes steal above the bound, so a stolen box reads
+  here as loaded), `idle-never-settled` (PRODUCT RED — the box was measurably quiet INCLUDING
+  the steal axis, so a round trip that never settled is the product's), and `unmeasurable`
+  (environmental, fail-closed — the LOAD sample itself could not be read). `classifyCdpTimeout`
+  (real-browser CDP ops: `waitForServiceWorker`, `openCdp` send, `kat-evaluate`; chrome-agent-platform-56hfm)
+  has the same three PLUS a fourth, `unattributable` (environmental): host CPU steal measured
+  ABOVE `CAP_QUIET_MAX_STEAL_PCT` is a provable environment fault with the run still measurable,
+  so it refuses WITHOUT the named-heavy-job evidence `loaded` requires. In BOTH classifiers,
+  steal UNMEASURED on a host whose load IS measurable (the no-/proc shape,
+  chrome-agent-platform-91i40) is NOT a refusal — a genuine failure must never read as
+  retryable — so an idle box classifies `idle-never-settled` (PRODUCT RED). Unnamed
+  parallel-phase load alone remains `PRODUCT RED` in classifyCdpTimeout when steal is
+  measured at/below the bound or unmeasurable.
 - **Subject moves:** LOUD naming the harness.
 
 ## 10b. tests/journey-scripted-probe.test.ts + `runScriptedToolProbe` in scripts/chrome-journeys.ts
