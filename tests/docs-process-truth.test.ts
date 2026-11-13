@@ -236,3 +236,20 @@ Deno.test("xert2: the beads-export doc routes a missing ID by mode — staged fi
   assert(doc.includes("Only when the checker ran manually"),
     "the Dolt-history guidance must be scoped to the manual path");
 });
+
+// chrome-agent-platform-v822k: the two landings that lost a round trip to the
+// ledger's ORDERING, and the trailer-representation trap behind it (g0bfz). The
+// playbook is the only place a merger reads this, so the sentences are pinned.
+Deno.test("v822k: the playbook says WHEN to run the owed-changelog ledger, and forbids deciding a note by a trailer query", () => {
+  const playbook = read("docs/MERGER-PLAYBOOK.md");
+  assert(playbook.includes("AFTER this stamp, never before it"),
+    "the ledger check must be ordered after the stamp");
+  assert(playbook.includes("that is the pre-stamp state by construction, not a"),
+    "a pre-stamp OWED is named as the expected state, not a defect");
+  assert(playbook.includes("never compose it"),
+    "the gate count must be read, never composed");
+  assert(playbook.includes("Never type a count in the step"), "the count rule names the failure mode");
+  assert(playbook.includes("%(trailers:key=Release-note,"),
+    "the trailer-query trap is named, with the query that lies");
+  assert(playbook.includes("grep the body"), "the workable alternative is stated");
+});
