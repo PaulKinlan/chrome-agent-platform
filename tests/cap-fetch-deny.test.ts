@@ -292,12 +292,20 @@ Deno.test("7t2zv SW broker runtime: refusals are fixed codes + static hints, the
 
   // (3) A redirect response is refused with redirect_refused — the redirect
   // target never reaches the model.
-  const redirectRes = await makeDispatch(async () => ({ status: 302, type: "opaqueredirect" }))({
+  // chrome-agent-platform-67xsg: the stub carries a RESOLVED response url with a
+  // credential, so the refusal's observable is real — the reply must carry neither
+  // the credential nor the redirect target (the same property the success leg
+  // asserts), wherever the implementation happens to place its fields.
+  const redirectRes = await makeDispatch(async () => ({
+    status: 302, type: "opaqueredirect", url: "https://example.com/landing?token=SECRET7T2ZV",
+  }))({
     url: "https://example.com/", method: "GET", runId: "run-7t2zv",
   });
   assertEquals(redirectRes.ok, false);
   assertEquals(redirectRes.error, "redirect_refused");
   assert(typeof redirectRes.hint === "string" && redirectRes.hint.length > 0);
+  assert(!JSON.stringify(redirectRes).includes("SECRET7T2ZV"), "the redirect refusal must not echo the resolved response url's credential");
+  assert(!JSON.stringify(redirectRes).includes("example.com/landing"), "the redirect refusal must not echo the redirect target");
 
   // (4) The success path: the model-readable echo is ORIGIN+PATH only — a
   // credential in the resolved response URL's query is stripped before any
