@@ -118,7 +118,9 @@ try {
   const sealedOwner = emscriptenJobOwner({ runId: fixtureRunId, agentId: "hub" });
   const outcome = await evaluate(swSession, `(async () => {
     const runId = ${JSON.stringify(fixtureRunId)};
-    const owner = ${JSON.stringify(sealedOwner)};
+    // 4ihj3: the sealed owner is inlined INTO the meta write — no page-side
+    // variable exists to re-point at a legacy-shaped owner while keeping the
+    // derivation line present (the mutant class the presence-only pin missed).
     const root = await navigator.storage.getDirectory();
     const streams = await root.getDirectoryHandle('wasm-tool-streams-v1', { create:true });
     const id = Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0')).join('');
@@ -127,7 +129,7 @@ try {
     const empty = await input.createWritable(); await empty.close();
     const meta = await dir.getFileHandle('authority.json', {create:true});
     const writer = await meta.createWritable();
-    await writer.write(JSON.stringify({version:1,id,type:'input',owner,sealed:true,bytes:0,createdAt:Date.now()}));
+    await writer.write(JSON.stringify({version:1,id,type:'input',owner:${JSON.stringify(sealedOwner)},sealed:true,bytes:0,createdAt:Date.now()}));
     await writer.close();
     const inputRef = {version:1,id,kind:'input'};
     const manifest = ${JSON.stringify(manifest)};

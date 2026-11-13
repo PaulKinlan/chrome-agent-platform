@@ -216,10 +216,14 @@ Deno.test("95o2n: the harness owner is codec-derived, never the legacy ':|' shap
   assert(!/["']agent:["']\s*\+/.test(src), "the legacy 'agent:' + … owner construction must not survive in the harness");
   // qrhp4: assert the CORRESPONDENCE, not the text — the three mutant classes the
   // old text-only pin missed:
-  // (M2) the page script's owner MUST come from the serialized sealedOwner, never
-  //      from any literal or template expression of its own:
-  assert(src.includes("owner = ${JSON.stringify(sealedOwner)}"),
-    "the page-side owner must be the serialized sealedOwner — any locally built owner (even a template literal) evades the seal path");
+  // (M2 + 4ihj3) VALUE FLOW, not presence: the meta write embeds the serialized
+  //      sealedOwner INLINE, and no page-side owner variable exists to re-point
+  //      (a second variable named e.g. legacyOwner, fed by ['agent',runId,':|hub'].join(':'),
+  //      survived the presence-only pin while restoring the defect):
+  assert(src.includes("owner:${JSON.stringify(sealedOwner)},sealed:true"),
+    "the meta write must embed the serialized sealedOwner inline — the value written IS the derived value");
+  assert(!/\b(?:const|let|var)\s+owner\b/.test(src),
+    "no page-side owner variable may exist — a named variable can be re-pointed at a legacy shape");
   // (M3) the fixture run id must exist EXACTLY ONCE — one constant interpolated
   //      into both the seal tuple and the page script, so the two can never drift:
   assert(src.includes("emscriptenJobOwner({ runId: fixtureRunId, agentId: \"hub\" })"),
