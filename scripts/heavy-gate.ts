@@ -25,7 +25,7 @@
 import { fileURLToPath } from "node:url";
 import { CERT_HEAVY_FILES, HEAVY_GATE_FILES, QUARANTINED_HEAVY_FILES, WALL_CLOCK_HEAVY_FILES } from "./test-partition.mjs";
 import { areAllFailuresEnvironmental, combinePhaseExitCodes, ENVIRONMENTAL_REFUSAL_EXIT } from "./lib/environmental-verdict.mjs";
-import { attributeParallelBatchOutput, heavyGateCommand, phaseStatusFor } from "./lib/heavy-receipt.mjs";
+import { attributeParallelBatchOutput, heavyGateCommand, phaseStatusFor, writeDeathNote } from "./lib/heavy-receipt.mjs";
 import {
   DEFAULT_INTERVAL_MS as STEAL_INTERVAL_MS,
   createSampler as createStealSampler,
@@ -35,6 +35,24 @@ import {
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 export const DEFAULT_HEAVY_GATE_TIMEOUT_MS = 3_600_000;
+
+/** chrome-agent-platform-qg9xa: what the run was doing when it died, and the two clocks a death
+ *  note needs. Module scope because a signal handler has no argument to carry the phase through. */
+const DEATH_CONTEXT: {
+  tree: string | null;
+  phase: string | null;
+  phaseStartedAt: number | null;
+  boundMs: number | null;
+  childPid: number | null;
+  runStart: number;
+} = {
+  tree: null,
+  phase: null,
+  phaseStartedAt: null,
+  boundMs: null,
+  childPid: null,
+  runStart: Date.now(),
+};
 
 /** The tree this run is attributed to (juubk). Resolved at the START; null if git cannot answer,
  *  which the receipt writer treats as an unwritable receipt (never a pass). */
@@ -104,6 +122,9 @@ async function runPhase(
   files: string[],
   { parallel, timeoutMs, capture }: { parallel: boolean; timeoutMs: number; capture: boolean },
 ): Promise<{ code: number; output: string }> {
+  DEATH_CONTEXT.phase = label;
+  DEATH_CONTEXT.phaseStartedAt = Date.now();
+  DEATH_CONTEXT.boundMs = timeoutMs;
   console.log(`\nheavy-gate: ${label} — ${files.length} file(s)${parallel ? " (--parallel)" : " (SERIAL, quiet-window acquirer)"}`);
   for (const f of files) console.log(`  - ${f}`);
   const args = ["test", "-A", "--config", "deno.runner.jsonc"];
@@ -120,6 +141,7 @@ async function runPhase(
     stderr: capture ? "piped" : "inherit",
   });
   const child = cmd.spawn();
+  DEATH_CONTEXT.childPid = child.pid ?? null;
   let captured = "";
   const pump = async (stream: ReadableStream<Uint8Array> | null, sink: (chunk: string) => void) => {
     if (!stream) return;
@@ -144,10 +166,22 @@ async function runPhase(
     }, timeoutMs);
   }
   const status = await child.status;
+  DEATH_CONTEXT.childPid = null;
   await pumps;
   if (timer) clearTimeout(timer);
   if (timedOut) {
     console.error(`\nheavy-gate: TIMED OUT after ${timeoutMs / 1000}s (${label})`);
+    // qg9xa: record that the BOUND fired. This branch knows it did; nothing downstream has to guess.
+    if (DEATH_CONTEXT.tree) {
+      writeDeathNote({
+        tree: DEATH_CONTEXT.tree,
+        outcome: "killed-bound",
+        phase: label,
+        elapsedMs: Date.now() - (DEATH_CONTEXT.phaseStartedAt ?? Date.now()),
+        boundMs: timeoutMs,
+        command: heavyGateCommand(),
+      });
+    }
     return { code: 124, output: captured };
   }
   const verdict = capture ? classifyPhaseExit(status.code, captured) : status.code;
@@ -165,6 +199,49 @@ export async function runHeavyGate(args = Deno.args): Promise<number> {
   // cannot attribute these suites to the tree it happens to hold when they finish, so the drift is
   // recorded and never certifies.
   const treeStart = await currentTreeForReceipt();
+  // chrome-agent-platform-qg9xa: an EXTERNAL kill (an operator, the reaper, a coordinator's CPU
+  // sweep) must not be narrated later as OUR bound. This process holds both clocks — the phase's
+  // elapsed time and the bound it was given — so it records the distinction before it dies; the
+  // fleet's narrator only ever sees the exit code and had been inventing the cause. The signal is
+  // RE-RAISED so the exit status stays honest (143/130/129) and nothing can read a death note as a
+  // verdict.
+  DEATH_CONTEXT.tree = treeStart || null;
+  DEATH_CONTEXT.runStart = runStart;
+  const EXTERNAL_SIGNALS = ["SIGTERM", "SIGINT", "SIGHUP"] as const;
+  // Deno's listener takes no argument (the signal is the one it was registered for), so each
+  // registration closes over its own name and the map is what lets the recorder unregister itself
+  // before re-raising.
+  const installedSignals = new Map<Deno.Signal, () => void>();
+  const recordExternalKill = (signal: Deno.Signal) => {
+    writeDeathNote({
+      tree: treeStart || "",
+      outcome: "killed-external",
+      signal,
+      phase: DEATH_CONTEXT.phase,
+      elapsedMs: Date.now() - (DEATH_CONTEXT.phaseStartedAt ?? runStart),
+      boundMs: DEATH_CONTEXT.boundMs ?? Number(Deno.env.get("CAP_HEAVY_GATE_TIMEOUT_MS") ?? DEFAULT_HEAVY_GATE_TIMEOUT_MS),
+      command: heavyGateCommand(),
+    });
+    for (const [sig, handler] of installedSignals) {
+      try { Deno.removeSignalListener(sig, handler); } catch { /* not installed */ }
+    }
+    // Do not leave the deno tree running: an external kill that orphans the child makes the kill
+    // look like a lane sweep to the next operator, and the reaper then kills "someone else's" job.
+    if (DEATH_CONTEXT.childPid) {
+      for (const pid of [-DEATH_CONTEXT.childPid, DEATH_CONTEXT.childPid]) {
+        try { Deno.kill(pid, "SIGKILL"); } catch { /* already gone */ }
+      }
+    }
+    // Re-raise so the process exits BY THE SIGNAL (143/130/129). Anything else would turn a kill
+    // into a verdict the gate could read.
+    try { Deno.kill(Deno.pid, signal); } catch { Deno.exit(128); }
+  };
+  for (const sig of EXTERNAL_SIGNALS) {
+    const handler = () => recordExternalKill(sig);
+    installedSignals.set(sig, handler);
+    Deno.addSignalListener(sig, handler);
+  }
+
   // chrome-agent-platform-tu8w9: sample CPU steal for the WHOLE run and write the conditions into the
   // receipt. Measured on this VM: average 58.6%, peak 87% (689/698 intervals >= 20%) while the gate
   // still completed 744/744 parallel files — completeness stays certifiable, durations do not. The

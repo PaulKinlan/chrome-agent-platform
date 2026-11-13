@@ -35,7 +35,7 @@
 //   exit 2  structurally refused: missing / mismatched / stale / not a pass / incomplete (get a receipt)
 //   exit 3  accounting-only and NOT accepted: starved, unmeasured, or no steal evidence (fix the box)
 
-import { checkHeavyReceipt, currentTreeHash, describeReceiptCoverage } from "./lib/heavy-receipt.mjs";
+import { checkHeavyReceipt, currentTreeHash, describeReceiptCoverage, readDeathNote } from "./lib/heavy-receipt.mjs";
 
 const args = process.argv.slice(2);
 const known = new Set(["--accept-accounting-only", "--help"]);
@@ -74,6 +74,26 @@ if (!verdict.ok) {
         `(${describeReceiptCoverage(verdict.coverage ?? verdict.receipt)}; accounting only, timingClaim none).`,
     );
     process.exit(0);
+  }
+  // chrome-agent-platform-qg9xa: a killed producer writes no receipt, so "no receipt" is all this
+  // stage can know on its own — and the fleet narrator had been filling that gap with a cause it
+  // could not know ("KILLED by the 3600s bound" for a run killed from OUTSIDE after 135s). If the
+  // producer left a death note, print ITS sentence: the producer had both clocks.
+  //
+  // chrome-agent-platform-ozbod (delta review): a death note is keyed by TREE, and a tree can carry
+  // more than one run. Reading it on ANY refusal let a note left by an earlier, killed attempt narrate
+  // a LATER run that did write a receipt — measured: a failed receipt for the same tree plus a stale
+  // external-kill note printed "EXTERNAL signal … UNKNOWN" instead of the failure that actually
+  // happened. The note answers exactly one question — "why is there no receipt?" — so it is read only
+  // for that refusal. Every other refusal (not-pass, malformed, stale, wrong tree) has a receipt or a
+  // file that speaks for itself, and guessing a cause there is the same defect qg9xa exists to kill.
+  const death = accountingOnly || verdict.reason !== "missing" ? null : readDeathNote(tree);
+  if (death) {
+    console.error(`gate-receipt: ${death.headline}`);
+    console.error(
+      `gate-receipt: recorded ${new Date(death.at).toISOString()} by ${death.producer ?? "unknown"}` +
+        `${death.phase ? ` during ${death.phase}` : ""} — the run is UNKNOWN, not a failure of the tree.`,
+    );
   }
   console.log(verdict.marker, JSON.stringify(verdict.payload));
   // 3 vs 2: "bad box" vs "no receipt". Both fail closed; only one is fixed by re-running on idle iron.
