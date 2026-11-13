@@ -96,6 +96,9 @@ export function explainChangedFileMapping({ changed = [], candidates = {}, execu
   // lockfile delta), which is not the same claim as "nothing covers this file". Re-deriving the
   // status from candidates-vs-ran here could only ever turn a policy into a gap.
   const policyByFile = new Set(unmappable.filter((u) => u?.kind === "policy").map((u) => u.file));
+  // fjnkl: a FAILED run has no attributable executions (ea2qv empties executedSuites), so a declared
+  // guard must not be read as "it ran" on a red tree. Computed once, used by both branches below.
+  const runFailed = Number.isInteger(runExitCode) && runExitCode !== 0;
   return normalizeSuiteList(changed).map((file) => {
     const passive = isRepoMetadata(file) || isPassiveContentFile(file);
     if (passive) {
@@ -135,6 +138,36 @@ export function explainChangedFileMapping({ changed = [], candidates = {}, execu
     // suite happens to import it. Full execution is not selector authority.
     const failClosedReason = unmappableByFile.get(file);
     if (failClosedReason) {
+      // fjnkl: the passive branch above already honours a DEDICATED guard, and an EXECUTABLE file can
+      // own one too — that is the whole point of DEDICATED_FILE_GUARDS, whose canonical case is a
+      // harness a test SPAWNS BY PATH (no import edge can ever exist, so `candidates` is empty by
+      // construction). h346c forces those guards into the selection for every changed file, so when one
+      // of them EXECUTED the file IS policed and the ledger said "unmapped" — two contradictory records
+      // on one green run, and a warning readers learn to ignore.
+      //   Two boundaries are deliberate: a POLICY refusal is never overridden (the selector's own
+      // machinery must not be certified by a suite it selects), and a FAILED run claims nothing.
+      if (!policyByFile.has(file) && !runFailed) {
+        const dedicated = guardsForChangedFile(file);
+        if (dedicated.length) {
+          const executed = dedicated.filter((suite) => ran.has(suite));
+          if (executed.length) {
+            return {
+              file,
+              status: "mapped",
+              executed_suites: executed,
+              reason:
+                "dedicated guard executed (this file owns a suite that reads it and it ran; no import " +
+                "edge exists — a spawned harness, which is why the guard is declared rather than inferred)",
+            };
+          }
+          return {
+            file,
+            status: "unmapped",
+            executed_suites: [],
+            reason: `dedicated guard declared but NOT executed: ${dedicated.join(", ")}`,
+          };
+        }
+      }
       return {
         file,
         status: policyByFile.has(file) ? "fail-closed" : "unmapped",
@@ -154,8 +187,7 @@ export function explainChangedFileMapping({ changed = [], candidates = {}, execu
     // sends the next reader to inspect the selector instead of the failure — on 2026-10-23 that cost
     // coord and me a wrong instruction each (chrome-agent-platform-4ml4b, withdrawn for this reason).
     // A genuinely omitted/unselected suite keeps its own reason: that stays true whatever the rc.
-    const failedRun = Number.isInteger(runExitCode) && runExitCode !== 0;
-    if (failedRun && reachable.length > omittedReason.length) {
+    if (runFailed && reachable.length > omittedReason.length) {
       return {
         file,
         // 03eht: its OWN status, not "unmapped". The reason below has said "no selection omission
