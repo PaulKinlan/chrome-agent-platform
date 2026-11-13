@@ -1392,4 +1392,29 @@ Deno.test("2syam: awaitServiceWorkerOrRefuse refuses ONLY on observed absence + 
   });
   assertEquals(got, target, "a registered service worker is returned as-is");
   assertEquals(dirtyLedger.rows(), [], "no refusal row when the precondition was met");
+
+  // (5) The two seams the other journeys need: a `wait` function instead of cdp.serviceWorker (the
+  // suites that drive raw CDP), and a caller-named `observed` fact, because not every browser journey
+  // waits on a service worker (mic-shadow-host-journey waits on the browser's CDP endpoint). The
+  // receipt must carry the caller's fact, never a hardcoded one — a receipt that names the wrong
+  // observation is the same defect as no receipt.
+  const waitLedger = mem();
+  const realError = console.error;
+  let receiptLine = "";
+  try {
+    console.error = (line: unknown) => { receiptLine = String(line); };
+    await awaitServiceWorkerOrRefuse({
+      suite: "tests/mic-shadow-host-journey.test.ts",
+      observed: "no-cdp-target",
+      wait: async () => null,
+      contention: starved,
+      ledgerIo: waitLedger, ledgerPath: "l.jsonl",
+      exit: (() => { throw new Error("exit called"); }) as never,
+    }).catch(() => null);
+  } finally {
+    console.error = realError;
+  }
+  assert(receiptLine.includes("observed=no-cdp-target"), `the receipt names the caller's observation: ${receiptLine}`);
+  assert(receiptLine.includes("suite=tests/mic-shadow-host-journey.test.ts"), `the receipt names the suite: ${receiptLine}`);
+  assertEquals(waitLedger.rows().length, 1, "the wait-seam shape records the refusal just like the cdp shape");
 });

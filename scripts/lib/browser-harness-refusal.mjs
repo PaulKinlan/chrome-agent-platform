@@ -101,6 +101,7 @@ export function isStarvedForBrowser({ loadPerCpu = null, steal = null } = {}) {
  *   boundMs: number,
  *   contention?: { loadPerCpu?: number|null, steal?: number|null, load?: number|null },
  *   priorRefusals?: number,
+ *   observed?: string,
  * }} args
  * @returns {{ suite: string, waitedMs: number, boundMs: number, loadPerCpu: number|null, steal: number|null, load: number|null, refusals: number, receipt: string } | null}
  */
@@ -111,6 +112,7 @@ export function refuseIfStarved({
   boundMs,
   contention = {},
   priorRefusals = 0,
+  observed = "no-service-worker",
 } = {}) {
   // Condition 2, first and unconditionally: the harness came up, so nothing after it can be excused.
   if (registered) return null;
@@ -129,7 +131,7 @@ export function refuseIfStarved({
     load,
     refusals,
     // Condition 1's receipt: the observed fact, its timing, the measurements, and the count.
-    receipt: `${CAP_ENVIRONMENTAL_REFUSAL} suite=${suite} observed=no-service-worker waitedMs=${Number(waitedMs) || 0} boundMs=${Number(boundMs) || 0} ` +
+    receipt: `${CAP_ENVIRONMENTAL_REFUSAL} suite=${suite} observed=${observed} waitedMs=${Number(waitedMs) || 0} boundMs=${Number(boundMs) || 0} ` +
       `loadPerCpu=${loadPerCpu ?? "unmeasurable"} load=${load ?? "unmeasurable"} steal=${steal ?? "unmeasurable"} refusals=${refusals}`,
   };
 }
@@ -287,7 +289,8 @@ export async function exitWithRefusal({ receipt, cleanup = null, exit = (code) =
  *
  * @param {{
  *   suite: string,
- *   cdp: { serviceWorker: (args: { timeoutMs: number, match?: ((t: any) => boolean)|null }) => Promise<any> },
+ *   cdp?: { serviceWorker: (args: { timeoutMs: number, match?: ((t: any) => boolean)|null }) => Promise<any> }|null,
+ *   wait?: ((boundMs: number) => Promise<any|null>)|null,
  *   match?: ((t: any) => boolean)|null,
  *   base?: number,
  *   contention?: { load?: number|null, loadPerCpu?: number|null, steal?: number|null }|null,
@@ -295,12 +298,14 @@ export async function exitWithRefusal({ receipt, cleanup = null, exit = (code) =
  *   ledgerPath?: string|null,
  *   cleanup?: (() => unknown)|null,
  *   exit?: (code: number) => never,
+ *   observed?: string,
  * }} args
  * @returns {Promise<any|null>} the service worker target, or null when none registered and no refusal applies
  */
 export async function awaitServiceWorkerOrRefuse({
   suite,
-  cdp,
+  cdp = null,
+  wait = null,
   match = null,
   base = 10_000,
   contention = null,
@@ -308,6 +313,7 @@ export async function awaitServiceWorkerOrRefuse({
   ledgerPath = null,
   cleanup = null,
   exit = undefined,
+  observed = "no-service-worker",
 } = {}) {
   const measured = contention ?? {
     load: currentAbsoluteLoad(),
@@ -317,7 +323,12 @@ export async function awaitServiceWorkerOrRefuse({
   // Condition 1's timing: the SAME number is the wait and the bound the receipt carries, so a
   // receipt can never claim a bound the wait did not use (the f8li1 leg pins that identity).
   const boundMs = browserReadyTimeoutMs({ base, load: measured.load ?? null, loadPerCpu: measured.loadPerCpu ?? null, steal: measured.steal ?? null });
-  const sw = await cdp.serviceWorker({ timeoutMs: boundMs, ...(match ? { match } : {}) });
+  // Two readiness shapes exist in the tree: `cdp.serviceWorker({timeoutMs})` (the reference suite) and
+  // `waitForServiceWorker(send, {timeoutMs})` for suites that drive raw CDP. Both are given the SAME
+  // scaled bound, and neither may report a torn/partial result as "registered".
+  const sw = wait
+    ? await wait(boundMs)
+    : await cdp.serviceWorker({ timeoutMs: boundMs, ...(match ? { match } : {}) });
   if (sw) return sw; // condition 2: the harness is up, so nothing downstream may be excused
   const refusal = refuseIfStarved({
     suite,
@@ -326,6 +337,7 @@ export async function awaitServiceWorkerOrRefuse({
     boundMs,
     contention: measured,
     priorRefusals: ledgerIo && ledgerPath ? countRefusals(ledgerIo, ledgerPath, suite) : 0,
+    observed,
   });
   if (!refusal) return null; // condition 3: a quiet box that cannot start a browser is a PRODUCT red
   if (ledgerIo && ledgerPath) recordRefusal(ledgerIo, ledgerPath, suite);
