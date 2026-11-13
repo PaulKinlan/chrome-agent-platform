@@ -498,3 +498,33 @@ Deno.test("erxkj: a subset parallel phase whose failures are ALL environmental r
 Deno.test("erxkj: a subset parallel phase with a PRODUCT failure keeps the raw 1 (the fix must not soften reds)", async () => {
   assertEquals(await runPhaseWithFakeDeno(ERXKJ_PRODUCT_SHAPE, 1), 1, "a product red stays a product red");
 });
+
+Deno.test("kdeqx: a child KILLED BY SIGNAL after printing a refusal summary resolves 137, never 75 (behavioral)", async () => {
+  // The fake deno prints the all-environmental shape and then SIGKILLs itself —
+  // the killed child did not exit normally, so the run is not a verdict at all.
+  const root = await Deno.makeTempDir();
+  try {
+    const bin = join(root, "bin");
+    await Deno.mkdir(bin);
+    const fake = join(bin, "deno");
+    await Deno.writeTextFile(fake, `#!/bin/sh\ncat <<'FAKEOUT'\n${ERXKJ_REFUSAL_SHAPE}\nFAKEOUT\nkill -9 $$\n`);
+    await Deno.chmod(fake, 0o755);
+    const moduleUrl = new URL("../scripts/select-tests.mjs", import.meta.url).href;
+    const cmd = new Deno.Command("node", {
+      args: [
+        "--input-type=module",
+        "-e",
+        `import { runPhase } from ${JSON.stringify(moduleUrl)};` +
+          `const rc = await runPhase(["tests/fake.test.ts"], [], "parallel phase", 60000);` +
+          `process.exit(rc);`,
+      ],
+      env: { ...Deno.env.toObject(), PATH: `${bin}:${Deno.env.get("PATH") ?? ""}` },
+      stdout: "piped",
+      stderr: "piped",
+    });
+    const out = await cmd.output();
+    assertEquals(out.code, 137, "a SIGKILLed child resolves 137 — fleet-check treats it as KILLED, not a cached verdict");
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+});

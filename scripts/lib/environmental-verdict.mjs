@@ -175,6 +175,12 @@ export function outputHasEnvironmentalMarker(output) {
  */
 export function classifyPhaseExitFromOutput(rawCode, capturedOutput) {
   if (rawCode === 0) return { code: 0 };
+  // kdeqx: a code of 128+n is a SIGNAL-derived exit (the child did not exit
+  // normally — its captured output is partial by definition), and 124 is the
+  // phase-timeout bound. Never classify either: fleet-check treats
+  // 124/137/143 as KILLED (not a verdict, not cached), while 75 would be
+  // cached as a deterministic FAIL.
+  if (rawCode === 124 || rawCode >= 128) return { code: rawCode };
   if (!outputHasEnvironmentalMarker(capturedOutput)) return { code: rawCode };
   const clean = capturedOutput.replace(/\x1b\[[0-9;]*[mGKH]/gu, "");
   const summaryMatch = /FAILED\b[\s\S]*?\|\s*(\d+)\s*failed/i.exec(clean);
