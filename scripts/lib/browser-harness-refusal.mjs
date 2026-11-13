@@ -27,7 +27,7 @@
 
 import { loadavg } from "node:os";
 import { bestEffortWrite } from "./best-effort-write.mjs";
-import { MAX_LOAD_SCALE, stealScaleComponent } from "./serial-phase.mjs";
+import { currentLoadPerCpu, currentStealFractionSync, MAX_LOAD_SCALE, stealScaleComponent } from "./serial-phase.mjs";
 
 const loadAvg = () => loadavg()[0];
 
@@ -265,4 +265,86 @@ export async function exitWithRefusal({ receipt, cleanup = null, exit = (code) =
   } catch { /* a failing cleanup must not turn a refusal into a red */ }
   if (receipt) console.error(receipt);
   return exit(ENVIRONMENTAL_REFUSAL_EXIT);
+}
+
+/**
+ * ONE wiring for a real-browser suite's readiness step: wait for the extension's service worker under
+ * a contention-scaled bound, and refuse (exit 75) ONLY when the precondition was OBSERVED unmet AND
+ * starvation was MEASURED. The reference implementation was inline in
+ * tests/sandbox-egress-confinement.test.ts (j5xbi); six more journeys need the same four conditions,
+ * and six hand-copies of this branch is six chances to drop one — the drift shape the unmeasured-line
+ * bead (amupt) exists to stop.
+ *
+ * The contract, in the order this function enforces it:
+ *  1. The bound scales with measured contention (`browserReadyTimeoutMs`), so a starved box gets the
+ *     time it needs before anyone calls it a failure.
+ *  2. `registered` is what the CALLER observed — this function only reports that `cdp.serviceWorker`
+ *     returned null within the bound. It never infers "the machine was too slow" from a failure.
+ *  3. A quiet box that cannot register a service worker gets `null` back, NOT a refusal: the caller's
+ *     `assert(sw, …)` then reds the suite as a PRODUCT failure, which is the defect it is.
+ *  4. A refusal is recorded in the append-only per-suite ledger (so the count rises across gates) and
+ *     the process leaves 75 with `cleanup` already run.
+ *
+ * @param {{
+ *   suite: string,
+ *   cdp: { serviceWorker: (args: { timeoutMs: number, match?: ((t: any) => boolean)|null }) => Promise<any> },
+ *   match?: ((t: any) => boolean)|null,
+ *   base?: number,
+ *   contention?: { load?: number|null, loadPerCpu?: number|null, steal?: number|null }|null,
+ *   ledgerIo?: { readFile: (p: string) => string, writeFile: (p: string, t: string) => void }|null,
+ *   ledgerPath?: string|null,
+ *   cleanup?: (() => unknown)|null,
+ *   exit?: (code: number) => never,
+ * }} args
+ * @returns {Promise<any|null>} the service worker target, or null when none registered and no refusal applies
+ */
+export async function awaitServiceWorkerOrRefuse({
+  suite,
+  cdp,
+  match = null,
+  base = 10_000,
+  contention = null,
+  ledgerIo = null,
+  ledgerPath = null,
+  cleanup = null,
+  exit = undefined,
+} = {}) {
+  const measured = contention ?? {
+    load: currentAbsoluteLoad(),
+    loadPerCpu: currentLoadPerCpuSafe(),
+    steal: currentStealFractionSyncSafe(),
+  };
+  // Condition 1's timing: the SAME number is the wait and the bound the receipt carries, so a
+  // receipt can never claim a bound the wait did not use (the f8li1 leg pins that identity).
+  const boundMs = browserReadyTimeoutMs({ base, load: measured.load ?? null, loadPerCpu: measured.loadPerCpu ?? null, steal: measured.steal ?? null });
+  const sw = await cdp.serviceWorker({ timeoutMs: boundMs, ...(match ? { match } : {}) });
+  if (sw) return sw; // condition 2: the harness is up, so nothing downstream may be excused
+  const refusal = refuseIfStarved({
+    suite,
+    registered: false,
+    waitedMs: boundMs,
+    boundMs,
+    contention: measured,
+    priorRefusals: ledgerIo && ledgerPath ? countRefusals(ledgerIo, ledgerPath, suite) : 0,
+  });
+  if (!refusal) return null; // condition 3: a quiet box that cannot start a browser is a PRODUCT red
+  if (ledgerIo && ledgerPath) recordRefusal(ledgerIo, ledgerPath, suite);
+  return exitWithRefusal({ receipt: refusal.receipt, cleanup, ...(exit ? { exit } : {}) });
+}
+
+/** Local wrappers so this module stays free of serial-phase's optional-argument surface. */
+function currentLoadPerCpuSafe() {
+  try {
+    return currentLoadPerCpu();
+  } catch {
+    return null;
+  }
+}
+
+function currentStealFractionSyncSafe() {
+  try {
+    return currentStealFractionSync();
+  } catch {
+    return null;
+  }
 }

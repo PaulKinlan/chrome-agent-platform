@@ -23,6 +23,7 @@ import {
   serialFileTimeoutMs,
 } from "../scripts/lib/serial-phase.mjs";
 import {
+  awaitServiceWorkerOrRefuse,
   browserReadyTimeoutMs,
   CAP_ENVIRONMENTAL_REFUSAL,
   countRefusals,
@@ -1323,4 +1324,72 @@ Deno.test("j5xbi helper (f8li1): exitWithRefusal tears down BEFORE it leaves, an
     console.error = realError;
     console.log = realLog;
   }
+});
+
+Deno.test("2syam: awaitServiceWorkerOrRefuse refuses ONLY on observed absence + measured starvation, and records it", async () => {
+  // The wiring the six remaining journeys get. Each leg below is one of coord's rules, in order, so
+  // dropping any one of them reds this test rather than quietly widening what a refusal may excuse.
+  const suite = "tests/g09i-sidebar-tab.test.ts";
+  const mem = (seed = "") => {
+    let text = seed;
+    return {
+      readFile: () => text,
+      writeFile: (_p: string, t: string) => { text += t; },
+      rows: () => text.split("\n").filter(Boolean),
+    };
+  };
+  const starved = { load: 9.8, loadPerCpu: 3.2, steal: null };
+  const quiet = { load: 0.4, loadPerCpu: 0.5, steal: 0.01 };
+  const harness = (target: unknown) => ({ serviceWorker: async () => target });
+
+  // (1) RULE 3: no refusal is reachable without MEASURED starvation — a quiet box returns null and
+  // writes no ledger row, so the suite's own assert becomes the product red it should be.
+  const quietLedger = mem();
+  const quietSw = await awaitServiceWorkerOrRefuse({
+    suite, cdp: harness(null) as never, contention: quiet,
+    ledgerIo: quietLedger, ledgerPath: "l.jsonl",
+    exit: (() => { throw new Error("a quiet box must never refuse"); }) as never,
+  });
+  assertEquals(quietSw, null, "a quiet box with no service worker is a PRODUCT red, never a refusal");
+  assertEquals(quietLedger.rows(), [], "a product red writes nothing to the refusal ledger");
+
+  // (2) RULE 1+2: observed absence + measured starvation -> exit 75, named individually, recorded.
+  let exited: number | null = null;
+  let cleaned = false;
+  const starvedLedger = mem(`${"{\"suite\":\"tests/agent-share-import.test.ts\",\"at\":\"2026-11-13T00:00:00.000Z\"}"}\n`);
+  const slept: number[] = [];
+  const refusalSw = await awaitServiceWorkerOrRefuse({
+    suite, cdp: harness(null) as never, contention: starved, base: 12_345,
+    ledgerIo: starvedLedger, ledgerPath: "l.jsonl",
+    cleanup: () => { cleaned = true; },
+    exit: ((code: number) => { exited = code; slept.push(code); return undefined as never; }) as never,
+  });
+  assertEquals(cleaned, true, "a refusal must tear down before it leaves (xff9d's property, now per suite)");
+  assertEquals(exited, ENVIRONMENTAL_REFUSAL_EXIT, "the process must leave 75, never 1 and never 0");
+  assertEquals(refusalSw, undefined, "the refusal path does not return a worker to the caller");
+  const rows = starvedLedger.rows();
+  assertEquals(rows.length, 2, `the refusal is recorded in the append-only ledger: ${rows.join(" | ")}`);
+  assertEquals(JSON.parse(rows[1]).suite, suite, "the ledger row names THIS suite, not a neighbour");
+
+  // (3) RULE 2 again, as the count: the second refusal of the same suite carries 2, which is what the
+  // receipt renders as `(refused 2x)` and what makes a permanently broken suite impossible to hide.
+  const second = await awaitServiceWorkerOrRefuse({
+    suite, cdp: harness(null) as never, contention: starved,
+    ledgerIo: starvedLedger, ledgerPath: "l.jsonl",
+    exit: (() => { throw new Error("unreachable"); }) as never,
+  }).catch(() => null);
+  assertEquals(second, null);
+  assertEquals(starvedLedger.rows().length, 3, "a repeat refusal appends again rather than deduplicating");
+
+  // (4) RULE 2, first clause (no laundering): the harness CAME UP. Nothing downstream may be excused,
+  // even on a starved box — the worker is returned and no refusal is available.
+  const dirtyLedger = mem();
+  const target = { url: "chrome-extension://abc/dist/background/service-worker.js" };
+  const got = await awaitServiceWorkerOrRefuse({
+    suite, cdp: harness(target) as never, contention: starved,
+    ledgerIo: dirtyLedger, ledgerPath: "l.jsonl",
+    exit: (() => { throw new Error("a healthy harness must never refuse"); }) as never,
+  });
+  assertEquals(got, target, "a registered service worker is returned as-is");
+  assertEquals(dirtyLedger.rows(), [], "no refusal row when the precondition was met");
 });
