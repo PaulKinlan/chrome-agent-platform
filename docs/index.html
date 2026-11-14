@@ -15,15 +15,18 @@
       max-width: 720px;
       margin: 2rem auto;
       padding: 0 1rem;
-      background: light-dark(#f7f6f3, #1a1815);
-      color: light-dark(#1d1b18, #eae6de);
+      /* 8mw5l: the surface comes from docs/theme.css's token scale (--bg,
+         --text, --accent), never from literals — a literal here is a second,
+         drifting definition of the theme. theme.css already styles body. */
+      background: var(--bg);
+      color: var(--text);
     }
-    a { color: light-dark(#0e6e63, #4ecdc4); }
+    a { color: var(--accent); }
     .withdrawn {
-      border: 1px solid light-dark(#ddd8d2, #6b6355);
+      border: 1px solid var(--border);
       border-radius: 12px;
       padding: 1rem 1.25rem;
-      background: light-dark(#fff, #23211d);
+      background: var(--panel);
     }
   </style>
 </head>

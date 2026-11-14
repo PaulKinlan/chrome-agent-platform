@@ -895,3 +895,61 @@ Deno.test("ui-contrast-a11y: theme-literal falsifier — theme.css literals do n
   assertThrows(() => validateThemeLiteralAllowlist([{ path: "x.css", value: "#fff", reason: "   " }]));
   validateThemeLiteralAllowlist([{ path: "x.css", value: "#fff", reason: "real reason" }]); // must not throw
 });
+
+// ============================================================================
+// chrome-agent-platform-8mw5l: the STATIC docs pages are user surfaces too.
+//
+// The guard above reads the extension's surfaces. The docs pages under docs/
+// are what a reader actually lands on, and they had drifted in the two ways
+// this file exists to catch: six information-bearing labels rendered at 11px
+// (0.6875rem) — below the constitution's 12px readability floor, and bypassing
+// the page's own --step--1 scale token (13px) — and index.html re-declared the
+// theme with light-dark() colour literals instead of the token scale that
+// docs/theme.css already defines for it. A literal in a docs page is a second,
+// silently drifting definition of the theme, i.e. the same defect wjcba's
+// section bans for extension/.
+//
+// Rules: no px/rem font-size below 12px on a docs page, and no colour literal
+// in a surface property on a docs page (theme.css is the definition file and
+// is exempt).
+// ============================================================================
+
+const DOCS_PAGES = ["index.html", "components.html", "review-2026-08-21.html"];
+
+Deno.test("8mw5l: static docs pages honour the 12px readability floor", async () => {
+  for (const page of DOCS_PAGES) {
+    const html = await Deno.readTextFile(new URL(`../docs/${page}`, import.meta.url));
+    for (const m of html.matchAll(/font-size\s*:\s*([0-9.]+)(px|rem)/g)) {
+      const px = m[2] === "px" ? Number(m[1]) : Number(m[1]) * 16;
+      assert(
+        px >= 12,
+        `docs/${page} renders text at ${m[1]}${m[2]} (${px}px), below the 12px floor — use the page's --step--1 token`,
+      );
+    }
+  }
+});
+
+// The colour half is pinned on index.html, which is what 8mw5l names: it is the
+// only docs page that REDECLARED the whole theme (body background/colour plus a
+// card), so the drift was invisible to every other guard. components.html's
+// off-token gallery header is a separate (smaller) finding, filed rather than
+// folded in here so this pin asserts exactly what was fixed.
+const DOCS_TOKEN_COLOUR_PAGES = ["index.html"];
+
+Deno.test("8mw5l: static docs pages take their colours from docs/theme.css, never from literals", async () => {
+  for (const page of DOCS_TOKEN_COLOUR_PAGES) {
+    const html = await Deno.readTextFile(new URL(`../docs/${page}`, import.meta.url));
+    // Only the inline <style> can drift from the token scale; an external sheet
+    // is theme.css itself.
+    for (const style of html.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/gi)) {
+      assert(
+        !/light-dark\(/.test(style[1]),
+        `docs/${page} hard-codes a light-dark() colour literal; route it through a docs/theme.css token`,
+      );
+      assert(
+        !/#[0-9a-f]{3,8}\b/i.test(style[1]) && !/\brgba?\(/i.test(style[1]),
+        `docs/${page} hard-codes a colour literal; route it through a docs/theme.css token`,
+      );
+    }
+  }
+});
