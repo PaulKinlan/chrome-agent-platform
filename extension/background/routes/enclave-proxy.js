@@ -159,15 +159,27 @@ export function createEnclaveProxyRoutes({
       result = vault.getSecretRaw(keyId, { caller: "sw" });
       // The vault's raw read is async; the route handler awaits the promise.
       if (result && typeof result.then === "function") {
-        return result.then((r) => {
-          if (typeof r?.value !== "string") {
-            throw new Error(`enclave proxy: the vault has no value for ${keyId}`);
-          }
-          return r.value;
-        });
+        return result.then(
+          (r) => {
+            if (typeof r?.value !== "string") {
+              throw new Error(`enclave proxy: the vault has no value for ${keyId}`);
+            }
+            return r.value;
+          },
+          (err) => {
+            const refused = new Error(`enclave proxy: the vault refused ${keyId} (${String(err?.message ?? err)})`);
+            if (err?.code) refused.code = err.code;
+            throw refused;
+          },
+        );
       }
     } catch (err) {
-      throw new Error(`enclave proxy: the vault refused ${keyId} (${String(err?.message ?? err)})`);
+      const refused = new Error(`enclave proxy: the vault refused ${keyId} (${String(err?.message ?? err)})`);
+      // Keep the vault's code (chrome-agent-platform-zxo4i): a LOCKED vault is
+      // "vault_locked", not an anonymous failure, so the panel can say "unlock"
+      // and the ledger records why the request never dialed.
+      if (err?.code) refused.code = err.code;
+      throw refused;
     }
     if (typeof result?.value !== "string") {
       throw new Error(`enclave proxy: the vault has no value for ${keyId}`);

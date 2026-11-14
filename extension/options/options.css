@@ -2149,3 +2149,17 @@ span.usage-swatch.usage-bar-out { background: var(--usage-out, color-mix(in okla
 }
 }
 
+
+/* The vault's at-rest state banner (chrome-agent-platform-zxo4i). Rendered from
+   vault.status.protection, so it can only say what the vault actually does. */
+/* zxo4i r2 (coord): the deprecated surface token I first used does not exist in the token set,
+   so its inline fallback was what actually rendered — a fixed near-white that ignored the
+   scheme, invisible on the light panel. --bg-subtle is the DEFINED token that means a subtly raised surface (theme.css routes
+   it to --panel-2, and both are light-dark()); the state tints are mixed FROM the panel so they
+   follow the scheme instead of painting a dark-mode glow on a white card. */
+.vault-protection { margin: 0 0 14px; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg-subtle); color: var(--text); }
+.vault-protection p { margin: 0 0 6px; font-size: 13px; line-height: 1.45; }
+.vault-protection p:last-child { margin-bottom: 0; }
+.vault-protection.is-warn { border-color: var(--warning); background: color-mix(in oklab, var(--warning) 14%, var(--panel)); }
+.vault-protection[data-state="sealed"] { border-color: var(--success); background: color-mix(in oklab, var(--success) 12%, var(--panel)); }
+#vault-lock-status.error { color: var(--danger); }

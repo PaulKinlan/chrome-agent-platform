@@ -199,6 +199,18 @@ export const DEDICATED_FILE_GUARDS = Object.freeze({
   // literal happens to be in the file, so it disappears SILENTLY the moment that read moves into a
   // helper, a computed path or a fixture (exactly how cap-fetch-deny fell out of the SW's selection).
   // Both files are otherwise reachable, so these entries are about the DRIFT, not today's coverage.
+  // chrome-agent-platform-zxo4i: the Web-services page is a TEXT-READ surface (no module imports
+  // it — the panel is loaded by URL in the browser), so the import graph can never prove coverage
+  // and the fast tier refused the whole change as "genuinely unmappable statically". These are the
+  // suites that would actually RED if the page's structure, copy or vault controls regressed: the
+  // panel/nav contract, the vault copy + control pins, the accessibility structure, and the
+  // product-surface style/copy guard. Each reads this file's real bytes.
+  "extension/options/options.html": Object.freeze([
+    "tests/settings-panel-registry.test.ts",
+    "tests/secret-vault.test.ts",
+    "tests/a11y-structure.test.ts",
+    "tests/no-uppercase-kickers-716s10.test.ts",
+  ]),
   "extension/options/settings-view.js": Object.freeze([
     // The only suite that touches the settings view at all: it imports the module by a
     // DYNAMIC specifier inside a test body (`await import("../extension/options/settings-view.js")`),

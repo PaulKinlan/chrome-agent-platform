@@ -7,9 +7,9 @@ This document records the assignment of service-worker message routes to their o
 2. **Central Dispatcher (`dispatchRoute`)**: Performs route handler lookup, `__`-prefix / `userActivation` body parameter scrubbing, and `__sender` injection.
 3. **Route Modules (`extension/background/routes/*.js`)**: Export frozen route maps containing pure handler functions. Modules never duplicate the central dispatcher, listener, or allowlist seams.
 
-## Route Map Inventory (Comprehensive Census — 299 Routes)
+## Route Map Inventory (Comprehensive Census — 300 Routes)
 
-See `docs/SW-DISPATCH-AUTHORITY-CENSUS.md` for the exhaustive authority classification across all 299 routes. Argument indexes below are zero-based positions in `service-worker.js`'s `mergeRouteMaps`; `tests/sw-dispatch-authority-census.test.ts` checks them against the executable composition.
+See `docs/SW-DISPATCH-AUTHORITY-CENSUS.md` for the exhaustive authority classification across all 300 routes. Argument indexes below are zero-based positions in `service-worker.js`'s `mergeRouteMaps`; `tests/sw-dispatch-authority-census.test.ts` checks them against the executable composition.
 
 | Module / Scope | Route Count | Routes Included | Gating / Authority Model |
 |---|---|---|---|
@@ -25,7 +25,7 @@ See `docs/SW-DISPATCH-AUTHORITY-CENSUS.md` for the exhaustive authority classifi
 | `routes/scheduler.js` | 5 | `schedules.list`, `task.pause`, `task.resume`, `task.update`, `task.retry` | Mutation routes gated by `requireOwnerApproval` (`OWNER_DIRECT_ACTIONS`) |
 | `routes/agent-worker.js` | 10 | `agent-worker.ensure`, `agent-worker.run`, `agent-worker.dispatch`, `agent-worker.tool`, `agent-worker.alive`, `agent-worker.close`, `agent-worker.steer`, `agent-worker.progress`, `agent-worker.result`, `agent-worker.journal-append` | Offscreen agent worker RPC bridge; internal coordination |
 | `extension/lib/agent-board.js` (`boardRoutes.routes`) | 13 | `board.post`, `board.wake`, `board.claim`, `board.complete`, `board.fail`, `board.heartbeat`, `board.list`, `board.messages`, `board.read`, `board.message`, `board.deny.add`, `board.deny.remove`, `board.deny.list` | Multi-agent task board state machine; model/extension principal |
-| `routes/vault.js` (`vaultRoutes`, arg[0]) | 10 | `vault.set`, `vault.status`, `vault.configureProxy`, `vault.rotate`, `vault.delete`, `vault.ledger.clear`, `vault.ledger.resetQuotas`, `vault.ledger.usage`, `vault.ledger.setQuotas`, `vault.test` | Settings-only via `requireSettingsSender` |
+| `routes/vault.js` (`vaultRoutes`, arg[0]) | 11 | `vault.set`, `vault.status`, `vault.configureProxy`, `vault.rotate`, `vault.delete`, `vault.ledger.clear`, `vault.ledger.resetQuotas`, `vault.ledger.usage`, `vault.ledger.setQuotas`, `vault.test`, `vault.lock` | Settings-only via `requireSettingsSender` |
 | `routes/enclave-proxy.js` (`enclaveProxyRoutes`, arg[1]) | 1 | `enclave.proxy` | Owner extension fence or trusted SW internal caller |
 | `service-worker.js` (`enclaveStatusRoutes`, arg[2]) | 1 | `enclave.status` | Settings-only |
 | `service-worker.js` (inline arg[3]) | 8 | `thread-export.html`, `browser.callTool`, `onDeviceText.summarize`, `onDeviceText.detectLanguage`, `onDeviceText.translate`, `onDeviceText.availability`, `clipboard.write`, `write_clipboard` | See census for per-route authority |
@@ -33,4 +33,4 @@ See `docs/SW-DISPATCH-AUTHORITY-CENSUS.md` for the exhaustive authority classifi
 | `service-worker.js` (inline arg[17]) | 177 | Approval-gated mutations (agent/asset/script/browser/hooks/workflows/document), Settings-only routes, settings-session lifecycle (`settings.session.open`, `settings.session.close`), extension-only management, task execution, WebMCP, and query routes | See `docs/SW-DISPATCH-AUTHORITY-CENSUS.md` for per-route classification |
 | `routes/hooks.js` (`hooksRoutes`, last argument) | 4 | `hooks.status`, `hooks.deny`, `hooks.subscribe`, `hooks.unsubscribe` | System hooks: `status` is extension-principal (Settings panel); `deny` is OWNER-ONLY (`owner-options`, the agent has no un-deny tool); `subscribe`/`unsubscribe` are approval-gated (`requireOwnerApproval`) and a MODEL caller can never author the prompt template (51cd). Extracted from the inline map by chrome-agent-platform-atxc6. |
 | `routes/tool-stream.js` (`toolStreamRoutes`, last argument) | 12 | `tool-stream.input.create`, `tool-stream.input.append`, `tool-stream.input.seal`, `tool-stream.run`, `tool-stream.output.read`, `tool-stream.output.receipt`, `tool-stream.remove`, `tool-stream.stage-attachment`, `tool-stream.stage-asset`, `tool-stream.promote-output`, `tool-stream.discard`, `tool-stream.tabular-transform` | File-backed bundled-tool transport: every public route re-derives its owner from the route context (`wasmStreamOwner`), content moves in caller-chosen chunks and execution/results use opaque OPFS references. Extracted from TWO inline maps by chrome-agent-platform-atxc6. |
-| **Total Registered Routes** | **299** | Complete population verified by `tests/sw-dispatch-authority-census.test.ts` | Complete census |
+| **Total Registered Routes** | **300** | Complete population verified by `tests/sw-dispatch-authority-census.test.ts` | Complete census |

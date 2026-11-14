@@ -1,6 +1,6 @@
 // panels/web-services.js — Web services & vault Settings panel module.
 
-import { vaultPanelRows, resolveSaveAction } from "../../lib/secret-vault.js";
+import { vaultPanelRows, resolveSaveAction, vaultProtectionLines } from "../../lib/secret-vault.js";
 import { createPanelContext, bindPanelCtx } from "../panel-context.js";
 
 const VAULT_PRESETS = [
@@ -46,10 +46,42 @@ function formatAuthInjection(authType, authName, keyId) {
   return `Header: ${authName || "X-API-Key"} ← $VAULT{${keyId}}`;
 }
 
+/** The at-rest guarantee, rendered from the VAULT'S OWN STATE (vault.status.
+ * protection) — never from a copy string here (chrome-agent-platform-zxo4i).
+ * Coord's condition 2: the risk is stated where a key is created, not buried. */
+function renderVaultProtection(protection) {
+  const host = byId("vault-protection");
+  if (!host) return;
+  const state = protection?.state ?? "obfuscation";
+  host.dataset.state = state;
+  host.classList.toggle("is-warn", state !== "sealed");
+  const lines = vaultProtectionLines(protection);
+  host.replaceChildren(...lines.map((text) => {
+    const p = document.createElement("p");
+    p.textContent = text;
+    return p;
+  }));
+
+  const enable = byId("vault-lock-enable");
+  const unlock = byId("vault-lock-unlock");
+  const relock = byId("vault-lock-relock");
+  if (enable) enable.hidden = state === "sealed";
+  if (unlock) unlock.hidden = state !== "locked";
+  if (relock) relock.hidden = state !== "sealed";
+}
+
+function setVaultLockStatus(text, isError = false) {
+  const host = byId("vault-lock-status");
+  if (!host) return;
+  host.textContent = text;
+  host.classList.toggle("error", isError === true);
+}
+
 async function renderVaultPanel(ctx) {
   const host = byId("vault-services");
   if (!host) return;
   const res = await vaultSend("vault.status", {});
+  renderVaultProtection(res?.protection);
   host.replaceChildren();
   const rows = vaultPanelRows(res?.services ?? []);
   const configuredMap = new Map(rows.map((r) => [r.keyId, r]));
@@ -436,7 +468,65 @@ export function initVaultStatic(ctx, { runInitialRender = true } = {}) {
     if (vaultAddValue) vaultAddValue.value = "";
     if (vaultAddId) vaultAddId.value = "";
     if (vaultAddOrigin) vaultAddOrigin.value = "";
-    setVaultStatus(`${keyId} saved. The key is stored encrypted and origin-pinned.`, false);
+    setVaultStatus(`${keyId} saved and origin-pinned. At rest it is obfuscated, not encrypted, until you set a vault passphrase.`, false);
+    await renderVaultPanel();
+  });
+
+  const vaultPassphrase = () => byId("vault-passphrase")?.value ?? "";
+  const vaultPassphraseConfirm = () => byId("vault-passphrase-confirm")?.value ?? "";
+  const clearVaultPassphraseInputs = () => {
+    const a = byId("vault-passphrase");
+    const b = byId("vault-passphrase-confirm");
+    if (a) a.value = "";
+    if (b) b.value = "";
+  };
+
+  byId("vault-lock-enable")?.addEventListener("click", async () => {
+    const pass = vaultPassphrase();
+    if (pass.length < 8) {
+      setVaultLockStatus("Use at least 8 characters — this passphrase is the only thing protecting the keys.", true);
+      return;
+    }
+    if (pass !== vaultPassphraseConfirm()) {
+      setVaultLockStatus("The two passphrases do not match.", true);
+      return;
+    }
+    const res = await vaultSend("vault.lock", { action: "seal", passphrase: pass });
+    if (!res?.ok) {
+      setVaultLockStatus(`Could not set the passphrase: ${res?.error ?? "unknown"}`, true);
+      return;
+    }
+    clearVaultPassphraseInputs();
+    setVaultLockStatus(`Encrypted at rest. ${res.resealed} saved key${res.resealed === 1 ? "" : "s"} re-sealed in place — keep the passphrase safe, it cannot be recovered.`);
+    await renderVaultPanel();
+  });
+
+  byId("vault-lock-unlock")?.addEventListener("click", async () => {
+    const pass = vaultPassphrase();
+    if (!pass) {
+      setVaultLockStatus("Enter the vault passphrase to unlock.", true);
+      return;
+    }
+    const res = await vaultSend("vault.lock", { action: "unlock", passphrase: pass });
+    if (!res?.ok) {
+      setVaultLockStatus(`That passphrase did not open the vault: ${res?.error ?? "unknown"}`, true);
+      return;
+    }
+    clearVaultPassphraseInputs();
+    setVaultLockStatus(res.migrationPending
+      ? 'Unlocked, but a re-seal is still pending — run "Encrypt my keys with this passphrase" to finish it.'
+      : "Vault unlocked for this browser session.");
+    await renderVaultPanel();
+  });
+
+  byId("vault-lock-relock")?.addEventListener("click", async () => {
+    const res = await vaultSend("vault.lock", { action: "relock" });
+    if (!res?.ok) {
+      setVaultLockStatus(`Could not lock the vault: ${res?.error ?? "unknown"}`, true);
+      return;
+    }
+    clearVaultPassphraseInputs();
+    setVaultLockStatus("Vault locked. Saved keys cannot be used until you unlock it.");
     await renderVaultPanel();
   });
 

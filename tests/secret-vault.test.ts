@@ -14,12 +14,18 @@
 //     (PBKDF2-SHA-256 @ 210k over extension-id + per-install salt ->
 //     non-extractable AES-GCM-256, record id as additionalData) and under
 //     no near-miss parameter set, and two fresh installs never share a salt.
+//  7. the at-rest claim is SCOPED correctly (chrome-agent-platform-hy0v0): the
+//     derivation material is not secret, so a copied storage area decrypts
+//     offline — the limit is pinned executably, the refusals the encryption
+//     does buy are pinned too, and the header may not re-assert the retracted
+//     "carries no readable credential" claim.
 
 import { assert, assertEquals, assertRejects, assertThrows } from "jsr:@std/assert@1";
 import {
   createSecretVault,
   createServiceWorkerAccess,
   maskValue,
+  vaultProtectionLines,
 } from "../extension/lib/secret-vault.js";
 
 /** The service-worker access token (chrome-agent-platform-jao1.7). Deno runs each
@@ -245,6 +251,362 @@ Deno.test("03p47: the install salt is per-install RANDOM, persisted, and reused 
   const v1again = await createSecretVault({ storageArea: s1, extensionId: EXT });
   const got = await v1again.getSecretRaw("CROSS_INSTALL_KEY", { caller: "sw", access: SW_ACCESS });
   assertEquals(got.value, SECRET, "the same install reopens its own record via the persisted salt");
+});
+
+// ── hy0v0: the at-rest guarantee, stated exactly, in BOTH directions ─────
+// The module header used to claim that "a storage snapshot taken out of context
+// (a copied profile, a backup file) carries no readable credential". That was
+// false: the extension id is public and the install salt is stored beside the
+// ciphertext, so a snapshot IS the key. chrome-agent-platform-hy0v0 corrected
+// the header. These legs pin the limit (an offline copy DOES decrypt — a future
+// author cannot quietly re-assert the stronger claim) and pin what the
+// encryption genuinely defeats, so neither side of the sentence can drift.
+
+Deno.test("hy0v0: a copied storage area decrypts OFFLINE — the documented limit is real", async () => {
+  const EXT = CLAIM_EXT_ID;
+  const SECRET = "sk-offline-copy-0123456789";
+  const storage = fakeStorage();
+  // The REAL salt path: no injected salt, so ensureInstallSalt persists one.
+  const vault = await createSecretVault({ storageArea: storage, extensionId: EXT });
+  await vault.setSecret("COPIED_PROFILE_KEY", SECRET, { by: "sw" });
+
+  // What an attacker who copies the profile actually holds: every key in the
+  // storage area (ciphertext + install salt + lock records) and nothing else.
+  const snapshot = JSON.parse(JSON.stringify(await storage.get(null)));
+  const saltB64 = snapshot["cap:vault:install-salt"];
+  const record = snapshot["cap:vault:secret:COPIED_PROFILE_KEY"];
+  assert(typeof saltB64 === "string" && saltB64.length > 0, "the snapshot carries the install salt");
+  assert(record?.iv && record?.ct, "the snapshot carries the ciphertext envelope");
+
+  // The ONLY other input is the extension id, which is public: it is in the
+  // manifest and visible at chrome://extensions on any machine running this.
+  const attackerKey = await deriveClaimKey({ material: `${EXT}:${saltB64}`, saltB64 });
+  const plain = new TextDecoder().decode(
+    await crypto.subtle.decrypt(
+      {
+        name: "AES-GCM",
+        iv: Uint8Array.from(atob(record.iv), (c) => c.charCodeAt(0)) as unknown as BufferSource,
+        additionalData: new TextEncoder().encode("cap:vault:secret:COPIED_PROFILE_KEY") as unknown as BufferSource,
+      },
+      attackerKey,
+      Uint8Array.from(atob(record.ct), (c) => c.charCodeAt(0)) as unknown as BufferSource,
+    ),
+  );
+  // If this ever stops decrypting, the header's stated limit became stale — the
+  // comment and this leg must move together (that is the point of pinning the
+  // limit rather than only the guarantee).
+  assertEquals(plain, SECRET,
+    "a copied storage area plus the PUBLIC extension id re-derives the key and decrypts offline (R26 in docs/RISK-REGISTER.md; the owner-secret fix is chrome-agent-platform-zxo4i)");
+
+  // And the plaintext is genuinely absent from the bytes, which is the part the
+  // encryption does buy: a grep over the profile finds nothing readable.
+  assert(!JSON.stringify(snapshot).includes(SECRET), "the snapshot has no readable plaintext — the guarantee the encryption DOES provide");
+});
+
+Deno.test("hy0v0: a full snapshot of ANOTHER install or ANOTHER extension id is refused, and a record cannot move between key ids", async () => {
+  const EXT = CLAIM_EXT_ID;
+  const SECRET = "sk-scope-1234567890acme";
+  const source = fakeStorage();
+  const v1 = await createSecretVault({ storageArea: source, extensionId: EXT });
+  await v1.setSecret("SCOPE_KEY", SECRET, { by: "sw" });
+  const snapshot = JSON.parse(JSON.stringify(await source.get(null)));
+
+  // (a) The WHOLE snapshot (salt included) planted into a DIFFERENT extension's
+  // storage does not open: the derivation needs that extension's id.
+  const foreign = fakeStorage();
+  for (const [k, v] of Object.entries(snapshot)) foreign.map.set(k, v);
+  const vForeign = await createSecretVault({ storageArea: foreign, extensionId: "z".repeat(32) + "y" });
+  await assertRejects(
+    () => vForeign.getSecretRaw("SCOPE_KEY", { caller: "sw", access: SW_ACCESS }),
+    Error,
+    undefined,
+    "a whole storage snapshot must not open under another extension id",
+  );
+
+  // (b) The salt is what binds an install: same extension id, DIFFERENT salt
+  // (a fresh install's storage) refuses the copied record.
+  const otherInstall = fakeStorage();
+  otherInstall.map.set("cap:vault:secret:SCOPE_KEY", snapshot["cap:vault:secret:SCOPE_KEY"]);
+  const vOther = await createSecretVault({ storageArea: otherInstall, extensionId: EXT });
+  await assertRejects(
+    () => vOther.getSecretRaw("SCOPE_KEY", { caller: "sw", access: SW_ACCESS }),
+    Error,
+    undefined,
+    "a record from another install must not open under this install's salt",
+  );
+
+  // (c) additionalData binds a record to its key id: moving {iv, ct} into
+  // another id's slot fails integrity even in the SAME install.
+  const moved = fakeStorage();
+  for (const [k, v] of Object.entries(snapshot)) moved.map.set(k, v);
+  moved.map.set("cap:vault:secret:OTHER_KEY", snapshot["cap:vault:secret:SCOPE_KEY"]);
+  const vMoved = await createSecretVault({ storageArea: moved, extensionId: EXT });
+  await assertRejects(
+    () => vMoved.getSecretRaw("OTHER_KEY", { caller: "sw", access: SW_ACCESS }),
+    Error,
+    undefined,
+    "a record's ciphertext must not decrypt in another key id's slot",
+  );
+});
+
+Deno.test("hy0v0: the module header states the limit and never re-asserts the retracted claim", async () => {
+  const source = await Deno.readTextFile(new URL("../extension/lib/secret-vault.js", import.meta.url));
+  const header = source.split("export function createServiceWorkerAccess")[0];
+  // The retracted sentence may only survive as a QUOTED retraction: every
+  // paragraph that repeats it must also carry the RETRACTED marker, so deleting
+  // the correction (or re-asserting the claim elsewhere) fails here rather than
+  // shipping a guarantee the code does not deliver.
+  // Comment paragraphs are separated by a `//`-only line in this file; a blank
+  // source line inside a comment block is not a boundary, so split on the
+  // comment separator instead (a plain /\n\s*\n/ split leaves one giant
+  // paragraph and made this pin pass on a re-asserted claim — measured).
+  const claiming = header.split(/\n\s*\/\/\s*\n/).filter((para) => para.includes("carries no readable credential"));
+  assert(claiming.length > 0, "the header should name the retracted claim it replaced, not silently drop it");
+  for (const para of claiming) {
+    assert(para.includes("RETRACTED"), `the false claim must appear only as a marked retraction: ${para.slice(0, 120)}…`);
+  }
+  assert(
+    header.includes("decrypt every record OFFLINE"),
+    "the header must state the true limit: a storage-area holder decrypts offline",
+  );
+  assert(
+    header.includes("chrome-agent-platform-zxo4i") && header.includes("docs/RISK-REGISTER.md"),
+    "the header must point at the tracked fix and the register entry instead of implying the vault is safe",
+  );
+  // The scheme id is a FORMAT id, not a security claim: records written by the
+  // previous version must keep opening, so it is deliberately unchanged.
+  assert(header.includes("extension id is public"), "the header must name the public half of the derivation material");
+});
+
+// ── zxo4i: the passphrase KEK (real at-rest encryption) ──────────────────
+// The legacy derivation is obfuscation (hy0v0): its material ships with, or
+// beside, the ciphertext. The passphrase lock derives the key from a secret the
+// copy does NOT hold, and the four acceptance clauses coord set are pinned as
+// separate legs so a weakening of any one of them reds by itself.
+
+const SEALED_PASS = "correct horse battery staple";
+const SEALED_PASS_2 = "another passphrase entirely";
+
+async function openSealedStorage(extra: Record<string, unknown> = {}) {
+  const storage = fakeStorage();
+  const vault = await createSecretVault({
+    storageArea: storage,
+    extensionId: CLAIM_EXT_ID,
+    installSaltB64: CLAIM_SALT_B64,
+    ...extra,
+  });
+  return { storage, vault };
+}
+
+Deno.test("zxo4i: enabling the lock re-seals every stored entry IN PLACE (no re-entry, no loss, counters kept)", async () => {
+  const { storage, vault } = await openSealedStorage();
+  // Written while the vault is still only obfuscated — exactly what an existing
+  // install has in its profile before the owner sets a passphrase. One entry per
+  // kind the vault stores: a preset service key, a custom service key, and a
+  // rotated key (so the rotation counter has to survive the re-seal).
+  await vault.setSecret("BRAVE_SEARCH_API_KEY", SECRET_A, { by: "sw" });
+  await vault.setSecret("CUSTOM_SERVICE_KEY", SECRET_B, { by: "sw" });
+  await vault.rotateSecret("CUSTOM_SERVICE_KEY", "rotated-value-0987654321", { by: "sw" });
+  const before = await Promise.all(
+    ["BRAVE_SEARCH_API_KEY", "CUSTOM_SERVICE_KEY"].map((id) => vault.getSecretRaw(id, { caller: "sw", access: SW_ACCESS })),
+  );
+  const rotationsBefore = before.map((r) => r.lastUsed);
+
+  const res = await vault.enableLock(SEALED_PASS);
+  assertEquals(res.resealed, 2, "both entries were re-sealed");
+
+  // Every record is now the SEALED scheme, and the legacy scheme is gone.
+  const records = [...storage.map.entries()].filter(([k]) => k.startsWith("cap:vault:secret:"));
+  assertEquals(records.length, 2);
+  for (const [, rec] of records) {
+    assertEquals(rec.scheme, "AES-GCM-256/PBKDF2-owner-passphrase", "records carry the sealed scheme");
+  }
+
+  const after = await Promise.all(
+    ["BRAVE_SEARCH_API_KEY", "CUSTOM_SERVICE_KEY"].map((id) => vault.getSecretRaw(id, { caller: "sw", access: SW_ACCESS })),
+  );
+  assertEquals(after[0].value, SECRET_A);
+  assertEquals(after[1].value, "rotated-value-0987654321");
+  // A re-seal is not a rotation: counters survive.
+  const listed = await vault.listMasked({ caller: "ui" });
+  assertEquals(listed.find((r) => r.keyId === "CUSTOM_SERVICE_KEY")?.rotations, 1, "the rotation counter survived the re-seal");
+
+  const protection = await vault.protection();
+  assertEquals(protection.state, "sealed");
+  assertEquals(protection.encryptedAtRest, true);
+  assertEquals(protection.legacyRecords, 0, "nothing is left on the obfuscation path");
+  assertEquals(protection.sealedRecords, 2);
+
+  // The passphrase itself is NEVER written to the storage area.
+  const dump = JSON.stringify([...storage.map.entries()]);
+  assert(!dump.includes(SEALED_PASS), "the passphrase must never be persisted beside the ciphertext");
+  void rotationsBefore;
+});
+
+Deno.test("zxo4i: a sealed vault without the passphrase refuses EVERY read (no fallback to the weak key)", async () => {
+  const { storage, vault } = await openSealedStorage();
+  await vault.setSecret("GITHUB_TOKEN", SECRET_B, { by: "sw" });
+  await vault.enableLock(SEALED_PASS);
+
+  // A fresh instance with no passphrase — what the service worker looks like
+  // after a browser restart, since the unlock store is memory-only.
+  const locked = await createSecretVault({ storageArea: storage, extensionId: CLAIM_EXT_ID, installSaltB64: CLAIM_SALT_B64 });
+  assertEquals((await locked.protection()).state, "locked");
+  const err = await assertRejects(
+    () => locked.getSecretRaw("GITHUB_TOKEN", { caller: "sw", access: SW_ACCESS }),
+    Error,
+    undefined,
+    "a sealed record must not open without the passphrase",
+  );
+  assertEquals((err as any).code, "vault_locked");
+
+  // Writing is refused too: a locked vault cannot silently downgrade a record.
+  await assertRejects(() => locked.setSecret("NEW_KEY", "value", { by: "sw" }), Error, undefined, "a locked vault cannot write");
+
+  // The masked projection still names WHICH ids exist and says why it cannot
+  // show more — the panel renders "…(locked)" from this.
+  const listed = await locked.listMasked({ caller: "ui" });
+  assertEquals(listed.length, 1);
+  assertEquals(listed[0].masked, "…(locked)");
+
+  // Unlocking the same instance restores it, which is the SW-restart path.
+  await locked.unlock(SEALED_PASS);
+  const back = await locked.getSecretRaw("GITHUB_TOKEN", { caller: "sw", access: SW_ACCESS });
+  assertEquals(back.value, SECRET_B);
+});
+
+Deno.test("zxo4i: a WRONG passphrase fails closed and destroys nothing", async () => {
+  const { storage, vault } = await openSealedStorage();
+  await vault.setSecret("BRAVE_SEARCH_API_KEY", SECRET_A, { by: "sw" });
+  await vault.enableLock(SEALED_PASS);
+  const recordsBefore = JSON.stringify([...storage.map.entries()]);
+
+  const fresh = await createSecretVault({ storageArea: storage, extensionId: CLAIM_EXT_ID, installSaltB64: CLAIM_SALT_B64 });
+  const wrong = await assertRejects(() => fresh.unlock("correct horse battery stapl3"), Error, undefined, "one character off must not unlock");
+  assertEquals((wrong as any).code, "wrong_passphrase");
+
+  // Nothing was rewritten, and the right passphrase still opens it.
+  assertEquals(JSON.stringify([...storage.map.entries()]), recordsBefore, "a failed unlock must not touch the vault");
+  await fresh.unlock(SEALED_PASS);
+  assertEquals((await fresh.getSecretRaw("BRAVE_SEARCH_API_KEY", { caller: "sw", access: SW_ACCESS })).value, SECRET_A);
+});
+
+/** Write a record exactly as the PRE-LOCK vault did: legacy scheme, legacy key,
+ * the record id as additionalData. Used to model an install that has been
+ * running since before the passphrase lock existed. */
+async function writeLegacyRecord(storage: any, keyId: string, value: string) {
+  const recordKey = `cap:vault:secret:${keyId}`;
+  const key = await deriveClaimKey();
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = await crypto.subtle.encrypt(
+    {
+      name: "AES-GCM",
+      iv,
+      additionalData: new TextEncoder().encode(recordKey) as unknown as BufferSource,
+    },
+    key,
+    new TextEncoder().encode(value),
+  );
+  storage.map.set(recordKey, {
+    scheme: "AES-GCM-256/PBKDF2-extension-bound",
+    v: 1,
+    iv: btoa(String.fromCharCode(...iv)),
+    ct: btoa(String.fromCharCode(...new Uint8Array(ct))),
+    configuredAt: 1,
+    lastUsed: 0,
+    rotations: 0,
+  });
+}
+
+Deno.test("zxo4i: an interrupted migration resumes and strands nothing", async () => {
+  const { storage, vault } = await openSealedStorage();
+  await vault.setSecret("FIRST_KEY", SECRET_A, { by: "sw" });
+  await vault.enableLock(SEALED_PASS);
+
+  // The crash: one record never got re-sealed (it is still the legacy scheme)
+  // and the seal is still marked migrated:false.
+  await writeLegacyRecord(storage, "SECOND_KEY", SECRET_B);
+  const seal = (await storage.get(null))["cap:vault:seal"];
+  storage.map.set("cap:vault:seal", { ...seal, migrated: false });
+
+  const resuming = await createSecretVault({
+    storageArea: storage,
+    extensionId: CLAIM_EXT_ID,
+    installSaltB64: CLAIM_SALT_B64,
+    passphrase: SEALED_PASS,
+  });
+  const pending = await resuming.protection();
+  assertEquals(pending.migrationPending, true);
+  assertEquals(pending.legacyRecords, 1, "the stranded record is countable");
+  // During a pending migration the legacy record IS readable (that is what makes
+  // the resume lossless); the sealed one is readable with the passphrase.
+  assertEquals((await resuming.getSecretRaw("SECOND_KEY", { caller: "sw", access: SW_ACCESS })).value, SECRET_B);
+  assertEquals((await resuming.getSecretRaw("FIRST_KEY", { caller: "sw", access: SW_ACCESS })).value, SECRET_A);
+
+  const resumed = await resuming.enableLock(SEALED_PASS);
+  assertEquals(resumed.resealed, 1, "the resume re-seals exactly the stranded record");
+  const done = await resuming.protection();
+  assertEquals(done.migrationPending, false);
+  assertEquals(done.legacyRecords, 0);
+  assertEquals(done.sealedRecords, 2);
+  assertEquals((await resuming.getSecretRaw("SECOND_KEY", { caller: "sw", access: SW_ACCESS })).value, SECRET_B);
+});
+
+Deno.test("zxo4i: after the lock is installed, a legacy record is REFUSED rather than read with the weak key", async () => {
+  const { storage, vault } = await openSealedStorage();
+  await vault.setSecret("FIRST_KEY", SECRET_A, { by: "sw" });
+  await vault.enableLock(SEALED_PASS);
+  // A legacy record appearing AFTER the migration completed (a stale writer, a
+  // restored backup fragment) must not be silently opened at the weak key.
+  await writeLegacyRecord(storage, "PLANTED_LEGACY_KEY", SECRET_B);
+
+  const err = await assertRejects(
+    () => vault.getSecretRaw("PLANTED_LEGACY_KEY", { caller: "sw", access: SW_ACCESS }),
+    Error,
+    undefined,
+    "a sealed vault must not fall back to the extension-id+salt key for a post-seal legacy record",
+  );
+  assertEquals((err as any).code, "legacy_record_unsealed");
+  // The sealed records are unaffected.
+  assertEquals((await vault.getSecretRaw("FIRST_KEY", { caller: "sw", access: SW_ACCESS })).value, SECRET_A);
+});
+
+Deno.test("zxo4i: the sealed key is NOT the public extension-id+salt derivation (a revert reds this)", async () => {
+  const { storage, vault } = await openSealedStorage();
+  await vault.setSecret("BRAVE_SEARCH_API_KEY", SECRET_A, { by: "sw" });
+  await vault.enableLock(SEALED_PASS);
+
+  const dump = await storage.get(null);
+  const record = dump["cap:vault:secret:BRAVE_SEARCH_API_KEY"];
+  assertEquals(record.scheme, "AES-GCM-256/PBKDF2-owner-passphrase");
+
+  // The legacy (public-by-copy) key must NOT open a sealed record. If someone
+  // reverts the derivation to extension-id+salt, this leg goes green-wrong and
+  // reds — which is the mutation guard coord asked for.
+  const legacyKey = await deriveClaimKey();
+  await assertRejects(
+    () => crypto.subtle.decrypt(
+      {
+        name: "AES-GCM",
+        iv: Uint8Array.from(atob(record.iv), (c) => c.charCodeAt(0)) as unknown as BufferSource,
+        additionalData: new TextEncoder().encode("cap:vault:secret:BRAVE_SEARCH_API_KEY") as unknown as BufferSource,
+      },
+      legacyKey,
+      Uint8Array.from(atob(record.ct), (c) => c.charCodeAt(0)) as unknown as BufferSource,
+    ),
+    Error,
+    undefined,
+    "a sealed record must not decrypt under the extension-id+salt derivation — reverting the derivation reds here",
+  );
+
+  // And the passphrase path is the only one that opens it.
+  const reopened = await createSecretVault({
+    storageArea: storage,
+    extensionId: CLAIM_EXT_ID,
+    installSaltB64: CLAIM_SALT_B64,
+    passphrase: SEALED_PASS,
+  });
+  assertEquals((await reopened.getSecretRaw("BRAVE_SEARCH_API_KEY", { caller: "sw", access: SW_ACCESS })).value, SECRET_A);
 });
 
 Deno.test("jao1.1: masked projection — shape, tail-only mask, and zero plaintext in its serialization", async () => {
@@ -547,4 +909,136 @@ Deno.test("jao1.7: an abandoned lock does not deadlock initialization", async ()
   await vault.setSecret("GITHUB_TOKEN", SECRET_B, { by: "sw" });
   const got = await vault.getSecretRaw("GITHUB_TOKEN", { caller: "sw", access: SW_ACCESS });
   assertEquals(got.value, SECRET_B);
+});
+
+// ── zxo4i: the lock route + the proxy's locked refusal (wiring, not crypto) ──
+
+import { createEnclaveProxyRoutes } from "../extension/background/routes/enclave-proxy.js";
+
+Deno.test("zxo4i: the passphrase controls the panel wires actually exist in options.html", async () => {
+  // The panel queries these ids; a rename on either side would leave the lock
+  // unreachable with no error (the handler would simply never bind).
+  const html = await Deno.readTextFile(new URL("../extension/options/options.html", import.meta.url));
+  const panel = await Deno.readTextFile(new URL("../extension/options/panels/web-services.js", import.meta.url));
+  const ids = [
+    "vault-protection",
+    "vault-passphrase",
+    "vault-passphrase-confirm",
+    "vault-lock-enable",
+    "vault-lock-unlock",
+    "vault-lock-relock",
+    "vault-lock-status",
+  ];
+  for (const id of ids) {
+    assert(html.includes(`id="${id}"`), `options.html must contain #${id}`);
+    assert(panel.includes(`"${id}"`), `web-services.js must query #${id}`);
+  }
+  // The three transitions are all reachable from the UI.
+  assert(panel.includes('action: "seal"') && panel.includes('action: "unlock"') && panel.includes('action: "relock"'),
+    "the panel must send all three vault.lock actions");
+});
+
+Deno.test("zxo4i: the panel's at-rest copy is derived from the vault's state, and says the damaging thing plainly", () => {
+  // Coord's condition 2: the risk must be stated where the key is created, and
+  // the wording must follow the state. These are the exact sentences Settings
+  // renders, so a copy edit that softens the obfuscation warning reds here.
+  const obfuscated = vaultProtectionLines({ state: "obfuscation", legacyRecords: 2, sealedRecords: 0 });
+  assert(obfuscated[0].includes("NOT encrypted"), "the obfuscation state must say NOT encrypted in those words");
+  assert(obfuscated[0].includes("copies this Chrome profile can decrypt"), "it must name the copied-profile risk, not hint at it");
+  assert(obfuscated[1].includes("Set a vault passphrase"), "it must point at the fix in the same breath");
+
+  const locked = vaultProtectionLines({ state: "locked", legacyRecords: 0 });
+  assert(locked[0].startsWith("Locked."), "the locked state leads with Locked");
+  assert(locked.join(" ").includes("refuse rather than call the service"), "locked says agents refuse rather than call without a credential");
+
+  const sealed = vaultProtectionLines({ state: "sealed", sealedRecords: 3, legacyRecords: 0 });
+  assert(sealed[0].includes("Encrypted at rest"), "the sealed state is the only one allowed to say Encrypted at rest");
+  assert(sealed[0].includes("3 saved keys sealed"), "it names how many records are sealed");
+
+  const pending = vaultProtectionLines({ state: "sealed", sealedRecords: 1, legacyRecords: 1, migrationPending: true });
+  assert(pending.some((line) => line.includes("part-way through")), "an interrupted re-seal is stated, not hidden");
+  assert(pending.some((line) => line.includes("legacy, not sealed")), "legacy records are visible as such");
+});
+
+Deno.test("zxo4i: vault.lock seals/unlocks/relocks through the Settings route, and status reports the state", async () => {
+  const storage = fakeStorage();
+  const vault = await createSecretVault({
+    storageArea: storage,
+    extensionId: CLAIM_EXT_ID,
+    installSaltB64: CLAIM_SALT_B64,
+  });
+  await vault.setSecret("BRAVE_SEARCH_API_KEY", SECRET_A, { by: "sw" });
+  const routes = createVaultRoutes({
+    vault,
+    requireSettingsSender: (ctx: any) => {
+      if (ctx?.principal !== "owner-options") throw new Error("settings surface required");
+    },
+  });
+  const owner = { principal: "owner-options" };
+
+  assertEquals((await routes["vault.status"]({}, owner)).protection.state, "obfuscation");
+
+  const sealed = await routes["vault.lock"]({ action: "seal", passphrase: SEALED_PASS }, owner);
+  assertEquals(sealed.ok, true);
+  assertEquals(sealed.state, "sealed");
+  assertEquals(sealed.resealed, 1);
+  const sealedStatus = await routes["vault.status"]({}, owner);
+  assertEquals(sealedStatus.protection.state, "sealed");
+  assertEquals(sealedStatus.protection.encryptedAtRest, true);
+
+  const relocked = await routes["vault.lock"]({ action: "relock" }, owner);
+  assertEquals(relocked.state, "locked");
+  assertEquals((await routes["vault.status"]({}, owner)).protection.state, "locked");
+
+  const unlocked = await routes["vault.lock"]({ action: "unlock", passphrase: SEALED_PASS }, owner);
+  assertEquals(unlocked.ok, true);
+  assertEquals((await routes["vault.status"]({}, owner)).protection.state, "sealed");
+
+  // A wrong passphrase is refused by the route and changes nothing.
+  await routes["vault.lock"]({ action: "relock" }, owner);
+  await assertRejects(() => routes["vault.lock"]({ action: "unlock", passphrase: "wrong passphrase!" }, owner), Error, undefined, "a wrong passphrase must not unlock");
+
+  // Settings authority still applies to the lock route.
+  await assertRejects(() => routes["vault.lock"]({ action: "relock" }, { principal: "content" }), Error, "settings surface");
+  // An unknown action is a caller bug, refused by name.
+  await assertRejects(() => routes["vault.lock"]({ action: "shatter" }, owner), TypeError);
+});
+
+Deno.test("zxo4i: the enclave proxy refuses a LOCKED vault with the vault's own code instead of dialing", async () => {
+  const storage = fakeStorage();
+  const vault = await createSecretVault({
+    storageArea: storage,
+    extensionId: CLAIM_EXT_ID,
+    installSaltB64: CLAIM_SALT_B64,
+  });
+  await vault.setSecret("BRAVE_SEARCH_API_KEY", SECRET_A, { by: "sw" });
+  await vault.enableLock(SEALED_PASS);
+  await vault.relock();
+
+  let dialed = 0;
+  const routes = createEnclaveProxyRoutes({
+    vault: { getSecretRaw: (keyId: string, opts: any) => vault.getSecretRaw(keyId, { ...opts, access: SW_ACCESS }) },
+    fetchImpl: () => {
+      dialed++;
+      return Promise.resolve(new Response("{}", { status: 200 }));
+    },
+    services: {
+      "brave-search": {
+        origin: "https://api.search.brave.com",
+        secretKey: "BRAVE_SEARCH_API_KEY",
+        authType: "bearer",
+        path: "/res/v1/web/search",
+      },
+    },
+    isAllowedCaller: () => true,
+  });
+
+  const err = await assertRejects(
+    () => routes["enclave.proxy"]({ service: "brave-search", injectServiceAuth: true }, { [Symbol.for("cap.enclave.sw")]: true }),
+    Error,
+    undefined,
+    "a locked vault must refuse the proxied request",
+  );
+  assertEquals((err as any).code, "vault_locked", "the refusal keeps the vault's code so the UI can say 'unlock'");
+  assertEquals(dialed, 0, "NOTHING was dialed — the request never left the extension without its credential");
 });

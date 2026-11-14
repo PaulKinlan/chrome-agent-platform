@@ -10,7 +10,7 @@
 
 This document provides a total, honest census of all 299 message routes registered in the Chrome Agent Platform Service Worker.
 
-The population is the key set `mergeRouteMaps` in `service-worker.js` actually returns — not a hand-kept list. An earlier evaluation corrected 276 → 285 (chrome-agent-platform-s7wl) when the earlier count silently skipped the three maps `vaultRoutes`, `enclaveProxyRoutes` and `enclaveStatusRoutes` (9 routes, landed 2026-10-03 in `bd17634f`), which then grew through the 288-route snapshot at `f507d58f` to the current 299 registered routes. 299 is what composition produces.
+The population is the key set `mergeRouteMaps` in `service-worker.js` actually returns — not a hand-kept list. An earlier evaluation corrected 276 → 285 (chrome-agent-platform-s7wl) when the earlier count silently skipped the three maps `vaultRoutes`, `enclaveProxyRoutes` and `enclaveStatusRoutes` (9 routes, landed 2026-10-03 in `bd17634f`), which then grew through the 288-route snapshot at `f507d58f` to the current 300 registered routes. 300 is what composition produces.
 
 Prior audits (such as 18ug) focused narrowly on call sites of `requireOwnerApproval`, identifying 31 approval sites. However, `requireOwnerApproval` is only one of multiple gating layers in the extension. A route that does not call `requireOwnerApproval` is not necessarily insecure, but a mutation that reaches state modification without an explicit policy decision represents an unclassified authority boundary.
 
@@ -43,7 +43,7 @@ Every message arriving at the Service Worker passes through a layered defense-in
                                     ▼
 ┌────────────────────────────────────────────────────────────────────────┐
 │ Layer 2: Central Dispatcher (dispatchRoute)                            │
-│ - look up type in handlers map (299 registered routes)                 │
+│ - look up type in handlers map (300 registered routes)                 │
 │ - scrub __* fields and userActivation from message body                │
 │ - inject trusted browser-attested sender (__sender = pageSender)       │
 └───────────────────────────────────┬────────────────────────────────────┘
@@ -76,12 +76,12 @@ Every message arriving at the Service Worker passes through a layered defense-in
 
 ---
 
-## 3. High-Level Population Summary (299 Routes)
+## 3. High-Level Population Summary (300 Routes)
 
 | Category | Count | Permitted Callers | Gating Mechanism |
 |---|---|---|---|
 | **Page-Allowed (`PAGE_ALLOWED`)** | 7 | Web pages (content scripts) | `PAGE_ALLOWED_ROUTES` allowlist in `lib/pure.js` |
-| **Settings-Only Direct (`SETTINGS_ONLY_DIRECT`)** | 54 | `owner-options` | `requireSettingsSender` or `wasmStreamOwner` |
+| **Settings-Only Direct (`SETTINGS_ONLY_DIRECT`)** | 55 | `owner-options` | `requireSettingsSender` or `wasmStreamOwner` |
 | **Owner-Approval Direct (`OWNER_APPROVAL_DIRECT`)** | 13 | `owner-options`, `extension` | `requireOwnerApproval` + `isOwnerDirectApproval` |
 | **Owner-Approval Required (`OWNER_APPROVAL_REQUIRED`)** | 18 | `model`, `extension` | `requireOwnerApproval` (always prompts or model card) |
 | **Owner Extension-Fenced (`OWNER_EXTENSION_FENCED`)** | 29 | `owner-options`, `extension` | `isOwnerPrincipal(context)` or stricter exact owner-page sender ID/path (`thread-export.html`) |
@@ -90,14 +90,14 @@ Every message arriving at the Service Worker passes through a layered defense-in
 | **Storage, KV & Memory Fenced** | 10 | `owner-options`, `extension` | Secret key fences, quiescence tracking, leases |
 | **Unclassified Mutations (Gaps)** | 38 | `extension` (any) | Central page filter only; no route-local gate |
 | **Read-Only / Status / Telemetry** | 94 | `owner-options`, `extension` | Read-only browser-attested status; no site enrollment or tool dispatch |
-| **Total** | **299** | | |
+| **Total** | **300** | | |
 
 ---
 
 ## 4. Total Route Inventory & Classification
 
 ### 4.1 Page-Allowed Routes (`PAGE_ALLOWED_ROUTES` — 7 routes)
-These are the ONLY routes accessible to content scripts. All other 292 routes reject content-script callers with the generic `"unknown message"` shape — cac6c r3 (1fn9j): deliberately identical to the unknown-route reply, so a page cannot distinguish "route exists but is forbidden" from "no such route" (no route-enumeration oracle through the reply channel).
+These are the ONLY routes accessible to content scripts. All other 293 routes reject content-script callers with the generic `"unknown message"` shape — cac6c r3 (1fn9j): deliberately identical to the unknown-route reply, so a page cannot distinguish "route exists but is forbidden" from "no such route" (no route-enumeration oracle through the reply channel).
 
 | Route Name | Owning Module | Description | Authority Gate |
 |---|---|---|---|
@@ -111,7 +111,7 @@ These are the ONLY routes accessible to content scripts. All other 292 routes re
 
 ---
 
-### 4.2 Settings-Only Direct Routes (`SETTINGS_ONLY_DIRECT` — 54 routes)
+### 4.2 Settings-Only Direct Routes (`SETTINGS_ONLY_DIRECT` — 55 routes)
 Restricted strictly to the Settings surface (`principal === "owner-options"`). General extension documents (hub, side panel), pages, and model calls are denied.
 
 | Route Name | Owning Module | Description | Policy Gate |
@@ -169,6 +169,7 @@ Restricted strictly to the Settings surface (`principal === "owner-options"`). G
 | `vault.ledger.usage` | `routes/vault.js` | Reads enclave per-service quota usage telemetry | `requireSettingsSender` |
 | `vault.ledger.setQuotas` | `routes/vault.js` | Sets and persists owner enclave quota overrides (empty object clears to defaults) | `requireSettingsSender` |
 | `vault.test` | `routes/vault.js` | Runs ONE minimal proxied request; returns `{ ok, status, code }` only | `requireSettingsSender` |
+| `vault.lock` | `routes/vault.js` | Installs the passphrase lock (`action: seal`, re-sealing legacy records in place), unlocks it, or relocks it; the passphrase is never persisted beside the ciphertext (zxo4i) | `requireSettingsSender` |
 | `enclave.status` | `service-worker.js` | Reports enclave enablement + configured services for Settings | `principal === "owner-options"` |
 
 ---

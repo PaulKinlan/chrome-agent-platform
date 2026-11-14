@@ -138,7 +138,7 @@ import {
   createOpfsAdapter,
   createChromeAlarmsAdapter,
 } from "../lib/data-archive.js";
-import { createSecretVault, createServiceWorkerAccess } from "../lib/secret-vault.js";
+import { createSecretVault, createServiceWorkerAccess, VAULT_UNLOCK_SESSION_KEY } from "../lib/secret-vault.js";
 import { createThreadExportRoute } from "../lib/thread-export-route.js";
 import { synthesizeServiceTools, SERVICE_DESCRIPTORS, enclaveToolsForRun } from "../lib/service-tools.js";
 import { admitDurableRun, durableQuotaResponse } from "../lib/durable-quota.js";
@@ -7531,10 +7531,35 @@ async function getDynamicProxyRulesMap() {
   }
 }
 
+/** The passphrase store for the sealed vault (chrome-agent-platform-zxo4i).
+ * chrome.storage.session is MEMORY-ONLY and cleared when the browser exits, so
+ * a restart relocks the vault and a locked vault refuses credential reads
+ * instead of dialing — deliberately, because the passphrase is the only secret
+ * the storage area does not contain. The passphrase never reaches
+ * chrome.storage.local, a log, a message payload or a ledger entry. */
+const enclaveVaultPassphraseStore = {
+  async get() {
+    try {
+      const got = await chrome.storage.session?.get?.(VAULT_UNLOCK_SESSION_KEY);
+      const value = got?.[VAULT_UNLOCK_SESSION_KEY];
+      return typeof value === "string" && value.length > 0 ? value : null;
+    } catch {
+      return null;
+    }
+  },
+  async set(passphrase) {
+    await chrome.storage.session?.set?.({ [VAULT_UNLOCK_SESSION_KEY]: String(passphrase) });
+  },
+  async clear() {
+    await chrome.storage.session?.remove?.(VAULT_UNLOCK_SESSION_KEY);
+  },
+};
+
 function enclaveVault() {
   enclaveVaultPromise ??= createSecretVault({
     storageArea: chrome.storage.local,
     extensionId: chrome.runtime.id,
+    passphraseStore: enclaveVaultPassphraseStore,
   });
   return enclaveVaultPromise;
 }
@@ -7554,6 +7579,10 @@ const enclaveProxyRoutes = createEnclaveProxyRoutes({
 // { ok, status } — never the body, never the secret.
 const vaultRoutes = createVaultRoutes({
   vault: {
+    protection: () => enclaveVault().then((v) => v.protection()),
+    enableLock: (passphrase) => enclaveVault().then((v) => v.enableLock(passphrase)),
+    unlock: (passphrase) => enclaveVault().then((v) => v.unlock(passphrase)),
+    relock: () => enclaveVault().then((v) => v.relock()),
     listMasked: (opts) => enclaveVault().then((v) => v.listMasked(opts)),
     setSecret: (keyId, value, o) => enclaveVault().then((v) => v.setSecret(keyId, value, o)),
     rotateSecret: (keyId, value, o) => enclaveVault().then((v) => v.rotateSecret(keyId, value, o)),

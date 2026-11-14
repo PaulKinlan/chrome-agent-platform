@@ -2030,7 +2030,11 @@ Deno.test("guard: the attributed population and its documented exclusions", () =
   // mis-filed as TOKEN_ABSENT by the audit and 1 more by the census; 13 measured here.
   // z4gg (2026-10-07) declared the 14th: one-shell-layout.test.ts loops over the journey
   // names and pins each via an interpolated (computed) token, skipped by construction.
-  assertEquals(stats.skippedInterpolated, 14,
+  // zxo4i (2026-11-14) declared the 15th and 16th: the Settings-panel pin loops over the seven
+  // vault-lock DOM ids and asserts each one exists in options.html AND is queried by the panel, so
+  // both tokens are computed per iteration (`id="${id}"`, `"${id}"`) — the same declared shape as
+  // z4gg's journey-name loop, not a literal that moved.
+  assertEquals(stats.skippedInterpolated, 16,
     "interpolated backtick tokens are skipped; a change means the delimiter gate moved");
 
   // Absence pins and disjunctions stay skipped (conservative, not false greens).
