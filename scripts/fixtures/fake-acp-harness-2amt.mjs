@@ -169,7 +169,11 @@ process.stdin.on("data", async (chunk) => {
         // chrome-agent-platform-aaakp: the report IS the drive's evidence — a
         // swallowed write makes the downstream assertion fail with a confusing
         // "missing report" symptom instead of the real I/O error.
-        throw new Error(`[fake-acp-harness] report write failed: ${(error as Error).message}`);
+        // chrome-agent-platform-el0ab: this file is spawned with node
+        // (acp-bridge.ts:356), so the message extraction stays plain JS — a
+        // TypeScript cast here is a SyntaxError that kills the harness at start.
+        const reason = error instanceof Error ? error.message : String(error);
+        throw new Error(`[fake-acp-harness] report write failed: ${reason}`);
       }
       send({
         jsonrpc: "2.0",
