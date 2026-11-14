@@ -134,12 +134,21 @@ Deno.test("qcfc: changing service-worker.js selects sw-dispatch-authority-census
 
 // Self-checking audit: identifies test files that perform dynamic tree-wide source scans
 // or AST parsing of repo source files as data.
-/** Reserved/control-flow words that can never NAME a method shorthand in the spellings this audit
- *  reads — chrome-agent-platform-16o8b. The method capture inside `bodiesByName` is a regex anchored on
- *  `^`/`{`/`,`/`;`, so `if(ROOT) {`, `for (…) {`, `while (…) {` and friends match it exactly like
- *  `{ scanDir(dir) { … } }` does. JS permits a reserved word as a PROPERTY name, which is why this is a
- *  list rather than a syntax rule: the shapes that collide are statement keywords at a statement
- *  boundary, and a real `{ if() { … } }` method would be flagging-worthy anyway. */
+/** Reserved/control-flow words that this audit cannot take as a method name ON SIGHT —
+ *  chrome-agent-platform-16o8b/hiv8y.
+ *
+ *  The method capture inside `bodiesByName` is a regex anchored on `^`/`{`/`,`/`;`, so a statement
+ *  head matches it exactly like an object-method shorthand does: `if(ROOT) { fs.readdirSync(FIXTURES); }`
+ *  was collected as a method named `if`, and the same `if(ROOT)` then matched as that method's call
+ *  site with a source root — a fixture-only reader classified as a source census.
+ *
+ *  Excluding the words outright fixed that false positive and CREATED the mirror hole (hiv8y): JS
+ *  permits a reserved word as a PROPERTY name, so `const h = { if(dir) { fs.readdirSync(dir); } };`
+ *  `h.if(ROOT);` is a real census and an outright exclusion dropped it. So a keyword-named capture is
+ *  kept only when the file actually CALLS that name as a property (`.<name>(`) — which is how an
+ *  object/class method is reached, and the one thing a control-flow statement never spells. The verdict
+ *  still has to find a source root at that call site, so the discriminator only decides whether the name
+ *  is a candidate at all. */
 const NON_METHOD_KEYWORDS = new Set([
   "if", "else", "for", "while", "do", "switch", "case", "default", "catch", "finally", "try",
   "return", "throw", "typeof", "instanceof", "in", "of", "new", "delete", "void", "await", "yield",
@@ -354,7 +363,11 @@ export function findUnclassifiedSourceScanners(
     // list is the honest discriminator; a method body is still read by `bracedBodyFrom` once the name
     // survives it.
     for (const m of code.matchAll(/(?:^|[{,;])\s*(?:async\s+)?(?:get\s+|set\s+)?([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*\{/gm)) {
-      if (NON_METHOD_KEYWORDS.has(m[1])) continue;
+    // chrome-agent-platform-16o8b/hiv8y: a keyword can be a legal PROPERTY name, so it is kept when the
+    // file calls it as one (`.<name>(`) and skipped otherwise — a bare `if(…) {` is control flow. See
+    // NON_METHOD_KEYWORDS for both sightings (the false positive and the mirror false negative).
+    const keywordCall = new RegExp(`\\.\\s*${m[1]}\\s*\\(`);
+    if (NON_METHOD_KEYWORDS.has(m[1]) && !keywordCall.test(code)) continue;
       add(m[1], bracedBodyFrom(code, code.indexOf("{", m.index + m[0].length - 1)));
     }
     return bodies;
@@ -914,6 +927,22 @@ Deno.test("n2u40: a LOCAL dir-reading helper called with a source root is a scan
     findUnclassifiedSourceScanners([{ rel: "tests/zz-16o8b-probe.test.ts", code: methodWithControlFlow }], new Set()),
     ["tests/zz-16o8b-probe.test.ts"],
     "the real object-method spelling is still flagged next to a control-flow statement",
+  );
+
+  // hiv8y (review of 16o8b): the mirror hole the keyword exclusion CREATED. A reserved word is a legal
+  // PROPERTY name, so `{ if(dir) { fs.readdirSync(dir); } }` called as `h.if(ROOT)` is a real census —
+  // and the first version of the exclusion dropped it. A keyword-named capture is kept exactly when the
+  // file CALLS that name as a property, which control flow never spells.
+  const keywordMethod = [
+    'import * as fs from "node:fs";',
+    'const ROOT = new URL("..", import.meta.url);',
+    'const h = { if(dir: URL) { for (const e of fs.readdirSync(dir)) void e; } };',
+    'h.if(ROOT);',
+  ].join("\n");
+  assertEquals(
+    findUnclassifiedSourceScanners([{ rel: "tests/zz-hiv8y-probe.test.ts", code: keywordMethod }], new Set()),
+    ["tests/zz-hiv8y-probe.test.ts"],
+    "a keyword-named METHOD called as a property is still a source census — the exclusion must not blind it",
   );
 
   // OVER-MATCH 1: the same helper reading a FIXTURE directory is not a census of tracked source.
