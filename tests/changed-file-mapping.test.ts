@@ -12,7 +12,7 @@
 // @ts-nocheck
 
 import { assert, assertEquals, assertThrows } from "jsr:@std/assert@1";
-import { BASENAME_RULE_RUNTIME_VERIFIED, DECLARED_NO_GUARD } from "../scripts/lib/changed-file-mapping.mjs";
+import { DECLARED_NO_GUARD } from "../scripts/lib/changed-file-mapping.mjs";
 import { fileURLToPath } from "node:url";
 import {
   BOOKKEEPING_FILES,
@@ -662,11 +662,16 @@ Deno.test("h346c: the dedicated-guard registry is path-keyed, ownership-based an
     "the HTML entry table is consulted by the same helper",
   );
 
-  // wwgnm: the two surfaces whose only selected suite reached them by an incidental instrument
-  // (a dynamic import specifier, a path literal). Asserted as ownership so a later "tidying" of
-  // either entry says so here rather than quietly dropping a user-facing surface's guard.
+  // wwgnm: settings-view.js is asserted as ownership so a later "tidying" of the entry says
+  // so here rather than quietly dropping a user-facing surface's guard.
   assertEquals(guardsForChangedFile("extension/options/settings-view.js"), ["tests/settings-client-view.test.ts"]);
-  assertEquals(guardsForChangedFile("extension/directory/directory.js"), ["tests/directory-client-view.test.ts"]);
+  // wwgnm r3 (1jkwf): the r2 directory.js entry was FALSE — its suite only string-checks the
+  // file — and is GONE; the file's policing is the ntp.js static import, declared below.
+  assertEquals(
+    guardsForChangedFile("extension/directory/directory.js"),
+    [],
+    "directory.js owns no dedicated guard: no suite imports it at runtime (the r2 runtime-verified claim was false)",
+  );
 
   // No entry, no claim — an unregistered file owns no KNOWN guard, and the helper must not invent one.
   assertEquals(guardsForChangedFile("extension/lib/pure.js"), []);
@@ -678,49 +683,103 @@ Deno.test("h346c: the dedicated-guard registry is path-keyed, ownership-based an
   // OWNERSHIP, not filenames (cac6c): the guard that polices service-worker.js shares no basename
   // with it, so a naming convention would never have found it — and nothing may be keyed to a line
   // number, which khwi9 rotted by moving a policed listener 14 lines.
-  // chrome-agent-platform-wwgnm r2: the rule admits the DECLARED runtime-verified keys
-  // (the async proof of that claim lives in the test below); anything else stays a
-  // refused coincidence.
+  // chrome-agent-platform-wwgnm r3 (1jkwf): the rule is STRICT again — the round-2
+  // runtime-verified carve-out admitted exactly the artefact it existed to exclude (a suite whose
+  // only mention of the module is a readTextFile path literal satisfied the check), so the
+  // carve-out is gone and every same-basename entry is a refused coincidence.
   for (const [file, guards] of entries) {
-    const runtimeVerified = BASENAME_RULE_RUNTIME_VERIFIED.includes(file);
     for (const guard of guards) {
       const basenameMatch = guard.includes(file.split("/").pop().replace(/\.js$/, ""));
       assert(
-        !basenameMatch || file.endsWith(".html") || runtimeVerified,
-        `${file} -> ${guard}: the entry is a filename coincidence (declare it in BASENAME_RULE_RUNTIME_VERIFIED with a pinned runtime proof if it is not)`,
+        !basenameMatch || file.endsWith(".html"),
+        `${file} -> ${guard}: the entry is a filename coincidence (bind the suite that truly polices the file, or declare the file in DECLARED_NO_GUARD with a verifiable mechanism)`,
       );
     }
   }
 });
 
-
-Deno.test("wwgnm r2: the runtime-verified carve-out is proven, and every declaration names a checkable suite", async () => {
-  // The basename rule's exception is a claim about RUNTIME exercise: each declared
-  // key's guard must reference the module it claims to exercise, pinned here so the
-  // carve-out cannot quietly grow or go stale.
-  for (const file of BASENAME_RULE_RUNTIME_VERIFIED) {
-    const guards = DEDICATED_FILE_GUARDS[file];
-    assert(guards && guards.length > 0, `${file} is declared runtime-verified but has NO entry — the declaration is stale`);
-    for (const guard of guards) {
-      const guardSource = await Deno.readTextFile(new URL(`../${guard}`, import.meta.url));
-      const moduleRef = file.split("/").pop();
-      assert(
-        guardSource.includes(moduleRef),
-        `${file} -> ${guard}: claimed runtime-verified, but the suite never references the module it claims to exercise`,
-      );
+/**
+ * wwgnm r3 (1mcws): the DECLARED_NO_GUARD validation must refuse PROSE. Returns null when the
+ * reason's claimed edge is REAL in source, or a string naming which claim is false:
+ *   - every named suite must exist AND at least one named suite's source must mention the
+ *     declared file's basename (it polices it directly); OR
+ *   - a "barrel" claim must be true of extension/lib/pure.js (it really re-exports the file); OR
+ *   - a "MAPPED" claim must be true of the tables (the file has a dedicated entry); OR
+ *   - a transitive claim: the reason names an intermediate module whose source mentions the
+ *     file's basename while a named suite polices THAT module.
+ * Round 2's pin only Deno.stat'd the named suites — a declaration naming an existing suite that
+ * never touches the file passed green, which is the reviewer's exact repro.
+ */
+export async function unverifiedDeclarationEdge(file, reason) {
+  const basename = file.split("/").pop();
+  const suiteRefs = reason.match(/tests\/[a-z0-9.-]+\.test\.ts/g) ?? [];
+  const readSource = async (rel) => await Deno.readTextFile(new URL(`../${rel}`, import.meta.url));
+  const sources = [];
+  for (const ref of suiteRefs) {
+    try {
+      sources.push([ref, await readSource(ref)]);
+    } catch {
+      return `named suite ${ref} does not exist in the tree`;
     }
   }
-  // Every DECLARED_NO_GUARD reason must name a suite that EXISTS in the tree, or state
-  // the barrel/always-on mechanism explicitly — a reason naming nothing checkable is
-  // prose, not a declaration.
+  const structural = reason.includes("barrel") || reason.includes("ALWAYS_ON") || reason.includes("MAPPED");
+  if (suiteRefs.length === 0 && !structural) {
+    return "names no existing suite and no structural mechanism — it is prose, not a declaration";
+  }
+  if (sources.some(([, src]) => src.includes(basename))) return null;
+  if (reason.includes("barrel")) {
+    const barrel = await readSource("extension/lib/pure.js");
+    if (barrel.includes(basename)) return null;
+    return `the barrel claim is false: extension/lib/pure.js never re-exports ${basename}`;
+  }
+  if (reason.includes("MAPPED")) {
+    const { DEDICATED_FILE_GUARDS: dedicated } = await import("../scripts/lib/changed-file-mapping.mjs");
+    if (Object.hasOwn(dedicated, file)) return null;
+    return "the MAPPED claim is false: the file has no dedicated entry — the row is dead state";
+  }
+  const moduleRefs = [...reason.matchAll(/((?:extension|scripts)\/[a-z0-9./-]+\.(?:js|mjs))/g)]
+    .map((m) => m[1])
+    .filter((mod) => mod !== file);
+  for (const mod of moduleRefs) {
+    let modSource;
+    try {
+      modSource = await readSource(mod);
+    } catch {
+      continue; // a named module path that does not exist cannot carry the claim
+    }
+    if (modSource.includes(basename)) {
+      const suiteSeesModule = sources.some(([, src]) => src.includes(mod.split("/").pop()));
+      if (suiteSeesModule) return null;
+    }
+  }
+  return `no claimed edge exists in source: no named suite mentions ${basename}, and no barrel/MAPPED/transitive claim verifies`;
+}
+
+Deno.test("wwgnm r3: every DECLARED_NO_GUARD justification is REAL — some claimed edge exists in source", async () => {
   for (const [file, reason] of Object.entries(DECLARED_NO_GUARD)) {
-    const suiteRefs = reason.match(/tests\/[a-z0-9.-]+\.test\.ts/g) ?? [];
-    for (const ref of suiteRefs) {
-      await Deno.stat(new URL(`../${ref}`, import.meta.url));
-    }
-    assert(
-      suiteRefs.length > 0 || reason.includes("barrel") || reason.includes("ALWAYS_ON") || reason.includes("MAPPED"),
-      `${file}: the declaration names no existing suite and no structural mechanism — it is not a declaration`,
-    );
+    const unverified = await unverifiedDeclarationEdge(file, reason);
+    assertEquals(unverified, null, `${file}: the declaration is not backed by source — ${unverified}`);
   }
 });
+
+Deno.test("wwgnm r3 falsifier: a false declaration (suite exists, never touches the file) is refused", async () => {
+  // 1mcws's exact repro, kept in the suite: tests/pure.test.ts EXISTS but never mentions
+  // table-extractor.js — round 2's existence-only pin passed this green.
+  const unverified = await unverifiedDeclarationEdge("extension/lib/table-extractor.js", "policed by tests/pure.test.ts");
+  assert(
+    typeof unverified === "string" && unverified.includes("no claimed edge exists"),
+    `the false declaration must be refused by name, got: ${unverified}`,
+  );
+  // And the transitive shape must hold where it is claimed (directory.js via ntp.js).
+  const transitive = await unverifiedDeclarationEdge(
+    "extension/directory/directory.js",
+    "statically imported by extension/ntp/ntp.js (renderDirectoryContent), which tests/ntp-agent-route-execution.test.ts executes per boot — the suite polices ntp.js, ntp.js imports this file; every direct reference in tests/ is text inspection",
+  );
+  assertEquals(transitive, null, "the directory.js transitive claim must verify against source");
+});
+
+// (The round-2 "runtime-verified carve-out" pin is gone with the carve-out itself: it could
+// not fail in the way that mattered — a suite whose only mention of the module was a
+// readTextFile path literal satisfied guardSource.includes(basename) — which is exactly how
+// the false directory.js entry stayed green. Its replacement is the r3 validator above,
+// which requires the claimed edge to exist in SOURCE.)

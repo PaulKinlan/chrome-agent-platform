@@ -198,14 +198,12 @@ export const DEDICATED_FILE_GUARDS = Object.freeze({
     // substring of settings-client-view), so the table's anti-coincidence rule allows the claim.
     "tests/settings-client-view.test.ts",
   ]),
-  // chrome-agent-platform-wwgnm round 2: the round-1 binding pointed this file at a suite
-  // that only STRING-CHECKS it ('!directoryJs.includes("#section-agents")') — an entry that
-  // looks like coverage and cannot red on a regression, which is worse than no entry. The
-  // real suite runtime-exercises the module, and it is registered through the basename
-  // rule's declared exception (BASENAME_RULE_RUNTIME_VERIFIED below), not by dodging the rule.
-  "extension/directory/directory.js": Object.freeze([
-    "tests/directory-client-view.test.ts",
-  ]),
+  // chrome-agent-platform-wwgnm r3 (1jkwf): the round-2 entry here was FALSE —
+  // tests/directory-client-view.test.ts reads the module as TEXT (readTextFile + substring
+  // asserts) and no suite in the tree imports it; the only runtime edge is ntp.js's STATIC
+  // import, which the import graph already counts. A binding whose suite cannot red on a
+  // regression is worse than none, and the runtime-verified carve-out that admitted it is
+  // gone with it. The file is DECLARED below with the transitive mechanism.
   // 4iyck/28hwd+qnci3: runbooks are PASSIVE CONTENT to the selector (isPassiveContentFile matches
   // .md), so before this entry a landing-recipe change selected the always-on core and nothing that
   // read it: a runbook could prescribe an unbounded raw `bd dolt push`, or lose the failed-helper
@@ -228,19 +226,6 @@ export const DEDICATED_FILE_GUARDS = Object.freeze({
  *  HTML entries live in their own table (h346c: a rule that only read one of them would
  *  have re-created the gap it exists to close). */
 /**
- * chrome-agent-platform-wwgnm round 2 (coord acceptance 2): the anti-coincidence rule
- * refuses entries whose guard filename contains the key's basename, because a
- * same-named suite is presumed already selected by its import edge. That presumption
- * is FALSE for suites that exercise the file at RUNTIME through a dynamic or
- * computed specifier the static graph cannot see. A file may therefore be registered
- * here: its guard is runtime-verified (the registry test pins the specifier that
- * proves it), and the basename rule admits exactly these keys and no others.
- */
-export const BASENAME_RULE_RUNTIME_VERIFIED = Object.freeze([
-  "extension/directory/directory.js",
-]);
-
-/**
  * chrome-agent-platform-wwgnm round 2 (coord acceptance 3): the files the changed-file
  * map deliberately does NOT bind, each with a FILE-based reason — what actually polices
  * it and by which mechanism. This is the loud answer to "why is this file unmapped";
@@ -248,6 +233,13 @@ export const BASENAME_RULE_RUNTIME_VERIFIED = Object.freeze([
  * belong here. planSelection refuses a product file that has neither an entry in
  * DEDICATED_FILE_GUARDS nor a declaration here, naming it — silence is the defect
  * the review found.
+ *
+ * chrome-agent-platform-wwgnm r3 (1mcws): a declaration must be TRUE, not merely
+ * plausible — tests/changed-file-mapping.test.ts verifies each reason's claimed edge in
+ * SOURCE (a named suite that mentions the file, a barrel that really re-exports it, a
+ * MAPPED claim that has its entry, or a named intermediate module that imports the file
+ * while a named suite polices THAT module). Existence-only validation was the defect:
+ * a false declaration passed the pin green.
  */
 export const DECLARED_NO_GUARD = Object.freeze({
   // wwgnm r2, measured: the suite imports the module with a runtime specifier
@@ -267,8 +259,11 @@ export const DECLARED_NO_GUARD = Object.freeze({
     "re-exported through the pure.js barrel; pinned via the barrel in tests/pure.test.ts",
   "extension/lib/pure-text.js":
     "re-exported through the pure.js barrel; pinned via the barrel in tests/pure.test.ts",
-  "extension/lib/pure-trust.js":
-    "MAPPED above (trusted-sender-port-fence); the barrel path is additional, not the claim",
+  // wwgnm r3 (1jkwf): NO suite imports this module (every reference in tests/ is
+  // readTextFile text inspection); the runtime edge is the STATIC import from ntp.js
+  // (renderDirectoryContent), which the import graph already counts — declared, not bound.
+  "extension/directory/directory.js":
+    "statically imported by extension/ntp/ntp.js (renderDirectoryContent), which tests/ntp-agent-route-execution.test.ts executes per boot — the suite polices ntp.js, ntp.js imports this file; every direct reference in tests/ is text inspection",
   "extension/shared/components-core.js":
     "statically imported and rendered by tests/a11y-structure.test.ts and tests/activity-liveness.test.ts (measured reverse closure)",
   "extension/shared/components-hub.js":

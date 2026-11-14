@@ -291,15 +291,14 @@ Deno.test("h346c: a guard-owning changed file carries its dedicated guard even w
   );
 });
 
-Deno.test("wwgnm: the incidental-instrument surfaces carry their guard, and removal is a named stop signal", () => {
-  // wwgnm: settings-view.js is registered because its only touching suite reaches it by a dynamic
-  // import specifier (a coincidence edge); directory.js is registered on the REAL runtime suite
-  // through the basename rule's declared runtime-verified carve-out (round 2: the round-1 binding
-  // pointed at a suite that only STRING-CHECKS the file — coverage that cannot red).
-  for (const [file, guard] of [
-    ["extension/options/settings-view.js", "tests/settings-client-view.test.ts"],
-    ["extension/directory/directory.js", "tests/directory-client-view.test.ts"],
-  ] as Array<[string, string]>) {
+Deno.test("wwgnm: the incidental-instrument surface carries its guard, and removal is a named stop signal", () => {
+  // wwgnm: settings-view.js is registered because its only touching suite reaches it by a
+  // dynamic import specifier (a coincidence edge). (directory.js was the second entry until
+  // r3/1jkwf proved it false — its suite only string-checks the file — and it moved to
+  // DECLARED_NO_GUARD; see the leg below.)
+  const file = "extension/options/settings-view.js";
+  const guard = "tests/settings-client-view.test.ts";
+  {
     const plan = planSelection({ changedFiles: () => [file] });
     assertEquals(plan.kind, "subset", `${file}: import-reachable, so still a certifiable subset`);
     assert(
@@ -313,6 +312,17 @@ Deno.test("wwgnm: the incidental-instrument surfaces carry their guard, and remo
       `${file}: dropping the guard must be reported, not silent`,
     );
   }
+  // wwgnm r3 (1jkwf): directory.js owns NO dedicated guard — no suite imports it (every
+  // reference in tests/ is readTextFile text inspection) — and its answer is the DECLARATION:
+  // the runtime edge is ntp.js's static import, which the graph already counts, so a
+  // directory.js delta stays a certifiable subset with no gap and no invented coverage.
+  const directory = planSelection({ changedFiles: () => ["extension/directory/directory.js"] });
+  assertEquals(directory.kind, "subset", "directory.js stays import-reachable through ntp.js's static import");
+  assertEquals(directory.guardGap, [], "no dedicated guard is claimed for directory.js, so no gap");
+  assert(
+    (directory.files ?? []).includes("tests/ntp-agent-route-execution.test.ts"),
+    `the transitive edge must select ntp.js's policing suite, got: ${(directory.files ?? []).filter((f) => f.includes("ntp")).join(", ")}`,
+  );
 });
 
 // chrome-agent-platform-wwgnm round 2, coord acceptance 1: NO SILENCE. A changed PRODUCT file
