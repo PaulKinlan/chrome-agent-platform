@@ -176,7 +176,10 @@ node scripts/check-beads-export-divergence.mjs
 # carried the vault-encryption feature and the honest-claim correction, so v0.3.753 was
 # stamped `- none.`. Inside a range a commit that declares `none.` suppresses only its
 # OWN note; a range that collects no note at all is REFUSED (exit 1) rather than stamped
-# "none" — state the copy with --user-note, or name the internal commits with --internal.
+# "none" — state the copy with --user-note, or, when the batch really has no user
+# surface, declare EVERY commit of the range with --internal: a fully-internal
+# batch then mints nothing (exit 0), exactly as a single internal candidate does.
+# The refusal names how many commits are still undeclared (rfy90).
 node scripts/bump-version.mjs patch --landing --from <base>..<union-tip>
 # (The older form — one --from per candidate sha — still lands a union of named
 # candidates: --from <candidate-sha> [--from <next-candidate-sha> ...]. Do not pass

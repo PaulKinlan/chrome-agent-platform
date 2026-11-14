@@ -250,12 +250,25 @@ if (landingMode) {
   }
   // a4o1s (b): a version with no note is a decision, not a default. A range that
   // collected nothing must not be stamped "- none." — refuse and make the
-  // merger state the copy (or decide explicitly that the batch is internal).
-  if (candidates.some((candidate) => candidate.range) && fromNoteCount === 0 && !userNoteGiven) {
+  // merger state the copy, or declare the batch internal.
+  //
+  // rfy90 (review of a4o1s): the first version of this refusal suggested
+  // `--internal` while ignoring it, so the printed remedy could not be taken —
+  // the merger could pass exactly the flags the message asked for and get the
+  // same exit 1 back. Now the remedy WORKS and the refusal is only for a batch
+  // that is not fully declared: if every commit of every range is named
+  // `--internal`, the union has no user surface, which is the same answer a
+  // single internal candidate already gets ("no user-facing note … NOT
+  // bumping", exit 0) — a release is not minted for internal-only work.
+  const rangeCommits = candidates.filter((candidate) => candidate.range).flatMap((candidate) => candidate.commits);
+  const internalOnlyBatch = rangeCommits.length > 0 && rangeCommits.every((sha) => internal.has(sha));
+  if (candidates.some((candidate) => candidate.range) && fromNoteCount === 0 && !userNoteGiven && !internalOnlyBatch) {
+    const undeclared = rangeCommits.filter((sha) => !internal.has(sha)).length;
     console.error(
       "[bump-version] ERROR: no --from range collected a Release-note trailer, so this landing would be " +
-      "stamped \"none\". Refusing: say what the user gets with --user-note \"<what the user gets>\", or " +
-      "name the internal commits with --internal <sha> if the batch really has no user surface",
+      `stamped "none". Refusing: say what the user gets with --user-note "<what the user gets>"; if the whole ` +
+      `batch is internal (no user surface at all), declare EVERY commit of the range with --internal <sha> ` +
+      `(${undeclared} of ${rangeCommits.length} range commit(s) are not declared yet)`,
     );
     process.exit(1);
   }

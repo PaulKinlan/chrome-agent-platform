@@ -244,3 +244,31 @@ Deno.test("a4o1s + g0bfz: a MID-BODY note inside a range is still collected (bod
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+Deno.test("rfy90: --internal IS the remedy a fully-internal range needs — the refusal only fires for an undeclared batch", async () => {
+  const dir = await mirror();
+  try {
+    const base = git(dir, "rev-parse", "HEAD");
+    const one = commit(dir, "chore: reformat");
+    const two = commit(dir, "test: add fixture");
+    const tip = commit(dir, "docs: more prose");
+    const range = `${base}..${tip}`;
+
+    // 1. The refusal NAMES the commits still undeclared, so the printed remedy is actionable.
+    const partial = stamp(dir, "--from", range, "--internal", one);
+    assert(partial.status !== 0, `still refused while two commits are undeclared: ${partial.stderr}`);
+    assert(partial.stderr.includes("2 of 3 range commit(s) are not declared yet"), partial.stderr);
+    assert(partial.stderr.includes("--user-note"), "the copy is offered first");
+    await assertUnstamped(dir);
+
+    // 2. A batch where EVERY commit is declared internal mints NO release (exit 0, nothing written) —
+    //    the same answer a single internal candidate already gets. Before rfy90 the message asked for
+    //    --internal and then refused anyway, so the advertised exit from the refusal did not exist.
+    const allInternal = stamp(dir, "--from", range, "--internal", one, "--internal", two, "--internal", tip);
+    assertEquals(allInternal.status, 0, allInternal.stderr);
+    await assertUnstamped(dir);
+    assertEquals(await version(dir), VERSION, "an internal-only batch does not consume a version");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
