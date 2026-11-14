@@ -235,7 +235,21 @@ Deno.test("aaakp: the sweep recurses — nested route dirs and nested fixture tr
     );
     assertEquals(offenders.length, 2, `exactly the two probe files may be flagged, got ${JSON.stringify(offenders)}`);
   } finally {
-    await Deno.remove(join(ROOT, "extension/background/routes/aaakp-recursion-probe"), { recursive: true });
-    await Deno.remove(join(ROOT, "tests/fixtures/aaakp-recursion-probe"), { recursive: true });
+    // afpl (source-inspecting-tests-guard): a test must not RECURSIVELY remove a
+    // repo-rooted directory — that hazard class deletes a shared tree with content
+    // this run did not create. These probe dirs hold exactly the files this test
+    // wrote, so the cleanup unlinks those by name (deepest first) and then rmdirs
+    // each directory NON-recursively: any unexpected survivor fails the cleanup
+    // loudly instead of being silently destroyed with the tree.
+    for (const [dir, file] of [
+      [join(ROOT, "tests/fixtures/aaakp-recursion-probe/nested"), "zz-probe-fixture.mjs"],
+      [join(ROOT, "tests/fixtures/aaakp-recursion-probe"), null],
+      [join(ROOT, "extension/background/routes/aaakp-recursion-probe"), "zz-probe-route.mjs"],
+    ] as const) {
+      if (file !== null) {
+        try { await Deno.remove(join(dir, file)); } catch { /* already gone */ }
+      }
+      try { await Deno.remove(dir); } catch { /* already gone */ }
+    }
   }
 });

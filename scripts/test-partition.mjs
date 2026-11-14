@@ -62,6 +62,13 @@ export const SERIAL_REASONS = {
   // loaded fleet machine. cihz made the kill structural and the survive margin wide, but the
   // assertions are still real elapsed time, so the declaration stands.
   "tests/serial-phase-timeout.test.ts": "wall-clock kill/survive bounds assertions (declared 5000 ms work vs 4000 ms flat / 12000 ms scaled bounds) race the parallel phase",
+  // chrome-agent-platform-aaakp: the recursion proof writes untracked probe files
+  // under the REAL extension/background/routes and tests/fixtures trees (removed
+  // file-by-file, then non-recursively rmdired, in its finally). A kill before the
+  // finally leaves shipped-path residue that poisons the silent-write sweep and
+  // changed-file selection, so the file runs serially like the other real-tree
+  // probe writers above.
+  "tests/best-effort-write-guard.test.ts": "writes untracked probe files under the real extension/background/routes and tests/fixtures trees for its recursion proofs (removed in finally); killed-run residue poisons the silent-write sweep and changed-file selection",
   // 20e2u: launches real Chrome to load extension/dist bundles and verify dynamic chunk resolution.
   "tests/chunk-resolution-browser.test.ts": "launches Chrome to load extension/dist bundles and verify dynamic chunk resolution; races serial builds mutating dist/",
   // chrome-agent-platform-jdgjy: boots ntp.html in real headless Chrome and asserts on
