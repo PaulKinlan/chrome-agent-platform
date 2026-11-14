@@ -6,11 +6,34 @@ import { isUsableBinary } from "../scripts/lib/browser-refusal.ts";
 import { launchChrome, openCdp, resolveChromiumBinaryReport, teardownChrome } from "../scripts/lib/chrome-launch.ts";
 import { chromeProfileDir } from "../scripts/lib/chrome-profile-dir.ts";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
+import { awaitServiceWorkerOrRefuse } from "../scripts/lib/browser-harness-refusal.mjs";
+import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
+import { dirname } from "node:path";
 
+// chrome-agent-platform-2syam: this journey is wired to j5xbi's reference pattern. Under measured
+// starvation (loadPerCpu >= 1.5 or steal >= 0.25) a service worker that never registers is an
+// ENVIRONMENTAL REFUSAL — exit 75, named individually in the tier ledger as
+// `fast-gate: unmeasured: tests/g09i-sidebar-tab.test.ts(refused Nx)` — because the machine could
+// not start a browser, which is not a claim about this code. On a QUIET box the same observation is
+// a PRODUCT red (the helper returns null and the assert below fails): a journey that cannot get a
+// service worker when nothing is contending is a defect, never a re-run.
 const EXT = fileURLToPath(new URL("../extension/", import.meta.url)).replace(/\/$/, "");
 const RESOLUTION = resolveChromiumBinaryReport();
 const BINARY = isUsableBinary(RESOLUTION.binary) ? RESOLUTION.binary : null;
 if (!BINARY) console.warn(`g09i native Tab: no usable Chrome (${RESOLUTION.tried.join("; ")}); browser test IGNORED, not passed`);
+
+// 2syam: the per-suite refusal ledger. Declared HERE rather than beside the imports on purpose:
+// tests/test-partition-guard.test.ts (via scripts/test-partition.mjs writesTree) classifies a file as a
+// build-artifact hazard when a write call sits within 300 chars of an `extension/` literal, and the
+// `"../extension/"` constant is at the top of this file — the ledger's `appendFileSync(path, text)`
+// landed inside that window and put this journey in the serial phase for no reason. It is a durable
+// evidence file, not a write into the tree.
+const refusalLedger = Deno.env.get("CAP_BROWSER_REFUSAL_LEDGER") ?? `${durableDir("browser-harness")}/refusals.jsonl`;
+const ledgerIo = {
+  readFile: (path: string) => readFileSync(path, "utf8"),
+  writeFile: (path: string, text: string) => appendFileSync(path, text),
+  ensureParent: (path: string) => { mkdirSync(dirname(path), { recursive: true }); },
+};
 
 Deno.test({
   name: "g09i: native Tab from collapsed sidebar toggle reaches Tasks and the rail, not the composer",
@@ -19,14 +42,39 @@ Deno.test({
     const profile = chromeProfileDir("g09i-sidebar-tab");
     const evidence = durableDir("g09i-sidebar-tab", `${Date.now()}-${Deno.pid}`);
     await Deno.mkdir(evidence, { recursive: true });
-    let chrome, cdp;
+    // Types named rather than inferred: both handles are read from the refusal helper's cleanup
+    // closure, and control-flow inference cannot follow an assignment inside `try` into a closure.
+    let chrome: Awaited<ReturnType<typeof launchChrome>> | undefined;
+    let cdp: Awaited<ReturnType<typeof openCdp>> | undefined;
+    let closeBrowser = async () => {};
     try {
       chrome = await launchChrome({ binary: BINARY!, args: ["--headless=new", "--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu",
         `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`, `--user-data-dir=${profile}`, "--window-size=1400,900", "about:blank"] });
       cdp = await openCdp(chrome.wsUrl, { timeoutMs: 15000 });
-      const sw = await cdp.serviceWorker({ timeoutMs: 15000 });
+      // 2syam: ONE physical teardown site, shared by the refusal path and the finally. It is declared
+      // AFTER the launch because tests/real-browser-teardown.test.ts associates a teardown with the
+      // launch that precedes it — a cleanup defined above its launch reads as "no teardown at all".
+      closeBrowser = async () => {
+        cdp?.close();
+        // NB: written as a bare identifier on purpose — tests/real-browser-teardown.test.ts reads the
+        // teardown's target syntactically, and `chrome!` is not a target it can associate with a launch.
+        if (chrome) await teardownChrome(chrome, profile);
+      };
+      // 2syam: the readiness wait and its refusal decision are the reference pattern, in one helper
+      // (scripts/lib/browser-harness-refusal.mjs) so six more journeys cannot each grow their own
+      // slightly-different version of "is this machine too slow?". The bound scales with measured
+      // contention; cleanup is passed in so a refusal tears the browser down BEFORE exit(75).
+      const sw = await awaitServiceWorkerOrRefuse({
+        suite: "tests/g09i-sidebar-tab.test.ts",
+        cdp: cdp as unknown as { serviceWorker: (args: { timeoutMs: number }) => Promise<unknown> },
+        base: 15_000, // this journey's own readiness budget, scaled by contention, not a fixed 15s
+        ledgerIo,
+        ledgerPath: refusalLedger,
+        cleanup: closeBrowser,
+      });
       assert(sw, "the current extension service worker must register");
-      const page = await cdp.open(`chrome-extension://${new URL(sw.url).host}/ntp/ntp.html`);
+      const swTarget = sw as { url: string };
+      const page = await cdp.open(`chrome-extension://${new URL(swTarget.url).host}/ntp/ntp.html`);
       const sid = page.sessionId;
       let ready: any;
       for (let i = 0; i < 100; i++) {
@@ -100,8 +148,7 @@ Deno.test({
       await Deno.writeTextFile(`${evidence}/focus.json`, JSON.stringify({ before, focus }, null, 2));
       console.log(`g09i native Tab browser evidence: ${evidence}`);
     } finally {
-      cdp?.close();
-      if (chrome) await teardownChrome(chrome, profile);
+      await closeBrowser();
     }
   },
 });

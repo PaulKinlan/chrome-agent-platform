@@ -5,7 +5,9 @@
 //   1. Every `chrome.runtime.onMessage.addListener` call in extension/ must accept a `sender` parameter
 //      and validate it by CALLING a vetted production predicate (isTrustedServiceWorkerSender, or —
 //      cac6c r3/1fn9j — the central dispatcher's ENFORCEMENT predicate isOwnExtensionSender, both
-//      lib/pure.js; the r2 credit of the classifier authorizeToolReport is superseded)
+//      DEFINED in lib/pure-trust.js and re-exported through the lib/pure.js barrel; the r2 credit of
+//      the classifier authorizeToolReport is superseded) — k8tuh: this header used to name pure.js as
+//      the home of both, which the file's own DEFINES-vs-re-export rule calls drift
 //      DIRECTLY: the exact imported identifier, unshadowed, not renamed (`as`), not aliased,
 //      not re-exported — or be listed in ALLOWLISTED_SITES with a one-line justification naming
 //      what checks the sender instead. Inline sender checks, however correct, never count
@@ -97,7 +99,7 @@ interface ListenerSite {
 // binding-level, not execution-path - an imported vetted call inside an
 // uncalled nested function still counts. Do not re-litigate; pinned by probe18.
 // cac6c r3 (1fn9j) adds exactly one vetted predicate: isOwnExtensionSender
-// (pure.js) — the central dispatcher's ENFORCEMENT point, which yields the
+// (pure-trust.js) — the central dispatcher's ENFORCEMENT point, which yields the
 // uniform rejection (the identical generic reply, ahead of route resolution) AT ITS CALL SITE for
 // anything that is not this extension. The r2 credit of authorizeToolReport is
 // SUPERSEDED: it is a CLASSIFIER of already-admitted senders — absent-tab and
@@ -1250,7 +1252,8 @@ Deno.test("behavioral: content-script onRuntimeMessage filters foreign sender an
   assertEquals(ret2b, false, "a same-extension document (ntp/options/sidepanel) must be REJECTED — only the compiled SW bundle passes");
 
   // Extension SW sender: must be accepted — sender.url pins the compiled
-  // bundle, exactly what pure.js isTrustedServiceWorkerSender enforces.
+  // bundle, exactly what pure-trust.js isTrustedServiceWorkerSender enforces
+  // (k8tuh: pure.js only re-exports it; see VETTED_PREDICATE_SOURCES below).
   const swSender = { id: "cap-extension-id", url: swUrl };
   const ret3 = onRuntimeMessage.onRuntimeMessage({ type: "enrollment.poke" }, swSender, () => {});
   assertEquals(ret3, true, "the compiled SW sender must be accepted");

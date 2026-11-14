@@ -27,7 +27,7 @@
 
 import { loadavg } from "node:os";
 import { bestEffortWrite } from "./best-effort-write.mjs";
-import { MAX_LOAD_SCALE, stealScaleComponent } from "./serial-phase.mjs";
+import { currentLoadPerCpu, currentStealFractionSync, MAX_LOAD_SCALE, stealScaleComponent } from "./serial-phase.mjs";
 
 const loadAvg = () => loadavg()[0];
 
@@ -101,6 +101,7 @@ export function isStarvedForBrowser({ loadPerCpu = null, steal = null } = {}) {
  *   boundMs: number,
  *   contention?: { loadPerCpu?: number|null, steal?: number|null, load?: number|null },
  *   priorRefusals?: number,
+ *   observed?: string,
  * }} args
  * @returns {{ suite: string, waitedMs: number, boundMs: number, loadPerCpu: number|null, steal: number|null, load: number|null, refusals: number, receipt: string } | null}
  */
@@ -111,6 +112,7 @@ export function refuseIfStarved({
   boundMs,
   contention = {},
   priorRefusals = 0,
+  observed = "no-service-worker",
 } = {}) {
   // Condition 2, first and unconditionally: the harness came up, so nothing after it can be excused.
   if (registered) return null;
@@ -129,29 +131,17 @@ export function refuseIfStarved({
     load,
     refusals,
     // Condition 1's receipt: the observed fact, its timing, the measurements, and the count.
-    receipt: `${CAP_ENVIRONMENTAL_REFUSAL} suite=${suite} observed=no-service-worker waitedMs=${Number(waitedMs) || 0} boundMs=${Number(boundMs) || 0} ` +
+    receipt: `${CAP_ENVIRONMENTAL_REFUSAL} suite=${suite} observed=${observed} waitedMs=${Number(waitedMs) || 0} boundMs=${Number(boundMs) || 0} ` +
       `loadPerCpu=${loadPerCpu ?? "unmeasurable"} load=${load ?? "unmeasurable"} steal=${steal ?? "unmeasurable"} refusals=${refusals}`,
   };
 }
 
-/**
- * Condition 4: the unmeasured declaration for the tier ledger. A refused suite is named
- * individually — never folded into a pass, never into an "unmapped" coverage gap.
- *
- * @param {Array<{suite: string, refusals?: number}>} refusals
- * @returns {string|null}
- */
-export function formatUnmeasuredSuites(refusals = []) {
-  const named = refusals
-    .map((r) => String(r?.suite ?? "").trim())
-    .filter(Boolean)
-    .map((suite) => {
-      const count = Number(refusals.find((r) => r?.suite === suite)?.refusals);
-      return Number.isFinite(count) && count > 1 ? `${suite}(refused ${count}x)` : suite;
-    });
-  if (!named.length) return null;
-  return `fast-gate: unmeasured: ${named.join(" ")}`;
-}
+// amupt: there is exactly ONE renderer for condition 4 and it lives in gate-manifest.mjs
+// (`formatGateUnmeasured`, beside GATE_UNMEASURED_PREFIX and the other `fast-gate:` markers). A second
+// copy here — same prefix, same `(refused Nx)` shape, pinned by its own test — was two answers to "how
+// is unmeasured rendered": identical output today, silent divergence the first time either side was
+// edited. The consumer (emitGateLedger) was already the gate-manifest one, so this is the copy that
+// goes; the prefix constant is NOT redeclared anywhere.
 
 /**
  * Per-suite running refusal count, append-only in the evidence dir, so condition 3 has a number to
@@ -277,4 +267,96 @@ export async function exitWithRefusal({ receipt, cleanup = null, exit = (code) =
   } catch { /* a failing cleanup must not turn a refusal into a red */ }
   if (receipt) console.error(receipt);
   return exit(ENVIRONMENTAL_REFUSAL_EXIT);
+}
+
+/**
+ * ONE wiring for a real-browser suite's readiness step: wait for the extension's service worker under
+ * a contention-scaled bound, and refuse (exit 75) ONLY when the precondition was OBSERVED unmet AND
+ * starvation was MEASURED. The reference implementation was inline in
+ * tests/sandbox-egress-confinement.test.ts (j5xbi); six more journeys need the same four conditions,
+ * and six hand-copies of this branch is six chances to drop one — the drift shape the unmeasured-line
+ * bead (amupt) exists to stop.
+ *
+ * The contract, in the order this function enforces it:
+ *  1. The bound scales with measured contention (`browserReadyTimeoutMs`), so a starved box gets the
+ *     time it needs before anyone calls it a failure.
+ *  2. `registered` is what the CALLER observed — this function only reports that `cdp.serviceWorker`
+ *     returned null within the bound. It never infers "the machine was too slow" from a failure.
+ *  3. A quiet box that cannot register a service worker gets `null` back, NOT a refusal: the caller's
+ *     `assert(sw, …)` then reds the suite as a PRODUCT failure, which is the defect it is.
+ *  4. A refusal is recorded in the append-only per-suite ledger (so the count rises across gates) and
+ *     the process leaves 75 with `cleanup` already run.
+ *
+ * @param {{
+ *   suite: string,
+ *   cdp?: { serviceWorker: (args: { timeoutMs: number, match?: ((t: any) => boolean)|null }) => Promise<any> }|null,
+ *   wait?: ((boundMs: number) => Promise<any|null>)|null,
+ *   match?: ((t: any) => boolean)|null,
+ *   base?: number,
+ *   contention?: { load?: number|null, loadPerCpu?: number|null, steal?: number|null }|null,
+ *   ledgerIo?: { readFile: (p: string) => string, writeFile: (p: string, t: string) => void }|null,
+ *   ledgerPath?: string|null,
+ *   cleanup?: (() => unknown)|null,
+ *   exit?: (code: number) => never,
+ *   observed?: string,
+ * }} args
+ * @returns {Promise<any|null>} the service worker target, or null when none registered and no refusal applies
+ */
+export async function awaitServiceWorkerOrRefuse({
+  suite,
+  cdp = null,
+  wait = null,
+  match = null,
+  base = 10_000,
+  contention = null,
+  ledgerIo = null,
+  ledgerPath = null,
+  cleanup = null,
+  exit = undefined,
+  observed = "no-service-worker",
+} = {}) {
+  const measured = contention ?? {
+    load: currentAbsoluteLoad(),
+    loadPerCpu: currentLoadPerCpuSafe(),
+    steal: currentStealFractionSyncSafe(),
+  };
+  // Condition 1's timing: the SAME number is the wait and the bound the receipt carries, so a
+  // receipt can never claim a bound the wait did not use (the f8li1 leg pins that identity).
+  const boundMs = browserReadyTimeoutMs({ base, load: measured.load ?? null, loadPerCpu: measured.loadPerCpu ?? null, steal: measured.steal ?? null });
+  // Two readiness shapes exist in the tree: `cdp.serviceWorker({timeoutMs})` (the reference suite) and
+  // `waitForServiceWorker(send, {timeoutMs})` for suites that drive raw CDP. Both are given the SAME
+  // scaled bound, and neither may report a torn/partial result as "registered".
+  const sw = wait
+    ? await wait(boundMs)
+    : await cdp.serviceWorker({ timeoutMs: boundMs, ...(match ? { match } : {}) });
+  if (sw) return sw; // condition 2: the harness is up, so nothing downstream may be excused
+  const refusal = refuseIfStarved({
+    suite,
+    registered: false,
+    waitedMs: boundMs,
+    boundMs,
+    contention: measured,
+    priorRefusals: ledgerIo && ledgerPath ? countRefusals(ledgerIo, ledgerPath, suite) : 0,
+    observed,
+  });
+  if (!refusal) return null; // condition 3: a quiet box that cannot start a browser is a PRODUCT red
+  if (ledgerIo && ledgerPath) recordRefusal(ledgerIo, ledgerPath, suite);
+  return exitWithRefusal({ receipt: refusal.receipt, cleanup, ...(exit ? { exit } : {}) });
+}
+
+/** Local wrappers so this module stays free of serial-phase's optional-argument surface. */
+function currentLoadPerCpuSafe() {
+  try {
+    return currentLoadPerCpu();
+  } catch {
+    return null;
+  }
+}
+
+function currentStealFractionSyncSafe() {
+  try {
+    return currentStealFractionSync();
+  } catch {
+    return null;
+  }
 }

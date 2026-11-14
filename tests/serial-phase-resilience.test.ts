@@ -1,4 +1,4 @@
-import { emitGateLedger } from "../scripts/lib/gate-manifest.mjs";
+import { emitGateLedger, formatGateUnmeasured } from "../scripts/lib/gate-manifest.mjs";
 // tests/serial-phase-resilience.test.ts — chrome-agent-platform-6yrq
 //
 // Proves the serial gate phase is resilient against indefinite wedges:
@@ -16,23 +16,25 @@ import { assert, assertEquals } from "jsr:@std/assert@1";
 import {
   classifyReadyMarkerTimeout,
   currentStealFractionSync,
+  MAX_LOAD_SCALE,
   readinessStealSignal,
   stealSampleSync,
   runSerialFile,
   serialFileTimeoutMs,
 } from "../scripts/lib/serial-phase.mjs";
 import {
+  awaitServiceWorkerOrRefuse,
   browserReadyTimeoutMs,
   CAP_ENVIRONMENTAL_REFUSAL,
   countRefusals,
+  ENVIRONMENTAL_REFUSAL_EXIT,
+  exitWithRefusal,
   refusalsFromLedger,
   currentAbsoluteLoad,
-  formatUnmeasuredSuites,
   recordRefusal,
   refuseIfStarved,
 } from "../scripts/lib/browser-harness-refusal.mjs";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
-
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 
 /**
@@ -763,22 +765,37 @@ Deno.test("lzccc: a WINDOWED stolen wait earns the grace end-to-end, from counte
   // soft deadline. Whatever moment the runner samples, the pair straddles growth, and the growth
   // is overwhelmingly steal (~300 steal jiffies per 305 total => ~98%). No schedule of this
   // process can put both samples on the same value.
-  const advance = new Deno.Command("sh", {
+  const advanceCommand = new Deno.Command("sh", {
     // NB: the payload is a shell SINGLE-QUOTED literal, not JSON.stringify — JSON quoting would
     // put literal quotes and a literal backslash-n into the stat file, the parser would reject
     // the line, and the leg would fail with steal=0 while looking like a runner fault (measured).
+    //
+    // 1ycrd: write the snapshot to a SIBLING temp file and rename it ONTO the stat file. A plain
+    // `> statFile` redirection truncates first, and the runner samples this file twice from another
+    // process; a read landing in the truncate->write gap parsed as "" -> null sample -> the window
+    // was unusable -> instant fallback -> the leg red-ed (~0.05%/read measured, higher under steal —
+    // the same machine-state flake class 6qnjf exists to remove). rename(2) within a directory is
+    // atomic, so no schedule of writer and reader can observe a partial file.
     args: ["-c", `i=0; while [ $i -le 120 ]; do
-      printf 'cpu  0 0 0 %s 0 0 0 %s 0 0\\n' "$((i*5))" "$((i*300))" > ${JSON.stringify(statFile)}
+      printf 'cpu  0 0 0 %s 0 0 0 %s 0 0\\n' "$((i*5))" "$((i*300))" > ${JSON.stringify(`${statFile}.tmp`)}
+      mv -f ${JSON.stringify(`${statFile}.tmp`)} ${JSON.stringify(statFile)}
       i=$((i+1)); sleep 0.1
     done`],
     stdout: "null",
     stderr: "null",
-  }).spawn();
-  await Deno.writeTextFile(tempTest, `${selfReapWatchdog(`${tempTest}.runner`)}await new Promise((resolve) => setTimeout(resolve, ${softMs + lateMarginMs}));
+  });
+  // rbpb1: the writer must outlive the runner's TWO samples, not the leg. It started life outside
+  // the try and was only awaited in `finally`, so every run paid its full ~12s ramp even though
+  // runSerialFile returns after ~soft+1.5s (leg 5s -> 13s, measured by rev-6qnjf2). Spawning inside
+  // the try and KILLING it in `finally` keeps the guarantee and gives back ~8s of a parallel slot
+  // per gate — and it also means a throw between spawn and the run cannot leak the writer.
+  let advance: Deno.ChildProcess | undefined;
+  try {
+    advance = advanceCommand.spawn();
+    await Deno.writeTextFile(tempTest, `${selfReapWatchdog(`${tempTest}.runner`)}await new Promise((resolve) => setTimeout(resolve, ${softMs + lateMarginMs}));
 await Deno.writeTextFile(${JSON.stringify(readyFile)}, "ready");
 Deno.test("passes after late marker", () => {});
 `);
-  try {
     const res = runSerialFile(tempTest, {
       timeoutMs: 2_000,
       readyFile,
@@ -796,7 +813,10 @@ Deno.test("passes after late marker", () => {});
     assert(named, `the receipt names the steal it measured: ${err}`);
     assert(Number(named[1]) > 0.4, `the named steal must be the WINDOW's, not an instant: ${err}`);
   } finally {
-    await advance.status.catch(() => {});
+    // rbpb1: stop the ramp the moment the runner has taken its samples; `status` still resolves so
+    // no zombie or unawaited child outlives the leg. kill() on an already-exited child is caught.
+    try { advance?.kill(); } catch { /* already gone: the ramp finished or the sh exited */ }
+    await advance?.status.catch(() => {});
     await Deno.remove(tempDir, { recursive: true }).catch(() => {});
   }
 });
@@ -1112,9 +1132,12 @@ Deno.test("j5xbi refusal (3): starvation cannot mask a broken suite - a quiet bo
 });
 
 Deno.test("j5xbi refusal (4): a refused suite is DECLARED unmeasured, named individually, never folded into a pass", () => {
-  assertEquals(formatUnmeasuredSuites([]), null, "no refusals means no line");
+  // amupt: `formatUnmeasuredSuites` (a second, test-only renderer with the same prefix and the same
+  // `(refused Nx)` shape) is gone. Condition 4 has ONE renderer — `formatGateUnmeasured`, beside
+  // GATE_UNMEASURED_PREFIX — and this leg is what pins its output, so the two cannot drift.
+  assertEquals(formatGateUnmeasured([]), null, "no refusals means no line");
   assertEquals(
-    formatUnmeasuredSuites([
+    formatGateUnmeasured([
       { suite: "tests/agent-header-rename-reload.test.ts", refusals: 1 },
       { suite: "tests/mic-shadow-host-journey.test.ts", refusals: 3 },
     ]),
@@ -1211,4 +1234,187 @@ Deno.test("j5xbi refusal (dqk0e): a row from a PREVIOUS run cannot declare a sui
   // A row with no parseable timestamp is excluded when a scope is given: we cannot prove it is ours.
   const untimed = JSON.stringify({ suite: "tests/agent-share-import.test.ts" });
   assertEquals(refusalsFromLedger({ readFile: () => untimed, exists: () => true }, "l", { since }), []);
+});
+
+Deno.test("j5xbi helper (f8li1): the browser readiness deadline IS the serial deadline — one scale, one ceiling, NaN-safe", () => {
+  // f8li1: the fc6d8e8b1 hand-off claimed "a leg asserts they agree on identical inputs" and no such
+  // leg existed at any commit (grep -c browserReadyTimeoutMs == 1, the import line). Both helpers are
+  // on a production path, so the claim becomes committed coverage here — names, not prose.
+  //
+  // `load` is the ABSOLUTE 1-minute load and only browserReadyTimeoutMs reads it (a browser start is
+  // slowed by how many runnable tasks contend, regardless of core count); with `load` absent the two
+  // functions must be the SAME function, because a repo holding two answers to "how slow may this
+  // machine make us" is the drift shape this crate of beads exists to remove.
+  const base = 10_000;
+  const cases: Array<{ what: string; load: number | null; loadPerCpu: number | null; steal: number | null }> = [
+    { what: "quiet box", load: null, loadPerCpu: 1, steal: null },
+    { what: "idle load average", load: 1, loadPerCpu: 1, steal: null },
+    { what: "per-CPU load only", load: null, loadPerCpu: 2.5, steal: null },
+    { what: "past the ceiling", load: null, loadPerCpu: 99, steal: 0.9 },
+    { what: "steal is the only measured signal", load: null, loadPerCpu: 1, steal: 0.647 },
+    { what: "steal inside the dead band is noise", load: null, loadPerCpu: 1, steal: 0.01 },
+    { what: "unmeasurable everything", load: null, loadPerCpu: null, steal: null },
+    { what: "NaN on every signal", load: NaN, loadPerCpu: NaN, steal: NaN },
+  ];
+  for (const c of cases) {
+    const browser = browserReadyTimeoutMs({ base, load: c.load, loadPerCpu: c.loadPerCpu, steal: c.steal });
+    const serial = serialFileTimeoutMs({ base, loadPerCpu: c.loadPerCpu ?? undefined, steal: c.steal });
+    assert(Number.isFinite(browser), `${c.what}: a readiness deadline must be a number, got ${browser}`);
+    assertEquals(
+      browser,
+      serial,
+      `${c.what}: the browser and serial deadlines must agree on identical inputs (${browser} vs ${serial}) — ` +
+        "a second scale factor here is a second answer to how slow this machine may make us",
+    );
+  }
+  // The ceiling is MAX_LOAD_SCALE (x4), shared with serialFileTimeoutMs, not a number of its own.
+  assertEquals(browserReadyTimeoutMs({ base, load: 99, loadPerCpu: 99, steal: 0.99 }), base * MAX_LOAD_SCALE);
+  // The ONE intended divergence, pinned as two literals rather than described: the browser deadline
+  // ALSO reads the ABSOLUTE 1-minute load, because a Chromium start is slowed by how many runnable
+  // tasks contend regardless of core count — on this 8-CPU box at absolute 9.8 the per-CPU reading is
+  // 1.22, a factor that rounds almost to one while five browser suites were reddening on one gate
+  // (measured, and the reason this parameter exists at all). serialFileTimeoutMs is per-CPU only, so
+  // on the same box it reads 14.4s and the browser deadline takes the x4 ceiling. Same ceiling
+  // constant, one extra measured signal — not two answers to the same question.
+  const starved = { load: 9.8, loadPerCpu: 1.22, steal: 0.306 };
+  assertEquals(serialFileTimeoutMs({ base, loadPerCpu: starved.loadPerCpu, steal: starved.steal }), 14_409);
+  assertEquals(browserReadyTimeoutMs({ base, ...starved }), 40_000, "the reviewer's starved box: abs 9.8 + steal 0.306 -> the 40s ceiling");
+  // A base override scales, it does not bypass the measurement.
+  assertEquals(browserReadyTimeoutMs({ base: 1_000, load: 4, loadPerCpu: 1, steal: null }), 4_000);
+});
+
+Deno.test("j5xbi helper (f8li1): exitWithRefusal tears down BEFORE it leaves, and a failing teardown still refuses", async () => {
+  // f8li1: xff9d's fix (cleanup runs before the refusal exit) was pinned only by a manual probe
+  // quoted in a bead comment. The ordering is the entire point — Deno.exit() skips `finally`, so a
+  // refusal that exits first leaks the Chromium process, its profile and the suite's HTTP server —
+  // so it gets a committed leg with the exit injected (no process leaves during the test).
+  const receipt = `${CAP_ENVIRONMENTAL_REFUSAL} exitWithRefusal leg: cleanup ran first`;
+  const realError = console.error;
+  const realLog = console.log;
+  const order: string[] = [];
+  let code: number | null = null;
+  const exit = ((c: number) => {
+    code = c;
+    order.push("exit");
+    return undefined as never;
+  }) as never;
+  try {
+    console.error = (...args: unknown[]) => order.push(`receipt:${args.map(String).join(" ")}`);
+    console.log = console.error;
+
+    // (a) a clean teardown: cleanup -> receipt -> exit(75), in that order.
+    await exitWithRefusal({ receipt, cleanup: async () => { order.push("cleanup"); }, exit });
+    assertEquals(code, ENVIRONMENTAL_REFUSAL_EXIT, "a refusal must leave with 75, not 1 (a red) and not 0 (a pass)");
+    assertEquals(order, ["cleanup", `receipt:${receipt}`, "exit"], `cleanup must run BEFORE the exit: ${order.join(" -> ")}`);
+
+    // (b) a teardown that THROWS must not turn the refusal into a red: the process still leaves 75.
+    order.length = 0;
+    code = null;
+    await exitWithRefusal({
+      receipt,
+      cleanup: () => {
+        order.push("cleanup");
+        throw new Error("teardown failed (the leak this leg exists to prevent)");
+      },
+      exit,
+    });
+    assertEquals(code, ENVIRONMENTAL_REFUSAL_EXIT, "a failing cleanup must not soften or harden the refusal code");
+    assertEquals(order, ["cleanup", `receipt:${receipt}`, "exit"], `a throwing cleanup still leaves AFTER trying: ${order.join(" -> ")}`);
+  } finally {
+    console.error = realError;
+    console.log = realLog;
+  }
+});
+
+Deno.test("2syam: awaitServiceWorkerOrRefuse refuses ONLY on observed absence + measured starvation, and records it", async () => {
+  // The wiring the six remaining journeys get. Each leg below is one of coord's rules, in order, so
+  // dropping any one of them reds this test rather than quietly widening what a refusal may excuse.
+  const suite = "tests/g09i-sidebar-tab.test.ts";
+  const mem = (seed = "") => {
+    let text = seed;
+    return {
+      readFile: () => text,
+      writeFile: (_p: string, t: string) => { text += t; },
+      rows: () => text.split("\n").filter(Boolean),
+    };
+  };
+  const starved = { load: 9.8, loadPerCpu: 3.2, steal: null };
+  const quiet = { load: 0.4, loadPerCpu: 0.5, steal: 0.01 };
+  const harness = (target: unknown) => ({ serviceWorker: async () => target });
+
+  // (1) RULE 3: no refusal is reachable without MEASURED starvation — a quiet box returns null and
+  // writes no ledger row, so the suite's own assert becomes the product red it should be.
+  const quietLedger = mem();
+  const quietSw = await awaitServiceWorkerOrRefuse({
+    suite, cdp: harness(null) as never, contention: quiet,
+    ledgerIo: quietLedger, ledgerPath: "l.jsonl",
+    exit: (() => { throw new Error("a quiet box must never refuse"); }) as never,
+  });
+  assertEquals(quietSw, null, "a quiet box with no service worker is a PRODUCT red, never a refusal");
+  assertEquals(quietLedger.rows(), [], "a product red writes nothing to the refusal ledger");
+
+  // (2) RULE 1+2: observed absence + measured starvation -> exit 75, named individually, recorded.
+  let exited: number | null = null;
+  let cleaned = false;
+  const starvedLedger = mem(`${"{\"suite\":\"tests/agent-share-import.test.ts\",\"at\":\"2026-11-13T00:00:00.000Z\"}"}\n`);
+  const slept: number[] = [];
+  const refusalSw = await awaitServiceWorkerOrRefuse({
+    suite, cdp: harness(null) as never, contention: starved, base: 12_345,
+    ledgerIo: starvedLedger, ledgerPath: "l.jsonl",
+    cleanup: () => { cleaned = true; },
+    exit: ((code: number) => { exited = code; slept.push(code); return undefined as never; }) as never,
+  });
+  assertEquals(cleaned, true, "a refusal must tear down before it leaves (xff9d's property, now per suite)");
+  assertEquals(exited, ENVIRONMENTAL_REFUSAL_EXIT, "the process must leave 75, never 1 and never 0");
+  assertEquals(refusalSw, undefined, "the refusal path does not return a worker to the caller");
+  const rows = starvedLedger.rows();
+  assertEquals(rows.length, 2, `the refusal is recorded in the append-only ledger: ${rows.join(" | ")}`);
+  assertEquals(JSON.parse(rows[1]).suite, suite, "the ledger row names THIS suite, not a neighbour");
+
+  // (3) RULE 2 again, as the count: the second refusal of the same suite carries 2, which is what the
+  // receipt renders as `(refused 2x)` and what makes a permanently broken suite impossible to hide.
+  const second = await awaitServiceWorkerOrRefuse({
+    suite, cdp: harness(null) as never, contention: starved,
+    ledgerIo: starvedLedger, ledgerPath: "l.jsonl",
+    exit: (() => { throw new Error("unreachable"); }) as never,
+  }).catch(() => null);
+  assertEquals(second, null);
+  assertEquals(starvedLedger.rows().length, 3, "a repeat refusal appends again rather than deduplicating");
+
+  // (4) RULE 2, first clause (no laundering): the harness CAME UP. Nothing downstream may be excused,
+  // even on a starved box — the worker is returned and no refusal is available.
+  const dirtyLedger = mem();
+  const target = { url: "chrome-extension://abc/dist/background/service-worker.js" };
+  const got = await awaitServiceWorkerOrRefuse({
+    suite, cdp: harness(target) as never, contention: starved,
+    ledgerIo: dirtyLedger, ledgerPath: "l.jsonl",
+    exit: (() => { throw new Error("a healthy harness must never refuse"); }) as never,
+  });
+  assertEquals(got, target, "a registered service worker is returned as-is");
+  assertEquals(dirtyLedger.rows(), [], "no refusal row when the precondition was met");
+
+  // (5) The two seams the other journeys need: a `wait` function instead of cdp.serviceWorker (the
+  // suites that drive raw CDP), and a caller-named `observed` fact, because not every browser journey
+  // waits on a service worker (mic-shadow-host-journey waits on the browser's CDP endpoint). The
+  // receipt must carry the caller's fact, never a hardcoded one — a receipt that names the wrong
+  // observation is the same defect as no receipt.
+  const waitLedger = mem();
+  const realError = console.error;
+  let receiptLine = "";
+  try {
+    console.error = (line: unknown) => { receiptLine = String(line); };
+    await awaitServiceWorkerOrRefuse({
+      suite: "tests/mic-shadow-host-journey.test.ts",
+      observed: "no-cdp-target",
+      wait: async () => null,
+      contention: starved,
+      ledgerIo: waitLedger, ledgerPath: "l.jsonl",
+      exit: (() => { throw new Error("exit called"); }) as never,
+    }).catch(() => null);
+  } finally {
+    console.error = realError;
+  }
+  assert(receiptLine.includes("observed=no-cdp-target"), `the receipt names the caller's observation: ${receiptLine}`);
+  assert(receiptLine.includes("suite=tests/mic-shadow-host-journey.test.ts"), `the receipt names the suite: ${receiptLine}`);
+  assertEquals(waitLedger.rows().length, 1, "the wait-seam shape records the refusal just like the cdp shape");
 });
