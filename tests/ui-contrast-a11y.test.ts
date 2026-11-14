@@ -784,10 +784,20 @@ export function validateThemeLiteralAllowlist(list = THEME_LITERAL_ALLOWLIST) {
   if (problems.length) throw new Error("THEME_LITERAL_ALLOWLIST invalid: " + problems.join("; "));
 }
 
+/** Is this declaration covered by a reasoned allowlist entry?
+ *
+ * chrome-agent-platform-6oylj: the entry covers the declaration VALUE it names,
+ * exactly (modulo whitespace/case), and nothing else. The first version used
+ * `nv.includes(normalize(entry.value))`, so ONE reasoned entry exonerated every
+ * literal in any declaration whose text merely CONTAINED that value - a mutated
+ * `background: linear-gradient(#ff0000, rgba(128, 128, 128, 0.1))` rode in on
+ * the grey-tint reason and stayed GREEN. Nine of the entries are exact
+ * declaration values, so equality is the contract the comment above already
+ * claimed: an un-reasoned literal reds, whatever else shares its declaration. */
 export function themeLiteralAllowed(violation, list = THEME_LITERAL_ALLOWLIST) {
   const nv = normalize(violation.value);
   return list.some(
-    (entry) => entry.path === violation.path && nv.includes(normalize(entry.value)),
+    (entry) => entry.path === violation.path && nv === normalize(entry.value),
   );
 }
 
@@ -874,6 +884,50 @@ Deno.test("ui-contrast-a11y: theme-literal falsifier — fallback literals: iner
   });
   assert(live.length === 1, "a fallback literal on an undefined token IS the render path and must violate");
   assertEquals(live[0].undefinedFallbacks.length, 1);
+});
+
+Deno.test("ui-contrast-a11y: theme-literal allowlist covers its own declaration value only, never a declaration that merely contains it (chrome-agent-platform-6oylj)", () => {
+  // The finding's exact repro: options.css's `background: var(--bg-subtle)`
+  // mutated into a gradient whose second stop is the allowlisted grey tint. The
+  // substring test exempted the WHOLE declaration, so the new bare #ff0000
+  // literal was never reported (12 passed / 0 failed at the reviewed tip).
+  const list = [{
+    path: "extension/options/options.css",
+    value: "rgba(128, 128, 128, 0.1)",
+    reason: "pinned test entry: the grey tint is theme-neutral by design",
+  }];
+  const mutated = "linear-gradient(#ff0000, rgba(128, 128, 128, 0.1))";
+  const [smuggled] = findThemeLiteralViolations({
+    path: "extension/options/options.css",
+    css: `.vault-ledger { background: ${mutated}; }`,
+  });
+  assertEquals(smuggled.value, mutated, "the scanner reports the whole declaration value");
+  assert(
+    smuggled.bare.includes("#ff0000"),
+    "the un-reasoned #ff0000 literal must be reported as bare",
+  );
+  assert(
+    !themeLiteralAllowed(smuggled, list),
+    "a declaration that merely CONTAINS an allowlisted value must not be exempt - that is how the child literal rode in (6oylj)",
+  );
+  // Control: the declaration the entry NAMES stays exempt, else the guard would
+  // report its own reasoned debt on every run.
+  const exact = findThemeLiteralViolations({
+    path: "extension/options/options.css",
+    css: ".vault-ledger { background: rgba(128, 128, 128, 0.1); }",
+  })[0];
+  assertEquals(exact.value, "rgba(128, 128, 128, 0.1)");
+  assert(themeLiteralAllowed(exact, list), "the allowlisted declaration must stay exempt");
+  // Path is part of a entry's identity: the same value in another file is not covered.
+  assert(
+    !themeLiteralAllowed({ path: "extension/ntp/ntp.css", value: "rgba(128, 128, 128, 0.1)" }, list),
+    "an allowlist entry covers one file, not every file that uses the value",
+  );
+  // Comparison stays semantic (whitespace/case), not byte-equal.
+  assert(
+    themeLiteralAllowed({ path: "extension/options/options.css", value: "RGBA(128,  128, 128, 0.1)" }, list),
+    "an equivalent spelling of the allowlisted value must still match",
+  );
 });
 
 Deno.test("ui-contrast-a11y: theme-literal falsifier — theme.css literals do not red, theme-safe keywords are not literals, allowlist cannot grow without a reason (chrome-agent-platform-wjcba)", () => {
