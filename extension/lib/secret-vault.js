@@ -124,6 +124,40 @@ function unb64(text) {
   return out;
 }
 
+/**
+ * The at-rest state, as the sentences Settings shows
+ * (chrome-agent-platform-zxo4i). PURE and exported so the copy cannot drift from
+ * the state it describes, and so "what does the panel say when the vault is
+ * obfuscated / locked / sealed" is testable without a DOM.
+ *
+ * `protection` is what the vault's protection() returns. Every line is a
+ * statement the vault can back: obfuscation says a profile copy can decrypt;
+ * locked says nothing can use the keys; sealed says what is sealed and which
+ * records are still legacy.
+ */
+export function vaultProtectionLines(protection) {
+  const state = protection?.state ?? "obfuscation";
+  const legacy = Number(protection?.legacyRecords ?? 0);
+  const sealed = Number(protection?.sealedRecords ?? 0);
+  const lines = [];
+  if (state === "sealed") {
+    lines.push(`Encrypted at rest with your vault passphrase — ${sealed} saved key${sealed === 1 ? "" : "s"} sealed.`);
+    if (protection?.migrationPending) {
+      lines.push('A re-seal is only part-way through: run "Encrypt my keys with this passphrase" again with the SAME passphrase to finish it.');
+    }
+  } else if (state === "locked") {
+    lines.push("Locked. Your saved keys are encrypted, and nothing can use them until you unlock the vault with your passphrase.");
+    lines.push("Agents that need a stored key will refuse rather than call the service without one.");
+  } else {
+    lines.push("Obfuscated at rest — NOT encrypted. Your keys are not plain text, but anyone who copies this Chrome profile can decrypt them.");
+    lines.push("Set a vault passphrase below to make that impossible.");
+  }
+  if (legacy > 0 && state !== "obfuscation") {
+    lines.push(`${legacy} saved key${legacy === 1 ? "" : "s"} predate the passphrase (legacy, not sealed).`);
+  }
+  return lines;
+}
+
 /** The masked projection: the last four characters, or nothing at all for
  * short values. Never returns a prefix. */
 export function maskValue(value) {

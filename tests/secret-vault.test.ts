@@ -25,6 +25,7 @@ import {
   createSecretVault,
   createServiceWorkerAccess,
   maskValue,
+  vaultProtectionLines,
 } from "../extension/lib/secret-vault.js";
 
 /** The service-worker access token (chrome-agent-platform-jao1.7). Deno runs each
@@ -913,6 +914,51 @@ Deno.test("jao1.7: an abandoned lock does not deadlock initialization", async ()
 // ── zxo4i: the lock route + the proxy's locked refusal (wiring, not crypto) ──
 
 import { createEnclaveProxyRoutes } from "../extension/background/routes/enclave-proxy.js";
+
+Deno.test("zxo4i: the passphrase controls the panel wires actually exist in options.html", async () => {
+  // The panel queries these ids; a rename on either side would leave the lock
+  // unreachable with no error (the handler would simply never bind).
+  const html = await Deno.readTextFile(new URL("../extension/options/options.html", import.meta.url));
+  const panel = await Deno.readTextFile(new URL("../extension/options/panels/web-services.js", import.meta.url));
+  const ids = [
+    "vault-protection",
+    "vault-passphrase",
+    "vault-passphrase-confirm",
+    "vault-lock-enable",
+    "vault-lock-unlock",
+    "vault-lock-relock",
+    "vault-lock-status",
+  ];
+  for (const id of ids) {
+    assert(html.includes(`id="${id}"`), `options.html must contain #${id}`);
+    assert(panel.includes(`"${id}"`), `web-services.js must query #${id}`);
+  }
+  // The three transitions are all reachable from the UI.
+  assert(panel.includes('action: "seal"') && panel.includes('action: "unlock"') && panel.includes('action: "relock"'),
+    "the panel must send all three vault.lock actions");
+});
+
+Deno.test("zxo4i: the panel's at-rest copy is derived from the vault's state, and says the damaging thing plainly", () => {
+  // Coord's condition 2: the risk must be stated where the key is created, and
+  // the wording must follow the state. These are the exact sentences Settings
+  // renders, so a copy edit that softens the obfuscation warning reds here.
+  const obfuscated = vaultProtectionLines({ state: "obfuscation", legacyRecords: 2, sealedRecords: 0 });
+  assert(obfuscated[0].includes("NOT encrypted"), "the obfuscation state must say NOT encrypted in those words");
+  assert(obfuscated[0].includes("copies this Chrome profile can decrypt"), "it must name the copied-profile risk, not hint at it");
+  assert(obfuscated[1].includes("Set a vault passphrase"), "it must point at the fix in the same breath");
+
+  const locked = vaultProtectionLines({ state: "locked", legacyRecords: 0 });
+  assert(locked[0].startsWith("Locked."), "the locked state leads with Locked");
+  assert(locked.join(" ").includes("refuse rather than call the service"), "locked says agents refuse rather than call without a credential");
+
+  const sealed = vaultProtectionLines({ state: "sealed", sealedRecords: 3, legacyRecords: 0 });
+  assert(sealed[0].includes("Encrypted at rest"), "the sealed state is the only one allowed to say Encrypted at rest");
+  assert(sealed[0].includes("3 saved keys sealed"), "it names how many records are sealed");
+
+  const pending = vaultProtectionLines({ state: "sealed", sealedRecords: 1, legacyRecords: 1, migrationPending: true });
+  assert(pending.some((line) => line.includes("part-way through")), "an interrupted re-seal is stated, not hidden");
+  assert(pending.some((line) => line.includes("legacy, not sealed")), "legacy records are visible as such");
+});
 
 Deno.test("zxo4i: vault.lock seals/unlocks/relocks through the Settings route, and status reports the state", async () => {
   const storage = fakeStorage();

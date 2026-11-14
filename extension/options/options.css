@@ -2149,3 +2149,12 @@ span.usage-swatch.usage-bar-out { background: var(--usage-out, color-mix(in okla
 }
 }
 
+
+/* The vault's at-rest state banner (chrome-agent-platform-zxo4i). Rendered from
+   vault.status.protection, so it can only say what the vault actually does. */
+.vault-protection { margin: 0 0 14px; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border, #3a3f4b); background: var(--surface-2, rgba(255,255,255,0.03)); }
+.vault-protection p { margin: 0 0 6px; font-size: 13px; line-height: 1.45; }
+.vault-protection p:last-child { margin-bottom: 0; }
+.vault-protection.is-warn { border-color: #b45309; background: rgba(180, 83, 9, 0.12); }
+.vault-protection[data-state="sealed"] { border-color: #15803d; background: rgba(21, 128, 61, 0.12); }
+#vault-lock-status.error { color: #f87171; }
