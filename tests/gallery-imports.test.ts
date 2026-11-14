@@ -17,6 +17,7 @@
 // falsification legs below run with a synthetic filesystem, so the unbuilt-tree case is
 // asserted without moving any file and without a nested test runner.
 
+import { ALWAYS_ON, buildReverseGraph, selectTestFiles } from "../scripts/select-tests.mjs";
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { GENERATED_DOCS_SOURCES, syncGallery } from "../scripts/sync-gallery.mjs";
 import { resolveDocsRelative, walkGalleryImports } from "../scripts/lib/gallery-imports.mjs";
@@ -165,6 +166,28 @@ Deno.test("gallery/0pjmh: the generated-entry list is DERIVED from the sync tabl
     assert(src.endsWith(".js") && !src.includes("/dist/"), `the source is the git module, not the bundle: ${src}`);
     assert(sourceExists(src), `the canonical source of ${dst} must exist in git: ${src}`);
   }
+});
+
+Deno.test("7tx47: a pure.js delta selects this guard, so an unsynced mirror reds on the AUTHORING branch", () => {
+  // chrome-agent-platform-7tx47: the guard only helps the author if it RUNS on the author's branch. It
+  // imports sync-gallery.mjs, not pure.js, so the import graph never selected it for the delta that
+  // matters — measured on fleet/fixer-mfu4a, where pure.js +102 with no mirror passed the authoring
+  // gate and only the merged tree's build noticed. Two things must stay true: the mirror pair is
+  // declared, and this suite is in the always-on floor (which selectTestFiles always includes).
+  const syncSource = Deno.readTextFileSync(new URL("../scripts/sync-gallery.mjs", import.meta.url));
+  assert(
+    syncSource.includes('["extension/lib/pure.js", "docs/pure.js"]'),
+    "the pure.js <- docs/pure.js mirror pair is the premise of this guard; if it moved, move this pin with it",
+  );
+  assert(
+    ALWAYS_ON.includes("tests/gallery-imports.test.ts"),
+    "the gallery guard must be always-on, or an unsynced mirror can pass the authoring branch's gate",
+  );
+  const selected = selectTestFiles(["extension/lib/pure.js"], buildReverseGraph());
+  assert(
+    selected.includes("tests/gallery-imports.test.ts"),
+    "a pure.js delta must select the gallery guard",
+  );
 });
 
 Deno.test("gallery: the synced deploy copies match the canonical sources (sync-gallery --check)", async () => {

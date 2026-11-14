@@ -103,6 +103,16 @@ export const SOURCE_INSPECTING_GUARDS = [
   // dispatcher hole reached main and lived there until the merger's full suite caught
   // it. A SW-only edit must select the listener census, exactly like the o75bp entries.
   "tests/onmessage-sender-guard.test.ts",
+  // chrome-agent-platform-7tx47: the generated-companion guard. scripts/sync-gallery.mjs declares
+  // [extension/lib/pure.js, docs/pure.js] (and the seams docs/pure.js re-exports) as MIRROR PAIRS, and
+  // tests/gallery-imports.test.ts is the only thing that runs `syncGallery({check:true})` — but it
+  // imports sync-gallery.mjs and NOT pure.js, so a pure.js delta never selected it. Measured on
+  // fleet/fixer-mfu4a (2026-11-04): pure.js changed +102 with no mirror, the authoring branch's gate was
+  // green, and the landed tree's build rewrote docs/pure.js and left the worktree dirty while
+  // check:gallery failed on the landed tree — the merger had to commit the build's own output. A
+  // generated companion must be carried by the AUTHOR, and the only way that reds on the authoring
+  // branch is for the check to run there. 177ms, no browser, no build input: a cheap always-on guard.
+  "tests/gallery-imports.test.ts",
   "tests/sw-route-modularization.test.ts",
   // luq4w: one text-only test reads the census and launcher source; no browser launch.
   "tests/census-resolution-wiring.test.ts",

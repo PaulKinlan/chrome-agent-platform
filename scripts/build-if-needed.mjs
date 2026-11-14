@@ -45,6 +45,16 @@ export const ALWAYS_ON_TREE_SKIPPING_GUARDS = Object.freeze(new Set([
   "tests/durable-root.test.ts",
   "tests/enrollment-authority-reader-census.test.ts",
   "tests/kat-service-worker-match.test.ts",
+  // chrome-agent-platform-7tx47 (via 0pjmh): this guard is always-on because it is the ONLY runner of
+  // syncGallery({check:true})-driven mirror checks, and its one mention of the build-output tree is a
+  // NEGATIVE assertion — the generated list's sources must be git modules, never the bundled copy. It
+  // imports nothing under the output tree and reads nothing there directly: the walk resolves imports
+  // against docs/ and the git source (0pjmh), and sync-gallery's own drift leg skips its build-output
+  // row when the copy is absent. Proven with NO build at all — both docs/diff-core.bundle.js and the
+  // built extension copy moved aside, suite 9/9 green, transcript "1 build-pending edge", and the
+  // genuinely-missing-source case still reds. So the tight classifier is the right one for it: the
+  // word appears in an assertion about what it must not depend on, not as a read.
+  "tests/gallery-imports.test.ts",
   // luq4w: skips generated output while walking shipped source; no built-artifact read/import.
   "tests/no-uppercase-kickers-static.test.ts",
   "tests/postmessage-wildcard-guard.test.ts",

@@ -110,7 +110,11 @@ Deno.test("omsz9 build: the always-on core is dist-free, so a subset gate can om
 });
 
 Deno.test("omsz9 build: verified tree-skipping guards in ALWAYS_ON are not false-positive dist consumers", () => {
-  assertEquals(ALWAYS_ON_TREE_SKIPPING_GUARDS.size, 18, "exactly 18 verified tree-skipping guards (uvo3 added wasm-package-authority; zw8f0 added build-once-capture; cac6c added onmessage-sender-guard)");
+  // 7tx47: 18 -> 19 — tests/gallery-imports.test.ts (0pjmh made its walk resolve against the git
+  // source, and its only mention of the build-output tree is a NEGATIVE assertion about what the
+  // generated list's sources must not be). Proven with no build at all: docs bundle and the built
+  // copy both moved aside, 9/9 green; the genuinely-missing-source case still reds.
+  assertEquals(ALWAYS_ON_TREE_SKIPPING_GUARDS.size, 19, "exactly 19 verified tree-skipping guards (uvo3 added wasm-package-authority; zw8f0 added build-once-capture; cac6c added onmessage-sender-guard; 7tx47 added gallery-imports)");
   for (const file of ALWAYS_ON_TREE_SKIPPING_GUARDS) {
     assert(ALWAYS_ON.includes(file), `${file} must be an ALWAYS_ON member`);
     const text = readReal(file);
