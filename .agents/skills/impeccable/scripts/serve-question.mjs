@@ -987,9 +987,15 @@ ${buildPath?.toggle ? `<div id="bp-confirm" role="dialog" aria-modal="true" aria
   if (!matchMedia('(prefers-reduced-motion: reduce)').matches && cards.length && !document.hidden) {
     const grid = document.querySelector('.grid').getBoundingClientRect();
     const cx = grid.left + grid.width / 2, cy = grid.top + grid.height / 2;
-    cards.forEach((card, i) => {
+    // Two passes, read then write: measuring a card AFTER writing the previous
+    // card's transform invalidates layout, so the single-pass loop forced one
+    // reflow per card on every deal. Collect every seat offset first, then
+    // write them all.
+    const seats = cards.map((card) => {
       const r = card.getBoundingClientRect();
-      const dx = cx - (r.left + r.width / 2), dy = cy - (r.top + r.height / 2);
+      return { card, dx: cx - (r.left + r.width / 2), dy: cy - (r.top + r.height / 2) };
+    });
+    seats.forEach(({ card, dx, dy }, i) => {
       card.style.transition = 'none';
       card.style.transform = 'translate(' + dx + 'px,' + (dy + 14) + 'px) rotate(' + (i % 2 ? 5 : -4) + 'deg) scale(.9)';
       card.style.opacity = '0';
