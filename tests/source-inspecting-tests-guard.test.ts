@@ -158,8 +158,7 @@ const NON_METHOD_KEYWORDS = new Set([
 export function findUnclassifiedSourceScanners(
   testFiles: { rel: string; code: string }[],
   alwaysOnSet: Set<string>,
-): string[] {
-  const unclassified: string[] = [];
+): { rel: string; line: number; signal: string }[] {
   const SCANNER_PATTERNS = [
     // A test that declares a LIST OF DIRECTORIES to scan is the audit's target shape whatever the
     // constant is called. `SCAN_DIRS` alone missed tests/composer-selector-migration.test.ts, whose
@@ -244,15 +243,27 @@ export function findUnclassifiedSourceScanners(
     const m = new RegExp(`\\b(?:const|let|var)\\s+${id}\\s*=\\s*([^;]+)`).exec(code);
     return m ? denotesSourceRoot(m[1], rel) : false;
   };
-  /** The FIRST ARGUMENT of every call to `name(`, as source text. */
-  const firstArgs = (code: string, name: string): string[] => {
-    const out: string[] = [];
-    // chrome-agent-platform-16o8b/hiv8y/x4ryv/rya1v: for a KEYWORD-named method the call site is the
-    // only honest discriminator. A method is reached through a receiver (`.name(`); a bare
-    // `if(ROOT) { … }` is control flow, whatever braces it sits in — four rounds of reading the
-    // DECLARATION position got that wrong in a new way each time (statement head, then a class body,
-    // then any `{` including a function block), so the decision now lives where the semantics are.
-    const callSite = NON_METHOD_KEYWORDS.has(name) ? new RegExp(`\\.\\s*${name}\\(`, "g") : new RegExp(`\\b${name}\\(`, "g");
+  /**
+   * The FIRST ARGUMENT of every call to `name(`, as source text, WITH the call-site position so the
+   * diagnostic can name the line (chrome-agent-platform-qarqo).
+   *
+   * The call form is decided in TWO layers — this is the 16o8b union, layered (coord's collision
+   * ruling), not a hand-picked side:
+   *   BASE (16o8b/hiv8y/x4ryv/rya1v, kept verbatim): a KEYWORD-named capture is reached only through
+   *   a receiver, so its call form is member whatever was collected — a bare `if(ROOT) { … }` is
+   *   control flow, and four rounds of reading the DECLARATION position got that wrong in a new way
+   *   each time (statement head, then a class body, then any `{` including a function block), so the
+   *   decision lives where the semantics are.
+   *   LAYER (qarqo declaration identity): for every NON-keyword name the binding context recorded at
+   *   collection decides — free bindings join `name(`, member bindings join `.name(` — so a member
+   *   body of ANY name can no longer join a bare call site elsewhere in the file, which is the by-name
+   *   join that started qarqo. Keyword names keep the forced member form; the base dominates.
+   */
+  const firstArgs = (code: string, name: string, form: "bare" | "member"): { arg: string; index: number }[] => {
+    const out: { arg: string; index: number }[] = [];
+    const callSite = form === "member" || NON_METHOD_KEYWORDS.has(name)
+      ? new RegExp(`\\.\\s*${name}\\(`, "g")
+      : new RegExp(`\\b${name}\\(`, "g");
     for (const m of code.matchAll(callSite)) {
       let depth = 0;
       let buf = "";
@@ -265,7 +276,7 @@ export function findUnclassifiedSourceScanners(
         } else if (c === "," && depth === 0) break;
         buf += c;
       }
-      out.push(flatten(buf));
+      out.push({ arg: flatten(buf), index: m.index });
     }
     return out;
   };
@@ -339,13 +350,21 @@ export function findUnclassifiedSourceScanners(
    * whole file ONCE, by NAME, in a single pass: one regex per spelling rather than one per name (the
    * per-name form cost this always-on audit 37s a gate — measured 48s vs 11s on the suite).
    */
-  const bodiesByName = (code: string): Map<string, string[]> => {
-    const bodies = new Map<string, string[]>();
-    const add = (name: string, body: string | null) => {
+  // chrome-agent-platform-qarqo (layered over the 16o8b union per coord's collision ruling): bodies
+  // are keyed by (BINDING CONTEXT, name), not by name alone. The binding context is the scope fact
+  // that decides what a call site with that spelling can possibly refer to: a FREE body (function
+  // declaration, `const x = function/arrow`) is reached by the bare call form `name(`, while a MEMBER
+  // body (object-method/class-method shorthand) is reachable only through the member form `.name(`.
+  // NON_METHOD_KEYWORDS above stays the dominant base for keyword-named captures; this layer extends
+  // the same discipline to every other name, so a member body of ANY spelling can no longer join a
+  // bare call site elsewhere in the file — the by-name join that started qarqo.
+  const bodiesByName = (code: string): Map<string, { kind: "free" | "member"; body: string }[]> => {
+    const bodies = new Map<string, { kind: "free" | "member"; body: string }[]>();
+    const add = (kind: "free" | "member", name: string, body: string | null) => {
       if (!body) return;
       const list = bodies.get(name);
-      if (list) list.push(body);
-      else bodies.set(name, [body]);
+      if (list) list.push({ kind, body });
+      else bodies.set(name, [{ kind, body }]);
     };
     /** The body that follows a declaration's parameter list: braced, skipping whitespace. */
     const after = (index: number) => {
@@ -353,9 +372,9 @@ export function findUnclassifiedSourceScanners(
       while (i < code.length && /\s/.test(code[i])) i++;
       return bracedBodyFrom(code, i);
     };
-    for (const m of code.matchAll(/\bfunction\s+([A-Za-z_$][\w$]*)\s*\([^)]*\)/g)) add(m[1], after(m.index + m[0].length));
-    for (const m of code.matchAll(/\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?function\s*\([^)]*\)/g)) add(m[1], after(m.index + m[0].length));
-    for (const m of code.matchAll(/\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*=>/g)) add(m[1], arrowBodyFrom(code, m.index + m[0].length));
+    for (const m of code.matchAll(/\bfunction\s+([A-Za-z_$][\w$]*)\s*\([^)]*\)/g)) add("free", m[1], after(m.index + m[0].length));
+    for (const m of code.matchAll(/\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?function\s*\([^)]*\)/g)) add("free", m[1], after(m.index + m[0].length));
+    for (const m of code.matchAll(/\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*=>/g)) add("free", m[1], arrowBodyFrom(code, m.index + m[0].length));
     // Object-method shorthand (`{ scanDir(dir) { … } }`) and class methods: the call site reaches the
     // method as `obj.name(`, so matching the DECLARATION by name is enough — the verdict still requires a
     // source root at the call site.
@@ -373,24 +392,32 @@ export function findUnclassifiedSourceScanners(
     // method can appear — an object-literal member (`{`/`,` prefix) or a class body (the nearest
     // enclosing unmatched `{` opens one). A bare `if (…) {` at a statement boundary is control flow.
     for (const m of code.matchAll(/(?:^|[{,;])\s*(?:async\s+)?(?:get\s+|set\s+)?([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*\{/gm)) {
-      add(m[1], bracedBodyFrom(code, code.indexOf("{", m.index + m[0].length - 1)));
+      add("member", m[1], bracedBodyFrom(code, code.indexOf("{", m.index + m[0].length - 1)));
     }
     return bodies;
   };
   /** Names of functions DEFINED IN THIS FILE whose body calls a directory-read API. */
-  const localDirectoryReaders = (code: string): string[] => {
+  /**
+   * Names of functions DEFINED IN THIS FILE whose body calls a directory-read API, tagged with the
+   * binding context each name was collected under (chrome-agent-platform-qarqo): the SAME name can
+   * exist as both a free and a member binding in one file, and each kind joins its own call form.
+   * Keyword-named readers are pinned to the member form by NON_METHOD_KEYWORDS in firstArgs (the
+   * 16o8b base dominates), so a control-flow head can never join them regardless of this tag.
+   */
+  const localDirectoryReaders = (code: string): { name: string; kind: "free" | "member" }[] => {
     // Most files never touch a directory API; bail before building anything.
     if (!DIRECTORY_READ_RE.test(code)) return [];
-    const found: string[] = [];
+    const found: { name: string; kind: "free" | "member" }[] = [];
     for (const [name, list] of bodiesByName(code)) {
-      if (list.some((body) => DIRECTORY_READ_RE.test(body))) found.push(name);
+      const kinds = new Set(list.filter((b) => DIRECTORY_READ_RE.test(b.body)).map((b) => b.kind));
+      for (const kind of kinds) found.push({ name, kind });
     }
     return found;
   };
   const walkOrReadRoots = (code: string, rel: string) =>
     ["walk", "readDir", "readDirSync", "readdir", "readdirSync", "opendir", "opendirSync"]
-      .flatMap((name) => firstArgs(code, name))
-      .filter((arg) => (/^[A-Za-z_$][\w$]*$/.test(arg) ? identifierIsSourceRoot(arg, code, rel) : denotesSourceRoot(arg, rel)));
+      .flatMap((name) => firstArgs(code, name, "bare").map((call) => ({ name, ...call })))
+      .filter((call) => (/^[A-Za-z_$][\w$]*$/.test(call.arg) ? identifierIsSourceRoot(call.arg, code, rel) : denotesSourceRoot(call.arg, rel)));
   // The LOCAL-HELPER rule is scoped to TEST files on purpose. Out in scripts/, a tree-copying or
   // tree-digesting helper (`treeRecords(root)`, `copyTree(source, dest)`) is a PRODUCTION function whose
   // argument is an ordinary parameter, not a census of the repo's source — applying the helper rule there
@@ -400,10 +427,18 @@ export function findUnclassifiedSourceScanners(
   const localHelperRoots = (code: string, rel: string) =>
     IS_TEST_RE.test(rel)
       ? localDirectoryReaders(code)
-        .flatMap((name) => firstArgs(code, name))
-        .filter((arg) => (/^[A-Za-z_$][\w$]*$/.test(arg) ? identifierIsSourceRoot(arg, code, rel) : denotesSourceRoot(arg, rel)))
+        .flatMap((reader) => firstArgs(code, reader.name, reader.kind === "member" ? "member" : "bare").map((call) => ({ name: reader.name, kind: reader.kind, ...call })))
+        .filter((call) => (/^[A-Za-z_$][\w$]*$/.test(call.arg) ? identifierIsSourceRoot(call.arg, code, rel) : denotesSourceRoot(call.arg, rel)))
       : [];
-  for (const { rel, code } of testFiles) {
+  // chrome-agent-platform-qarqo: the scan runs on COMMENT-STRIPPED source. A mention in prose is
+  // not code — the same principle afpl Finding 2 applied to non-test modules, now extended to tests.
+  // The stripper replaces comment content with spaces WITHOUT removing the newlines, so every line
+  // number computed from the stripped text is exact for the original file.
+  const stripComments = (src: string) => src.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " ")).replace(/(^|[^:])\/\/[^\n]*/g, (m, p1) => p1 + m.slice(p1.length).replace(/[^\n]/g, " "));
+  const lineOf = (src: string, index: number) => src.slice(0, index).split("\n").length;
+  const violations: { rel: string; line: number; signal: string }[] = [];
+  for (const { rel, code: rawCode } of testFiles) {
+    const code = stripComments(rawCode);
     const isTest = IS_TEST_RE.test(rel);
     // Non-test support modules INSIDE tests/** cannot be silenced by ALWAYS_ON or
     // SCANNER_EXCLUSIONS. Imported modules outside tests/ get the separate 2irv
@@ -419,14 +454,28 @@ export function findUnclassifiedSourceScanners(
     // For non-test support modules/helpers, only definition-based walks (walkOrReadRoots) apply:
     // prose patterns (SCAN_DIRS, git ls-files, GUARD_ROOTS) cannot match support modules because
     // helpers have no exemption path and comment mentions must not cause unactionable reds (afpl Finding 2).
-    const matchesScanner = isTest
-      ? (SCANNER_PATTERNS.some((pat) => pat.test(code)) || walkOrReadRoots(code, rel).length > 0 || localHelperRoots(code, rel).length > 0)
-      : (walkOrReadRoots(code, rel).length > 0);
-    if (matchesScanner) {
-      unclassified.push(rel);
+    const evidence: { line: number; signal: string }[] = [];
+    if (isTest) {
+      for (const pat of SCANNER_PATTERNS) {
+        const m = pat.exec(code);
+        if (m) evidence.push({ line: lineOf(code, m.index), signal: `pattern ${String(pat)} matched` });
+      }
+    }
+    for (const call of walkOrReadRoots(code, rel)) {
+      evidence.push({ line: lineOf(code, call.index), signal: `${call.name}(${call.arg.slice(0, 40)}) walks a repo source root` });
+    }
+    for (const call of localHelperRoots(code, rel)) {
+      evidence.push({
+        line: lineOf(code, call.index),
+        signal: `local helper ${call.name} (a ${call.kind === "member" ? "method" : "free function"} this file defines from a directory read) called with a repo source root`,
+      });
+    }
+    if (evidence.length > 0) {
+      evidence.sort((a, b) => a.line - b.line);
+      violations.push({ rel, line: evidence[0].line, signal: evidence[0].signal });
     }
   }
-  return unclassified;
+  return violations;
 }
 
 /**
@@ -533,25 +582,36 @@ export function sharedSupportFiles(testsDir = join(ROOT, "tests")): { rel: strin
 }
 
 /**
- * Format guidance for unclassified files (coord's refinement on afpl):
+ * Format guidance for unclassified files (coord's refinement on afpl; qarqo upgraded it):
  * Test files should be added to SOURCE_INSPECTING_GUARDS.
  * Support modules / helpers can NEVER be in ALWAYS_ON; the message explains what to do instead of
  * giving contradictory advice or leaving the next splitter a red they cannot act on.
+ * chrome-agent-platform-qarqo: each violation names the FILE AND LINE (a red you cannot locate is a
+ * red you disable), states WHAT matched, and offers the exemption route the audit actually has —
+ * SCANNER_EXCLUSIONS in scripts/select-tests.mjs, whose contract is a >80-character reason with the
+ * bead id. A guard that reds without saying how to declare a legitimate exemption trains people to
+ * disable it.
  */
-export function formatUnclassifiedScannersMessage(unclassified: string[]): string {
-  const tests = unclassified.filter((rel) => IS_TEST_RE.test(rel));
-  const support = unclassified.filter((rel) => !IS_TEST_RE.test(rel));
+export function formatUnclassifiedScannersMessage(
+  unclassified: { rel: string; line: number; signal: string }[],
+): string {
+  const tests = unclassified.filter((v) => IS_TEST_RE.test(v.rel));
+  const support = unclassified.filter((v) => !IS_TEST_RE.test(v.rel));
 
   const parts: string[] = [];
   if (tests.length > 0) {
+    const listed = tests.map((v) => `${v.rel}:${v.line} — ${v.signal}`).join("\n  ");
     parts.push(
-      `Dynamic source-scanning test guard(s) found without being in ALWAYS_ON: ${tests.join(", ")}. ` +
-        `Add them to SOURCE_INSPECTING_GUARDS in scripts/select-tests.mjs.`,
+      `Dynamic source-scanning test guard(s) found without being in ALWAYS_ON:\n  ${listed}\n` +
+        `If the file IS a repo census, add it to SOURCE_INSPECTING_GUARDS in scripts/select-tests.mjs. ` +
+        `If this flag is wrong for a measured reason, declare it in SCANNER_EXCLUSIONS (same file) — ` +
+        `an entry there requires a >80-character reason that cites the bead id; do not disable the audit.`,
     );
   }
   if (support.length > 0) {
+    const listed = support.map((v) => `${v.rel}:${v.line} — ${v.signal}`).join("\n  ");
     parts.push(
-      `${support.length} dynamic source-scanning SHARED TEST-SUPPORT MODULE(S) found: ${support.join(", ")}. ` +
+      `${support.length} dynamic source-scanning SHARED TEST-SUPPORT MODULE(S) found:\n  ${listed}\n` +
         `Shared support modules can never be an ALWAYS_ON member. ` +
         `Move the walk into the test file that needs it, or put the static half in a test file. ` +
         `Do NOT silence this by adding a helper to SOURCE_INSPECTING_GUARDS — that list is for test files, ` +
@@ -618,7 +678,7 @@ export function uncoveredExternalRepoWalks(
     if (code !== null) candidates.push({ rel, code });
   }
   const walkers = findUnclassifiedSourceScanners(candidates, new Set());
-  return walkers.filter((rel) => !testConsumerReachable(join(ROOT, rel), reverse, (testRel) => alwaysOn.has(testRel))).sort();
+  return walkers.map((v) => v.rel).filter((rel) => !testConsumerReachable(join(ROOT, rel), reverse, (testRel) => alwaysOn.has(testRel))).sort();
 }
 
 Deno.test("2irv: every tested repo-walking helper outside tests/ has an ALWAYS_ON consumer", () => {
@@ -664,7 +724,7 @@ Deno.test("2irv: a NEW unguarded shared-helper walk is caught without mutating t
   const consumer = "tests/zz-2irv-consumer.test.ts";
   const code = 'const root = new URL("../../", import.meta.url);\n' +
     'export function census() { for (const entry of Deno.readDirSync(root)) void entry; }\n';
-  assertEquals(findUnclassifiedSourceScanners([{ rel: helper, code }], new Set()), [helper],
+  assertEquals(findUnclassifiedSourceScanners([{ rel: helper, code }], new Set()).map((v) => v.rel), [helper],
     "the shared-helper scanner must classify a fresh repo-root walk");
   // A newly imported helper is absent from the old tests/** audit. Inject its
   // source and import edge IN MEMORY so parallel whole-suite guards cannot see
@@ -725,7 +785,7 @@ Deno.test("i0rf N2: an actual test-imported fixture with an injected repo walk i
   assert(reverse.get(abs)?.has(join(ROOT, "tests/store-doc-denial.test.ts")), "the fixture is imported by a REAL test");
   const code = 'const root = new URL("../../", import.meta.url);\n' +
     'export function census() { for (const entry of Deno.readDirSync(root)) void entry; }\n';
-  assertEquals(findUnclassifiedSourceScanners([{ rel, code }], new Set()), [rel], "the walker itself is classifiable");
+  assertEquals(findUnclassifiedSourceScanners([{ rel, code }], new Set()).map((v) => v.rel), [rel], "the walker itself is classifiable");
   assertEquals(uncoveredExternalRepoWalks(reverse, new Set(ALWAYS_ON),
     (candidate) => candidate === abs ? code : null), [rel],
     "an executable fixture with real non-ALWAYS_ON importers must not be hidden by the tests/** exclusion");
@@ -831,7 +891,7 @@ Deno.test("qcfc: REAL-TREE falsification — an actual repo-walking guard is fla
   const code = readFileSync(join(ROOT, rel), "utf8");
   const unclassified = findUnclassifiedSourceScanners([{ rel, code }], new Set());
   assertEquals(
-    unclassified,
+    unclassified.map((v) => v.rel),
     [rel],
     "a REAL repo-walking guard must be flagged when it is neither always-on nor declared excluded",
   );
@@ -852,7 +912,7 @@ Deno.test("p1lp: REAL-TREE symmetry — a lowercase-alias source-root walk is fl
   const unlisted = new Set(["tests/security.test.ts"]);
 
   assertEquals(
-    findUnclassifiedSourceScanners([read("tests/chrome-tools-t12-static.test.ts")], unlisted),
+    findUnclassifiedSourceScanners([read("tests/chrome-tools-t12-static.test.ts")], unlisted).map((v) => v.rel),
     ["tests/chrome-tools-t12-static.test.ts"],
     "a walk over a LOWERCASE alias of a source root must be flagged when it is unlisted",
   );
@@ -883,7 +943,7 @@ Deno.test("n2u40: a LOCAL dir-reading helper called with a source root is a scan
     'scanDir(EXTENSION_DIR);',
   ].join("\n");
   assertEquals(
-    findUnclassifiedSourceScanners([{ rel, code }], new Set()),
+    findUnclassifiedSourceScanners([{ rel, code }], new Set()).map((v) => v.rel),
     [rel],
     "a local dir-reading helper seeded with EXTENSION_DIR must be flagged — the n2u40 hole",
   );
@@ -899,7 +959,7 @@ Deno.test("n2u40: a LOCAL dir-reading helper called with a source root is a scan
   ];
   for (const [label, spelling] of spellings) {
     assertEquals(
-      findUnclassifiedSourceScanners([{ rel: "tests/zz-5b15m-probe.test.ts", code: spelling }], new Set()),
+      findUnclassifiedSourceScanners([{ rel: "tests/zz-5b15m-probe.test.ts", code: spelling }], new Set()).map((v) => v.rel),
       ["tests/zz-5b15m-probe.test.ts"],
       `the ${label} spelling of a local directory-reading helper must be flagged`,
     );
@@ -929,7 +989,7 @@ Deno.test("n2u40: a LOCAL dir-reading helper called with a source root is a scan
     'if (ROOT) { h.scanDir(ROOT); }',
   ].join("\n");
   assertEquals(
-    findUnclassifiedSourceScanners([{ rel: "tests/zz-16o8b-probe.test.ts", code: methodWithControlFlow }], new Set()),
+    findUnclassifiedSourceScanners([{ rel: "tests/zz-16o8b-probe.test.ts", code: methodWithControlFlow }], new Set()).map((v) => v.rel),
     ["tests/zz-16o8b-probe.test.ts"],
     "the real object-method spelling is still flagged next to a control-flow statement",
   );
@@ -945,7 +1005,7 @@ Deno.test("n2u40: a LOCAL dir-reading helper called with a source root is a scan
     'h.if(ROOT);',
   ].join("\n");
   assertEquals(
-    findUnclassifiedSourceScanners([{ rel: "tests/zz-hiv8y-probe.test.ts", code: keywordMethod }], new Set()),
+    findUnclassifiedSourceScanners([{ rel: "tests/zz-hiv8y-probe.test.ts", code: keywordMethod }], new Set()).map((v) => v.rel),
     ["tests/zz-hiv8y-probe.test.ts"],
     "a keyword-named METHOD called as a property is still a source census — the exclusion must not blind it",
   );
@@ -969,9 +1029,87 @@ Deno.test("n2u40: a LOCAL dir-reading helper called with a source root is a scan
   );
   // ...and the receiver rule still classifies the real method wherever it is declared.
   assertEquals(
-    findUnclassifiedSourceScanners([{ rel: "tests/zz-rya1v-method.test.ts", code: keywordMethod }], new Set()),
+    findUnclassifiedSourceScanners([{ rel: "tests/zz-rya1v-method.test.ts", code: keywordMethod }], new Set()).map((v) => v.rel),
     ["tests/zz-rya1v-method.test.ts"],
     "a keyword-named method reached as h.if(ROOT) is still a census",
+  );
+
+  // chrome-agent-platform-qarqo — the layer this union exists for. The ndteu shape that BOTH the
+  // pre-16o8b by-name join AND the keyword discriminator left uncovered: a NON-keyword-free join is
+  // gone (binding context), a keyword capture cannot join bare control flow (NON_METHOD_KEYWORDS),
+  // and the layered rule keeps it dead for any spelling: a directory-reading if-block plus a bare
+  // control-flow if(ROOT) must not mis-flag.
+  const ndteuShape = [
+    'const ROOT = "/repo";',
+    'const FIXTURES = "fixtures/sample-dir";',
+    'if(ROOT) {',
+    '  for (const e of Deno.readDirSync(FIXTURES)) void e;',
+    '}',
+    'if(ROOT) { console.log("flow"); }',
+  ].join("\n");
+  assertEquals(
+    findUnclassifiedSourceScanners([{ rel: "tests/zz-ndteu-shape.test.ts", code: ndteuShape }], new Set()),
+    [],
+    "a dir-reading if-block plus a control-flow if(ROOT) must NOT mis-flag — the qarqo defect is dead",
+  );
+
+  // The diagnostic must name the CALL LINE and say the binding was a member (scope fact, not spelling).
+  const realMemberCensus = [
+    'import { readdirSync } from "node:fs";',
+    'const ROOT = "/repo";',
+    'const h = {',
+    '  if(dir: string) { for (const e of readdirSync(dir)) void e; },',
+    '};',
+    'if (true) h.if(ROOT);',
+  ].join("\n");
+  const memberFlag = findUnclassifiedSourceScanners([{ rel: "tests/zz-real-if-census.test.ts", code: realMemberCensus }], new Set());
+  assertEquals(memberFlag.length, 1, "the real h.if(ROOT) census must be flagged even though the name is the keyword `if`");
+  assertEquals(memberFlag[0].rel, "tests/zz-real-if-census.test.ts");
+  assertEquals(memberFlag[0].line, 6, "the diagnostic must name the CALL line, not the file or the declaration");
+  assertStringIncludes(memberFlag[0].signal, "method", "the signal must say the binding was a member (scope fact), not just a name");
+
+  // The exemption route the audit actually has must be IN the diagnostic.
+  const guidance = formatUnclassifiedScannersMessage(memberFlag);
+  assertStringIncludes(guidance, "tests/zz-real-if-census.test.ts:6", "the guidance must name file AND line");
+  assertStringIncludes(guidance, "SOURCE_INSPECTING_GUARDS", "the promote route must be offered");
+  assertStringIncludes(guidance, "SCANNER_EXCLUSIONS", "the exemption route must be offered by name");
+  assertStringIncludes(guidance, ">80-character", "the exemption contract (a real reason, not a shrug) must be stated");
+  assertStringIncludes(guidance, "bead id", "the exemption must cite its bead");
+
+  // Comments are not code: the same text in prose must not flag, the same text as code must.
+  const proseOnly = [
+    '// if (ROOT) { Deno.readDirSync(ROOT) } — an example in a comment, not a census',
+    'const x = 1;',
+  ].join("\n");
+  assertEquals(
+    findUnclassifiedSourceScanners([{ rel: "tests/zz-prose-mention.test.ts", code: proseOnly }], new Set()),
+    [],
+    "a comment mention of a repo walk must not flag — prose is not code (afpl Finding 2 for tests too)",
+  );
+  const asCode = [
+    'const x = 1;',
+    'if (ROOT) { for (const e of Deno.readDirSync(ROOT)) void e; }',
+  ].join("\n");
+  assertEquals(
+    findUnclassifiedSourceScanners([{ rel: "tests/zz-code-not-prose.test.ts", code: asCode }], new Set()).length > 0,
+    true,
+    "the same walk AS CODE must flag (the comment stripping must not blind the audit)",
+  );
+
+  // The qarqo layer's own discriminator (16o8b's keyword round does not cover it): a NON-keyword
+  // METHOD body must not join a bare `name(` call site — the only scanDir binding here is the object
+  // method, so the bare scanDir(ROOT) text is a call to an undefined symbol, not a working census.
+  // Under a by-name join this file flags; under the binding-context layer it cannot.
+  const methodOnlyBinding = [
+    'import * as fs from "node:fs";',
+    'const ROOT = new URL("..", import.meta.url);',
+    'const h = { scanDir(dir: URL) { for (const e of fs.readdirSync(dir)) void e; } };',
+    'const other = () => { scanDir(ROOT); };',
+  ].join("\n");
+  assertEquals(
+    findUnclassifiedSourceScanners([{ rel: "tests/zz-method-only-binding.test.ts", code: methodOnlyBinding }], new Set()),
+    [],
+    "a member body must not join a bare call site of the same spelling — binding context, not name",
   );
 
   // x4ryv (review of 16o8b round 2): the previous discriminator asked whether the FILE calls `.<name>(`
@@ -1003,7 +1141,7 @@ Deno.test("n2u40: a LOCAL dir-reading helper called with a source root is a scan
     'new Scanner().if(ROOT);',
   ].join("\n");
   assertEquals(
-    findUnclassifiedSourceScanners([{ rel: "tests/zz-x4ryv-class.test.ts", code: classMethod }], new Set()),
+    findUnclassifiedSourceScanners([{ rel: "tests/zz-x4ryv-class.test.ts", code: classMethod }], new Set()).map((v) => v.rel),
     ["tests/zz-x4ryv-class.test.ts"],
     "a keyword-named CLASS method that scans source is a declaration, not control flow",
   );
@@ -1037,7 +1175,7 @@ Deno.test("n2u40: a LOCAL dir-reading helper called with a source root is a scan
     "a production tree helper outside tests/ is not a source-scanning TEST guard",
   );
   assertEquals(
-    findUnclassifiedSourceScanners([{ rel: "tests/zz-lib-helper.test.ts", code: helperCode }], new Set()),
+    findUnclassifiedSourceScanners([{ rel: "tests/zz-lib-helper.test.ts", code: helperCode }], new Set()).map((v) => v.rel),
     ["tests/zz-lib-helper.test.ts"],
     "the same shape in the test tree IS the scanner the audit exists for",
   );
@@ -1051,7 +1189,7 @@ Deno.test("n2u40: a LOCAL dir-reading helper called with a source root is a scan
   const realCode = readFileSync(join(ROOT, realRel), "utf8");
   const probeRel = "tests/zz-unbuilt-tree-imports-probe.test.ts";
   assertEquals(
-    findUnclassifiedSourceScanners([{ rel: probeRel, code: realCode }], new Set()),
+    findUnclassifiedSourceScanners([{ rel: probeRel, code: realCode }], new Set()).map((v) => v.rel),
     [probeRel],
     "the widened detector must flag a REAL local-helper walk (scanDir(EXTENSION_DIR)) when it is not declared",
   );
@@ -1078,7 +1216,7 @@ Deno.test("qcfc: falsification: unclassified source scanner fails the audit clos
   const alwaysOnSet = new Set(["tests/security.test.ts"]);
   const unclassified = findUnclassifiedSourceScanners(fakeTests, alwaysOnSet);
   assertEquals(
-    unclassified,
+    unclassified.map((v) => v.rel),
     ["tests/fake-unclassified-scanner.test.ts", "tests/fake-unlisted-walk-scanner.test.ts"],
     "Audit must catch unclassified source scanners, including a REPO-WALK scanner (kz27)",
   );
@@ -1224,7 +1362,7 @@ Deno.test("afpl: REAL-TREE falsification — a depth-2 repo-walking helper is NA
 
     // (F1) Depth-2 helper MUST be named by the real-tree scan:
     assertEquals(
-      named.includes("tests/helpers/zz-afpl-depth2-walk.ts"),
+      named.some((v) => v.rel === "tests/helpers/zz-afpl-depth2-walk.ts"),
       true,
       `REAL-TREE: a depth-2 repo-walking helper must be SCANNED and NAMED: ${JSON.stringify(named)}`,
     );
@@ -1237,14 +1375,14 @@ Deno.test("afpl: REAL-TREE falsification — a depth-2 repo-walking helper is NA
 
     // (F2) Prose-only helper MUST NOT be flagged as unclassified:
     assertEquals(
-      named.includes("tests/helpers/zz-afpl-prose-only.ts"),
+      named.some((v) => v.rel === "tests/helpers/zz-afpl-prose-only.ts"),
       false,
       `REAL-TREE: a support module with prose mentioning SCAN_DIRS/git ls-files must NOT be flagged: ${JSON.stringify(named)}`,
     );
 
     // Fixture reader MUST NOT be admitted:
     assertEquals(
-      named.includes("tests/helpers/zz-afpl-fixture-read.ts"),
+      named.some((v) => v.rel === "tests/helpers/zz-afpl-fixture-read.ts"),
       false,
       `REAL-TREE: a fixture-walking helper must NOT be admitted: ${JSON.stringify(named)}`,
     );
@@ -1299,12 +1437,12 @@ Deno.test("afpl: a repo-walking HELPER is named and fails the audit closed; a fi
     );
     const named = findUnclassifiedSourceScanners(sharedSupportFiles(scratch), new Set());
     assertEquals(
-      named.includes("tests/helpers/zz-afpl-repo-walk.ts"),
+      named.some((v) => v.rel === "tests/helpers/zz-afpl-repo-walk.ts"),
       true,
       `a repo-walking helper must be SCANNED and NAMED — this is the coverage proof, not a skip: ${JSON.stringify(named)}`,
     );
     assertEquals(
-      named.includes("tests/helpers/zz-afpl-depth2-walk.ts"),
+      named.some((v) => v.rel === "tests/helpers/zz-afpl-depth2-walk.ts"),
       true,
       `a depth-2 lowercase-alias repo-walking helper must be SCANNED and NAMED: ${JSON.stringify(named)}`,
     );
@@ -1324,7 +1462,7 @@ Deno.test("afpl: a repo-walking HELPER is named and fails the audit closed; a fi
     );
     const afterProse = findUnclassifiedSourceScanners(sharedSupportFiles(scratch), new Set());
     assertEquals(
-      afterProse.includes("tests/helpers/zz-afpl-prose-only.ts"),
+      afterProse.some((v) => v.rel === "tests/helpers/zz-afpl-prose-only.ts"),
       false,
       `a support module with prose mentioning SCAN_DIRS/git ls-files must NOT be flagged: ${JSON.stringify(afterProse)}`,
     );
@@ -1339,7 +1477,7 @@ Deno.test("afpl: a repo-walking HELPER is named and fails the audit closed; a fi
     );
     const after = findUnclassifiedSourceScanners(sharedSupportFiles(scratch), new Set());
     assertEquals(
-      after.includes("tests/helpers/zz-afpl-fixture-read.ts"),
+      after.some((v) => v.rel === "tests/helpers/zz-afpl-fixture-read.ts"),
       false,
       `a fixture-walking helper must NOT be admitted: ${JSON.stringify(after)}`,
     );
@@ -1350,7 +1488,7 @@ Deno.test("afpl: a repo-walking HELPER is named and fails the audit closed; a fi
       new Set(["tests/helpers/zz-afpl-repo-walk.ts"]),
     );
     assertEquals(
-      evasionAttempt.includes("tests/helpers/zz-afpl-repo-walk.ts"),
+      evasionAttempt.some((v) => v.rel === "tests/helpers/zz-afpl-repo-walk.ts"),
       true,
       "a helper cannot be exempted by alwaysOnSet: support modules must fail closed",
     );
@@ -1372,7 +1510,7 @@ Deno.test("afpl: a repo-walking HELPER is named and fails the audit closed; a fi
       new Set(),
     );
     assertEquals(
-      nestedNamed.includes("tests/helpers/zz-nested.test.ts"),
+      nestedNamed.some((v) => v.rel === "tests/helpers/zz-nested.test.ts"),
       true,
       "nested test files must be detected as test guards",
     );
@@ -1397,7 +1535,7 @@ Deno.test("afpl: a repo-walking HELPER is named and fails the audit closed; a fi
     const nestedGuidance = formatUnclassifiedScannersMessage(nestedNamed);
     assertStringIncludes(
       nestedGuidance,
-      "Add them to SOURCE_INSPECTING_GUARDS",
+      "add it to SOURCE_INSPECTING_GUARDS",
       "test files must be directed to SOURCE_INSPECTING_GUARDS",
     );
   } finally {
