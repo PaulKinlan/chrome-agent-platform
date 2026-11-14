@@ -914,16 +914,46 @@ Deno.test("ui-contrast-a11y: theme-literal falsifier — theme.css literals do n
 // is exempt).
 // ============================================================================
 
-const DOCS_PAGES = ["index.html", "components.html", "review-2026-08-21.html"];
+/** Every absolute font size a docs page declares.
+ *
+ *  kplpp (review of 8mw5l): the first version scanned `font-size:` only, so the
+ *  `font` SHORTHAND was invisible — `font: 8px/1 system-ui` makes text 8px and
+ *  was read as nothing at all. It also read a fixed list of three pages, so a
+ *  fourth docs page would never be checked. Both are fixed here: sizes come from
+ *  the property AND from the shorthand's size component, and the page list is
+ *  the directory itself. Relative sizes (em/%/var()) are not absolute and are
+ *  left to the clamp test below. */
+function declaredFontSizes(html: string, page: string): { page: string; px: number; raw: string }[] {
+  const out: { page: string; px: number; raw: string }[] = [];
+  const toPx = (n: number, unit: string) => (unit === "px" ? n : n * 16);
+  for (const m of html.matchAll(/font-size\s*:\s*([0-9.]+)(px|rem)/g)) {
+    out.push({ page, px: toPx(Number(m[1]), m[2]), raw: `${m[1]}${m[2]}` });
+  }
+  for (const m of html.matchAll(/(?:^|[;{\s])font\s*:\s*([^;{}]+)/g)) {
+    const size = /(?:^|\s)([0-9.]+)(px|rem)(?=\s*\/|\s|$)/.exec(m[1]);
+    if (size) out.push({ page, px: toPx(Number(size[1]), size[2]), raw: `${size[1]}${size[2]} (font shorthand)` });
+  }
+  return out;
+}
+
+/** The docs pages that ship, read from the directory rather than a fixed list. */
+async function docsPages(): Promise<string[]> {
+  const pages: string[] = [];
+  for await (const entry of Deno.readDir(new URL("../docs/", import.meta.url))) {
+    if (entry.isFile && entry.name.endsWith(".html")) pages.push(entry.name);
+  }
+  return pages.sort();
+}
 
 Deno.test("8mw5l: static docs pages honour the 12px readability floor", async () => {
-  for (const page of DOCS_PAGES) {
+  const pages = await docsPages();
+  assert(pages.includes("index.html"), "the docs directory scan must find index.html");
+  for (const page of pages) {
     const html = await Deno.readTextFile(new URL(`../docs/${page}`, import.meta.url));
-    for (const m of html.matchAll(/font-size\s*:\s*([0-9.]+)(px|rem)/g)) {
-      const px = m[2] === "px" ? Number(m[1]) : Number(m[1]) * 16;
+    for (const size of declaredFontSizes(html, page)) {
       assert(
-        px >= 12,
-        `docs/${page} renders text at ${m[1]}${m[2]} (${px}px), below the 12px floor — use the page's --step--1 token`,
+        size.px >= 12,
+        `docs/${page} renders text at ${size.raw} (${size.px}px), below the 12px floor — use the page's --step--1 token`,
       );
     }
   }
