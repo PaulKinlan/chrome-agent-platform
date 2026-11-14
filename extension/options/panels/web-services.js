@@ -436,7 +436,7 @@ export function initVaultStatic(ctx, { runInitialRender = true } = {}) {
     if (vaultAddValue) vaultAddValue.value = "";
     if (vaultAddId) vaultAddId.value = "";
     if (vaultAddOrigin) vaultAddOrigin.value = "";
-    setVaultStatus(`${keyId} saved. The key is stored encrypted and origin-pinned.`, false);
+    setVaultStatus(`${keyId} saved and origin-pinned. At rest it is obfuscated, not encrypted, until you set a vault passphrase.`, false);
     await renderVaultPanel();
   });
 

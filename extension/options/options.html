@@ -495,15 +495,15 @@
 
       <section id="web-services" class="panel">
         <h2>Web services</h2>
-        <p class="muted">API keys for the services agents can call. Keys are stored encrypted inside this extension only, are never sent to any model, and are delivered only to the service's own endpoint via the Secure Enclave proxy. Paste a key to configure or rotate it — leave the field blank to keep the stored key.</p>
+        <p class="muted">API keys for the services agents can call. At rest they are <strong>obfuscated, not encrypted</strong>: the bytes keep them out of plain text, but anyone who copies this Chrome profile can decrypt them until you set a vault passphrase. They are never sent to any model and are delivered only to the service's own endpoint via the Secure Enclave proxy. Paste a key to configure or rotate it — leave the field blank to keep the stored key.</p>
 
         <div id="vault-architecture" class="vault-architecture vault-arch-grid" aria-label="Architecture and isolation summary">
           <div class="vault-arch-card">
             <div class="vault-arch-title">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-              <span>Encrypted Storage</span>
+              <span>Obfuscated at rest</span>
             </div>
-            <div class="vault-arch-desc">AES-GCM-256 (PBKDF2 210k iterations) inside this extension's local storage — never in plaintext or exports</div>
+            <div class="vault-arch-desc">AES-GCM-256 under a key derived from this extension's public id and a salt stored beside the data. That keeps keys out of plain text, log scrapes and exports — it does <strong>not</strong> stop a copied Chrome profile decrypting them. A vault passphrase is what turns this into real encryption.</div>
           </div>
           <div class="vault-arch-card">
             <div class="vault-arch-title">
