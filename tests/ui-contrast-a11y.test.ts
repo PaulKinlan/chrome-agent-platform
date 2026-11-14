@@ -895,3 +895,108 @@ Deno.test("ui-contrast-a11y: theme-literal falsifier — theme.css literals do n
   assertThrows(() => validateThemeLiteralAllowlist([{ path: "x.css", value: "#fff", reason: "   " }]));
   validateThemeLiteralAllowlist([{ path: "x.css", value: "#fff", reason: "real reason" }]); // must not throw
 });
+
+// ============================================================================
+// chrome-agent-platform-8mw5l: the STATIC docs pages are user surfaces too.
+//
+// The guard above reads the extension's surfaces. The docs pages under docs/
+// are what a reader actually lands on, and they had drifted in the two ways
+// this file exists to catch: six information-bearing labels rendered at 11px
+// (0.6875rem) — below the constitution's 12px readability floor, and bypassing
+// the page's own --step--1 scale token (13px) — and index.html re-declared the
+// theme with light-dark() colour literals instead of the token scale that
+// docs/theme.css already defines for it. A literal in a docs page is a second,
+// silently drifting definition of the theme, i.e. the same defect wjcba's
+// section bans for extension/.
+//
+// Rules: no px/rem font-size below 12px on a docs page, and no colour literal
+// in a surface property on a docs page (theme.css is the definition file and
+// is exempt).
+// ============================================================================
+
+/** Every absolute font size a docs page declares.
+ *
+ *  kplpp (review of 8mw5l): the first version scanned `font-size:` only, so the
+ *  `font` SHORTHAND was invisible — `font: 8px/1 system-ui` makes text 8px and
+ *  was read as nothing at all. It also read a fixed list of three pages, so a
+ *  fourth docs page would never be checked. Both are fixed here: sizes come from
+ *  the property AND from the shorthand's size component, and the page list is
+ *  the directory itself. Relative sizes (em/%/var()) are not absolute and are
+ *  left to the clamp test below. */
+function declaredFontSizes(html: string, page: string): { page: string; px: number; raw: string }[] {
+  const out: { page: string; px: number; raw: string }[] = [];
+  const toPx = (n: number, unit: string) => (unit === "px" ? n : n * 16);
+  for (const m of html.matchAll(/font-size\s*:\s*([0-9.]+)(px|rem)/g)) {
+    out.push({ page, px: toPx(Number(m[1]), m[2]), raw: `${m[1]}${m[2]}` });
+  }
+  for (const m of html.matchAll(/(?:^|[;{\s])font\s*:\s*([^;{}]+)/g)) {
+    const size = /(?:^|\s)([0-9.]+)(px|rem)(?=\s*\/|\s|$)/.exec(m[1]);
+    if (size) out.push({ page, px: toPx(Number(size[1]), size[2]), raw: `${size[1]}${size[2]} (font shorthand)` });
+  }
+  return out;
+}
+
+/** The docs pages that ship, read from the directory rather than a fixed list. */
+async function docsPages(): Promise<string[]> {
+  const pages: string[] = [];
+  for await (const entry of Deno.readDir(new URL("../docs/", import.meta.url))) {
+    if (entry.isFile && entry.name.endsWith(".html")) pages.push(entry.name);
+  }
+  return pages.sort();
+}
+
+Deno.test("8mw5l: static docs pages honour the 12px readability floor", async () => {
+  const pages = await docsPages();
+  assert(pages.includes("index.html"), "the docs directory scan must find index.html");
+  for (const page of pages) {
+    const html = await Deno.readTextFile(new URL(`../docs/${page}`, import.meta.url));
+    for (const size of declaredFontSizes(html, page)) {
+      assert(
+        size.px >= 12,
+        `docs/${page} renders text at ${size.raw} (${size.px}px), below the 12px floor — use the page's --step--1 token`,
+      );
+    }
+  }
+});
+
+// The colour half is pinned on index.html, which is what 8mw5l names: it is the
+// only docs page that REDECLARED the whole theme (body background/colour plus a
+// card), so the drift was invisible to every other guard. components.html's
+// off-token gallery header is a separate (smaller) finding, filed rather than
+// folded in here so this pin asserts exactly what was fixed.
+const DOCS_TOKEN_COLOUR_PAGES = ["index.html"];
+
+// A relative size cannot be computed statically, so the ONE relative rule on a
+// docs page that lands under the floor is pinned by its clamp instead: 0.875em
+// of the --step--1 small print is 11.375px, and max() stops it at 12px. The
+// browser measurement (13px for the six fixed sites, 11.375px for inline code)
+// is why this exists — the px/rem rule above cannot see it.
+Deno.test("8mw5l: inline docs code is clamped to the 12px floor, not 0.875em of small print", async () => {
+  const html = await Deno.readTextFile(new URL("../docs/review-2026-08-21.html", import.meta.url));
+  const rule = html.match(/\bcode\s*\{([^}]*)\}/);
+  assert(rule, "docs/review-2026-08-21.html must style code");
+  const size = rule[1].match(/font-size\s*:\s*([^;]+)/);
+  assert(size, "the code rule must set font-size explicitly");
+  assert(
+    /max\(\s*0\.875em\s*,\s*0\.75rem\s*\)/.test(size[1]),
+    `inline code must clamp its relative size to the 0.75rem floor, got "${size[1].trim()}"`,
+  );
+});
+
+Deno.test("8mw5l: static docs pages take their colours from docs/theme.css, never from literals", async () => {
+  for (const page of DOCS_TOKEN_COLOUR_PAGES) {
+    const html = await Deno.readTextFile(new URL(`../docs/${page}`, import.meta.url));
+    // Only the inline <style> can drift from the token scale; an external sheet
+    // is theme.css itself.
+    for (const style of html.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/gi)) {
+      assert(
+        !/light-dark\(/.test(style[1]),
+        `docs/${page} hard-codes a light-dark() colour literal; route it through a docs/theme.css token`,
+      );
+      assert(
+        !/#[0-9a-f]{3,8}\b/i.test(style[1]) && !/\brgba?\(/i.test(style[1]),
+        `docs/${page} hard-codes a colour literal; route it through a docs/theme.css token`,
+      );
+    }
+  }
+});
