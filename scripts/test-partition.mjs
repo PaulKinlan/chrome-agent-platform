@@ -420,6 +420,15 @@ export const EXEMPTIONS = {
   // all writes to extension/ and version files use paths joined under it. The
   // checkout is only read for source copies; no shared build artifact changes.
   "tests/bump-version-sanitize.test.ts": "writes extension/manifest.json and other version surfaces only inside each unique temporary-directory fixture, removed in finally; the checkout is read-only and parallel execution is safe",
+  // a4o1s: the same shape as bump-version-sanitize above, and the detector is
+  // right that the file writes extension/ paths — they are just never the
+  // checkout's. Each fixture is a unique scratch git repository created under
+  // mkdtemp(durableDir("bump-version-landing-range")), the version surfaces and
+  // CHANGELOG are written with paths joined under it, and it is removed in
+  // finally. The only checkout reads are copyFile()s of the stamper, the
+  // changelog syncer, the shared release-note module and the filter it consumes;
+  // no build artifact, no dist, no shared tree write, so parallel is safe.
+  "tests/bump-version-landing-range.test.ts": "writes version surfaces and CHANGELOG only inside a unique scratch git repository under durableDir(), removed in finally; the checkout is read for source copies only and no build artifact is touched",
   // bvj5: flagged twice by the conservative detectors; both hits checked in the file
   // rather than assumed. (1) "names build.mjs" is a READ - the only reference is
   // Deno.readTextFile(build.mjs) as static input, with no Deno.Command, no spawn and
