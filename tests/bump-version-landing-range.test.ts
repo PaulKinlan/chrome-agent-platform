@@ -24,11 +24,12 @@
 
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { spawnSync } from "node:child_process";
-import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdtempSync } from "node:fs";
+import { copyFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { declaresNoUserFacingChange } from "../scripts/lib/release-note.mjs";
+import { durableDir } from "../scripts/lib/durable-root.mjs";
 
 const ROOT = path.join(path.dirname(fileURLToPath(new URL(import.meta.url))), "..");
 const VERSION = "1.2.3";
@@ -48,7 +49,11 @@ function git(dir: string, ...args: string[]): string {
   return result.stdout.trim();
 }
 async function mirror(): Promise<string> {
-  const dir = await mkdtemp(path.join(tmpdir(), "cap-landing-range-"));
+  // Each fixture is a unique scratch git repository under the DURABLE root (the
+  // house convention: no tmpdir/tmpfs allocations), removed in finally. Only
+  // this fixture's own paths are written — see the EXEMPTIONS entry in
+  // scripts/test-partition.mjs.
+  const dir = mkdtempSync(path.join(durableDir("bump-version-landing-range"), "run-"));
   git(dir, "init", "-q");
   git(dir, "config", "user.email", "fixture@example.invalid");
   git(dir, "config", "user.name", "fixture");
@@ -208,6 +213,33 @@ Deno.test("a4o1s: a named candidate's 'none.' still aborts the union (the a4o1s 
     assert(result.status !== 0, `a named 'none.' candidate is still refused: ${result.stderr}`);
     assert(/declares no user-facing change/.test(result.stderr), result.stderr);
     await assertUnstamped(dir);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+Deno.test("a4o1s + g0bfz: a MID-BODY note inside a range is still collected (body view), and the disagreement is named", async () => {
+  const dir = await mirror();
+  try {
+    const base = git(dir, "rev-parse", "HEAD");
+    // The note is real but NOT a trailer block: a paragraph follows it, so git's
+    // own parser sees nothing while the stamp's body scan does (g0bfz, measured
+    // on 0740d9df0). A range must not lose it: the same body view that served
+    // one commit serves every commit in the batch.
+    const made = run(dir, "git", [
+      "commit", "-q", "--allow-empty",
+      "-m", "feat: journal search",
+      "-m", "Release-note: you can search the journal",
+      "-m", "A closing paragraph that is not a trailer, which is what makes the note mid-body.",
+    ]);
+    assertEquals(made.status, 0, made.stderr);
+    const tip = git(dir, "rev-parse", "HEAD");
+    const result = stamp(dir, "--from", `${base}..${tip}`);
+    assertEquals(result.status, 0, result.stderr);
+    assert(sectionBullets(await changelog(dir), "1.2.4").includes("- you can search the journal"),
+      "the mid-body note is collected from the range, not silently dropped");
+    assert(result.stderr.includes("WARNING: candidate"), "the shape disagreement is still reported per commit");
+    assert(result.stderr.includes("git's trailer parser"), "and it names the parser that cannot see it");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
