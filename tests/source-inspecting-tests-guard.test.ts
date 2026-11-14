@@ -155,28 +155,6 @@ const NON_METHOD_KEYWORDS = new Set([
   "function", "class", "const", "let", "var", "export", "import", "with", "super", "this",
 ]);
 
-/** Is `index` a position where a METHOD can be declared? chrome-agent-platform-16o8b/hiv8y/x4ryv.
- *
- *  A method declaration sits either as an object-literal member (the match was anchored on `{` or `,`)
- *  or inside a class body (the nearest enclosing unmatched `{` opens one). A statement is anchored on
- *  `^` or `;` and its enclosing block is a function/if/loop body, not a class. Deciding this from the
- *  CAPTURE's own position — never from whether the file mentions `.if(` somewhere — is what keeps an
- *  unrelated property call from reviving the control-flow false positive (x4ryv). */
-function declarationPosition(code: string, index: number): boolean {
-  const prefix = code[index];
-  if (prefix === "{" || prefix === ",") return true;
-  let depth = 0;
-  for (let i = index - 1; i >= 0; i -= 1) {
-    const ch = code[i];
-    if (ch === "}") depth += 1;
-    else if (ch === "{") {
-      if (depth === 0) return /\bclass\b[^{};]*$/.test(code.slice(Math.max(0, i - 400), i));
-      depth -= 1;
-    }
-  }
-  return false;
-}
-
 export function findUnclassifiedSourceScanners(
   testFiles: { rel: string; code: string }[],
   alwaysOnSet: Set<string>,
@@ -269,7 +247,13 @@ export function findUnclassifiedSourceScanners(
   /** The FIRST ARGUMENT of every call to `name(`, as source text. */
   const firstArgs = (code: string, name: string): string[] => {
     const out: string[] = [];
-    for (const m of code.matchAll(new RegExp(`\\b${name}\\(`, "g"))) {
+    // chrome-agent-platform-16o8b/hiv8y/x4ryv/rya1v: for a KEYWORD-named method the call site is the
+    // only honest discriminator. A method is reached through a receiver (`.name(`); a bare
+    // `if(ROOT) { … }` is control flow, whatever braces it sits in — four rounds of reading the
+    // DECLARATION position got that wrong in a new way each time (statement head, then a class body,
+    // then any `{` including a function block), so the decision now lives where the semantics are.
+    const callSite = NON_METHOD_KEYWORDS.has(name) ? new RegExp(`\\.\\s*${name}\\(`, "g") : new RegExp(`\\b${name}\\(`, "g");
+    for (const m of code.matchAll(callSite)) {
       let depth = 0;
       let buf = "";
       for (let i = m.index + m[0].length; i < code.length; i++) {
@@ -389,7 +373,6 @@ export function findUnclassifiedSourceScanners(
     // method can appear — an object-literal member (`{`/`,` prefix) or a class body (the nearest
     // enclosing unmatched `{` opens one). A bare `if (…) {` at a statement boundary is control flow.
     for (const m of code.matchAll(/(?:^|[{,;])\s*(?:async\s+)?(?:get\s+|set\s+)?([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*\{/gm)) {
-      if (NON_METHOD_KEYWORDS.has(m[1]) && !declarationPosition(code, m.index)) continue;
       add(m[1], bracedBodyFrom(code, code.indexOf("{", m.index + m[0].length - 1)));
     }
     return bodies;
@@ -965,6 +948,30 @@ Deno.test("n2u40: a LOCAL dir-reading helper called with a source root is a scan
     findUnclassifiedSourceScanners([{ rel: "tests/zz-hiv8y-probe.test.ts", code: keywordMethod }], new Set()),
     ["tests/zz-hiv8y-probe.test.ts"],
     "a keyword-named METHOD called as a property is still a source census — the exclusion must not blind it",
+  );
+
+  // rya1v (review of 16o8b round 3): the FIRST character of the match is not the declaration's own
+  // context either — `\s*` spans newlines, so a control-flow `if(ROOT)` on the line after a function's
+  // opening brace is captured with `{` as its anchor and was read as an object-literal member. The
+  // receiver rule is indifferent to where the statement sits.
+  const afterFunctionBrace = [
+    'import * as fs from "node:fs";',
+    'const ROOT = new URL("..", import.meta.url);',
+    'function fixtureCensus() {',
+    '  if(ROOT) { fs.readdirSync(FIXTURES); }',
+    '}',
+    'fixtureCensus();',
+  ].join("\n");
+  assertEquals(
+    findUnclassifiedSourceScanners([{ rel: "tests/zz-rya1v-probe.test.ts", code: afterFunctionBrace }], new Set()),
+    [],
+    "a control-flow read inside a function body is not a method declaration",
+  );
+  // ...and the receiver rule still classifies the real method wherever it is declared.
+  assertEquals(
+    findUnclassifiedSourceScanners([{ rel: "tests/zz-rya1v-method.test.ts", code: keywordMethod }], new Set()),
+    ["tests/zz-rya1v-method.test.ts"],
+    "a keyword-named method reached as h.if(ROOT) is still a census",
   );
 
   // x4ryv (review of 16o8b round 2): the previous discriminator asked whether the FILE calls `.<name>(`
