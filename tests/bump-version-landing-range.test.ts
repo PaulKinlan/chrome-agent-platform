@@ -272,3 +272,38 @@ Deno.test("rfy90: --internal IS the remedy a fully-internal range needs — the 
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+Deno.test("ym066: a range whose commits declare themselves internal IS expressible — none. agrees with --internal", async () => {
+  const dir = await mirror();
+  try {
+    const base = git(dir, "rev-parse", "HEAD");
+    // The reviewer's repro (ym066): one commit carries `Release-note: none.`, the
+    // other carries nothing, and the merger declares both internal. Before this,
+    // the `none.` commit was rejected as "has a Release-note trailer and cannot be
+    // declared --internal" — while the range had just DROPPED that very trailer as
+    // no user-facing change, so the refusal contradicted itself and the advertised
+    // remedy had no working spelling for this batch.
+    const none = commit(dir, "fix: internal", "none.");
+    const plain = commit(dir, "chore: reformat");
+    const range = `${base}..${plain}`;
+    const declared = stamp(dir, "--from", range, "--internal", none, "--internal", plain);
+    assertEquals(declared.status, 0, `a fully-internal range mints nothing: ${declared.stderr}`);
+    assert(declared.stderr.includes("declares no user-facing change"), declared.stderr);
+    await assertUnstamped(dir);
+
+    // The same batch is ALSO expressible without naming the `none.` commit at all:
+    // its own trailer already says it is internal. That is the sharper reading of
+    // the remedy, and it is what a merger who reads the message will try first.
+    const selfDeclared = stamp(dir, "--from", range, "--internal", plain);
+    assertEquals(selfDeclared.status, 0, selfDeclared.stderr);
+    await assertUnstamped(dir);
+
+    // A USER-FACING note plus --internal is still a contradiction (2rfyx/3er9j).
+    const visible = commit(dir, "feat: visible", "you can export conversations");
+    const contradiction = stamp(dir, "--from", `${base}..${visible}`, "--internal", visible);
+    assert(contradiction.status !== 0, `a real note cannot be declared internal: ${contradiction.stderr}`);
+    assert(contradiction.stderr.includes("cannot be declared --internal"), contradiction.stderr);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

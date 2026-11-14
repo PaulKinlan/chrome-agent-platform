@@ -107,6 +107,8 @@ if (landingMode && hookMode) {
 const notes = [];
 const candidates = [];
 const internalRefs = [];
+/** Commits whose only trailers declare no user-facing change (ym066): they agree with --internal. */
+const selfDeclaredInternal = new Set();
 const userNoteGiven = argv.includes("--user-note") || argv.includes("--note");
 function commitSha(value, flag) {
   if (!landingMode || !value || !/^[a-f0-9]{7,64}$/i.test(value)) {
@@ -174,13 +176,24 @@ function fromCandidate(value) {
 function commitBody(sha) {
   return execFileSync("git", ["show", "-s", "--format=%B", sha], { cwd: ROOT, encoding: "utf8" });
 }
+/**
+ * Every note a --from argument brings, WITH the commit it came from and whether
+ * that argument was a range. The drop decision needs the complete --internal set
+ * (ym066), so it is taken after the argv loop — otherwise the result depends on
+ * whether `--internal SHA` happened to be written before or after `--from …`,
+ * which is exactly the kind of order-dependent rule this file has paid for
+ * before (the a4o1s refusal itself).
+ */
+/** argv order is preserved for notes: an explicit --user-note (collected in the loop) stays first, then
+ *  the batch's trailers in commit order — so the primary note never depends on flag order. */
+const fromNotes = [];
 for (let i = 0; i < argv.length; i++) {
   if (argv[i] === "--user-note" || argv[i] === "--note") notes.push(argv[++i]);
   if (argv[i] === "--internal") internalRefs.push(commitSha(argv[++i], "--internal"));
   if (argv[i] === "--from") {
     const candidate = fromCandidate(argv[++i]);
-    const collected = [];
     const trailed = new Set();
+    const userFacingTrailed = new Set();
     for (const sha of candidate.commits) {
       const body = commitBody(sha);
       const trailers = releaseNoteTrailers(body);
@@ -193,24 +206,35 @@ for (let i = 0; i < argv.length; i++) {
         for (const problem of releaseNoteShapeProblems(body)) console.error(`[bump-version] WARNING: candidate ${sha} — ${problem}`);
       }
       if (trailers.length) trailed.add(sha);
-      for (const trailer of trailers) {
-        // a4o1s: inside a RANGE, a commit that declares no user-facing change
-        // suppresses ITS OWN note only. The union-level refusal below still
-        // catches a batch that tries to hide an internal note behind a sibling's
-        // real one — this is about not letting one commit's "none." erase the
-        // five commits under it (the 88b0dc8b6 shape).
-        if (candidate.range && declaresNoUserFacingChange(sanitizeEntry(trailer ?? ""))) {
-          console.error(`[bump-version] candidate ${sha}: "${trailer}" declares no user-facing change — dropped for that commit only`);
-          continue;
-        }
-        if (!collected.includes(trailer)) collected.push(trailer);
-      }
+      const userFacing = trailers.filter((trailer) => !declaresNoUserFacingChange(sanitizeEntry(trailer ?? "")));
+      if (trailers.length && userFacing.length === 0) selfDeclaredInternal.add(sha);
+      if (userFacing.length) userFacingTrailed.add(sha);
+      for (const trailer of trailers) fromNotes.push({ sha, note: trailer, range: Boolean(candidate.range) });
     }
-    candidate.trailers = collected;
+    candidate.trailers = [];
     candidate.trailed = trailed;
+    candidate.userFacingTrailed = userFacingTrailed;
     candidates.push(candidate);
-    notes.push(...collected);
   }
+}
+// a4o1s: a commit that declares no user-facing change suppresses ITS OWN note and
+// nothing else — the union-level refusal below still catches a batch that hides an
+// internal note behind a sibling's real one, and this is what stops one commit's
+// "none." from erasing the five commits under it (the 88b0dc8b6 shape). ym066: a
+// commit the merger DECLARED --internal still gets its `none.` dropped when the
+// declaration and the trailer agree (that is what makes an all-internal range
+// expressible at all).
+const internalSetForNotes = new Set(internalRefs);
+for (const entry of fromNotes) {
+  const selfDeclared = declaresNoUserFacingChange(sanitizeEntry(entry.note ?? ""));
+  const internalDeclared = internalSetForNotes.has(entry.sha);
+  if (selfDeclared && (entry.range || internalDeclared)) {
+    console.error(`[bump-version] candidate ${entry.sha}: "${entry.note}" declares no user-facing change — dropped for that commit only`);
+    continue;
+  }
+  const candidate = candidates.find((candidate) => candidate.commits.includes(entry.sha));
+  if (!candidate.trailers.includes(entry.note)) candidate.trailers.push(entry.note);
+  if (!notes.includes(entry.note)) notes.push(entry.note);
 }
 const fromNoteCount = candidates.reduce((total, candidate) => total + candidate.trailers.length, 0);
 if (landingMode) {
@@ -235,7 +259,11 @@ if (landingMode) {
       process.exit(1);
     }
     for (const member of candidate.commits) {
-      if (internal.has(member) && candidate.trailed.has(member)) {
+      // ym066: the contradiction is between a USER-FACING note and an internal
+      // declaration. A commit whose only trailers declare no user-facing change
+      // agrees with --internal, so it is not a contradiction (2rfyx/3er9j's case —
+      // a real note plus --internal — is still refused).
+      if (internal.has(member) && candidate.userFacingTrailed.has(member)) {
         console.error(`[bump-version] ERROR: candidate ${member} has a Release-note trailer and cannot be declared --internal`);
         process.exit(1);
       }
@@ -260,10 +288,15 @@ if (landingMode) {
   // `--internal`, the union has no user surface, which is the same answer a
   // single internal candidate already gets ("no user-facing note … NOT
   // bumping", exit 0) — a release is not minted for internal-only work.
+  // ym066: a commit that declares itself internal in its own trailer needs no
+  // --internal flag, and MUST NOT be blocked by the contradiction check when it
+  // has one — so "is this commit internal?" means either declaration.
+  const declaresItselfInternal = (sha) => selfDeclaredInternal.has(sha);
   const rangeCommits = candidates.filter((candidate) => candidate.range).flatMap((candidate) => candidate.commits);
-  const internalOnlyBatch = rangeCommits.length > 0 && rangeCommits.every((sha) => internal.has(sha));
+  const internalOnlyBatch = rangeCommits.length > 0 &&
+    rangeCommits.every((sha) => internal.has(sha) || declaresItselfInternal(sha));
   if (candidates.some((candidate) => candidate.range) && fromNoteCount === 0 && !userNoteGiven && !internalOnlyBatch) {
-    const undeclared = rangeCommits.filter((sha) => !internal.has(sha)).length;
+    const undeclared = rangeCommits.filter((sha) => !internal.has(sha) && !declaresItselfInternal(sha)).length;
     console.error(
       "[bump-version] ERROR: no --from range collected a Release-note trailer, so this landing would be " +
       `stamped "none". Refusing: say what the user gets with --user-note "<what the user gets>"; if the whole ` +
