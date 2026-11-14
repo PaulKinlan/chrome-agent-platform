@@ -1419,37 +1419,33 @@ export function planSelection({
   const guardRequirements = changed.flatMap((file) =>
     guardsForChangedFile(file, { dedicated: dedicatedGuards, html: htmlGuards }).map((guard) => ({ file, guard })));
 
-  // chrome-agent-platform-wwgnm round 2 (coord acceptance 1): NO SILENCE. A changed
-  // PRODUCT file with neither a registered guard nor a declaration is named and the
-  // plan refuses: an unmapped product file is exactly how an ntp.js delta once selected
-  // one of its three suites with the gate green. Declared files are answered (their
-  // reason is in the table) — only the UNDECLARED case refuses, by name.
-  const unmappedProduct = changed.filter((file) =>
-    (file.startsWith("extension/") || file.startsWith("scripts/")) &&
-    !file.endsWith(".md") &&
-    !file.endsWith(".html") &&
-    (dedicatedGuards[file] ?? htmlGuards[file]) === undefined &&
-    declaredNoGuard[file] === undefined &&
-    !isSelectorInfrastructure(file)
-  );
-  if (unmappedProduct.length) {
-    return {
-      kind: "full",
-      files: null,
-      changed,
-      reverse,
-      uncovered,
-      mapped,
-      unmappable: unmappedProduct.map((file) => ({
-        file,
-        kind: "policy",
-        mechanism: "no dedicated-guard entry and no declared reason — register the suite that polices it (DEDICATED_FILE_GUARDS) or declare why none does (DECLARED_NO_GUARD), in changed-file-mapping.mjs",
-      })),
-      notices,
-      lockfileDelta: lockfile?.ledger ?? [],
-      failClosedHeader: "select-tests: FAIL CLOSED — changed product file(s) with no guard binding and no declaration (chrome-agent-platform-wwgnm):",
-      reason: "changed product file(s) unmapped and undeclared",
-    };
+  // chrome-agent-platform-wwgnm round 2 (coord acceptance 1), REFINED by chrome-agent-platform-
+  // 853x8: NO SILENCE without a throughput tax. The r2 refusal fired on REGISTRY STATE (no
+  // entry, no declaration), which escalated 469 import-reachable product files — and mapped-by-
+  // classification files (wasm manifests, SBOMs, licenses) and passive assets — to the FULL
+  // suite: "the fast tier no longer certifies product deltas". It is GONE. Silence has only one
+  // honest shape — a changed file NOTHING runs for — and that is exactly the unmappable refusal
+  // above (no import edge, no classification mapping: named, fail-closed, pre-existing). What r2
+  // actually wanted for the covered class is visibility, not refusal: a covered-but-unpoliced
+  // delta stays a certifiable subset and is NAMED here, at plan time, every time.
+  const uncoveredSet = new Set(uncovered);
+  const mappedFiles = new Set(mapped.map((row) => row.file));
+  for (const file of changed) {
+    if (
+      (file.startsWith("extension/") || file.startsWith("scripts/")) &&
+      !file.endsWith(".md") &&
+      !file.endsWith(".html") &&
+      !isPassiveContentFile(file) &&
+      (dedicatedGuards[file] ?? htmlGuards[file]) === undefined &&
+      declaredNoGuard[file] === undefined &&
+      !isSelectorInfrastructure(file) &&
+      !mappedFiles.has(file) &&
+      !uncoveredSet.has(file)
+    ) {
+      notices.push(
+        `select-tests: ${file} has import-edge coverage but no dedicated guard and no declaration — the registry stays deliberate (entries are claims, not preconditions), so this delta is certified by its reachable suites (chrome-agent-platform-853x8).`,
+      );
+    }
   }
   const unresolvableGuard = guardRequirements.find(({ guard }) => !existsSync(join(ROOT, guard)));
   if (unresolvableGuard) {

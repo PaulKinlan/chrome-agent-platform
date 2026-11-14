@@ -77,6 +77,15 @@ export const WASM_MANIFEST_GUARDS = Object.freeze([
   "tests/wasm-catalogue-status-truth.test.ts",
 ]);
 
+/** chrome-agent-platform-853x8: the default-locale catalogue's policing suite. i18n-foundation
+ * validates _locales/en/messages.json (parse, catalogue shape, manifest.default_locale, and the
+ * byte-identical embedded-fallback drift guard) but reaches it by a URL path read, which the
+ * import graph cannot count — the classification is the deliberate binding, exactly like the
+ * wasm data files below (en is the only locale in the tree). */
+export const LOCALE_CATALOGUE_GUARDS = Object.freeze([
+  "tests/i18n-foundation.test.ts",
+]);
+
 /** Tests that inspect and validate the extension/wasm/sbom/ directory. */
 export const WASM_SBOM_GUARDS = Object.freeze([
   "tests/wasm-package-authority-static.test.ts",
@@ -459,6 +468,15 @@ export function classifyUncovered(rel, { referrers = [] } = {}) {
         "extension/wasm/manifests/ manifest validated by bundled-tool-packages, " +
         "wasm-manifest-assets, and authority static guards (plus referring tests)",
       tests,
+    };
+  }
+  if (/^extension[\\/]_locales[\\/][^\\/]+[\\/]messages\.json$/.test(path)) {
+    return {
+      mechanism:
+        "locale catalogue validated by tests/i18n-foundation.test.ts (parse, catalogue " +
+        "shape, manifest.default_locale, byte-identical embedded-fallback drift guard) " +
+        "via a URL path read the import graph cannot count (chrome-agent-platform-853x8)",
+      tests: [...new Set([...referrers, ...LOCALE_CATALOGUE_GUARDS])],
     };
   }
   if (isWasmSbom(path)) {
