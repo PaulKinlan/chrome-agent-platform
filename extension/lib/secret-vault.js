@@ -59,6 +59,23 @@ const SALT_LOCK_TTL_MS = 5_000;
 const KEY_ID_PATTERN = /^[A-Z][A-Z0-9_]*$/;
 const PBKDF2_ITERATIONS = 210_000;
 const SCHEME = "AES-GCM-256/PBKDF2-extension-bound";
+/** The SEALED scheme (chrome-agent-platform-zxo4i): the same AEAD, but the key
+ * is derived from an OWNER PASSPHRASE, not from material that ships in (or
+ * beside) the ciphertext. Only these records are encrypted at rest in the sense
+ * the module header reserves; SCHEME records are the legacy obfuscation path. */
+const SCHEME_SEALED = "AES-GCM-256/PBKDF2-owner-passphrase";
+/** The seal record: its presence is what makes a vault "sealed", and its
+ * `migrated` flag is what lets an interrupted migration resume instead of
+ * stranding records under a key nothing can reach. */
+const SEAL_KEY = "cap:vault:seal";
+/** Passphrase KDF cost. Higher than the legacy derivation because a passphrase
+ * is the ONLY secret here and offline guessing is the attack. */
+const PASSPHRASE_ITERATIONS = 600_000;
+const PASSPHRASE_MIN_LENGTH = 8;
+const VERIFIER_TEXT = "cap.vault.passphrase.verifier.v1";
+/** The storage.session key the service worker wires as the passphrase store
+ * (memory-only, cleared at browser exit — a restart RELOCKS the vault). */
+export const VAULT_UNLOCK_SESSION_KEY = "cap:vault:unlock";
 
 /**
  * The brand for the service-worker access token. Module-private on purpose: a
@@ -190,12 +207,36 @@ async function releaseLock(storageArea, owner) {
   await storageArea.remove(SALT_LOCK_KEY);
 }
 
-/** The vault. Construct with createSecretVault — the async open derives the
- * extension-bound key once. */
-/**
- * @param {{ storageArea: any, extensionId: string, installSaltB64?: string }} opts
+/** A named vault failure. Route layers translate `code`; the message never
+ * carries a passphrase, a key id's value, or a decrypted fragment. */
+function vaultError(code, message) {
+  const err = new Error(message);
+  err.code = code;
+  return err;
+}
+
+/** The vault. Construct with createSecretVault.
+ *
+ * Key resolution is LAZY and per-operation rather than derived once at open,
+ * because the seal state can change while this instance lives (the owner sets a
+ * passphrase in Settings) and because a sealed vault must be able to refuse
+ * every read while it is locked.
+ *
+ * @param {{
+ *   storageArea: any,
+ *   extensionId: string,
+ *   installSaltB64?: string,
+ *   passphrase?: string | null,
+ *   passphraseStore?: { get?: Function, set?: Function, clear?: Function } | null,
+ * }} opts
  */
-export async function createSecretVault({ storageArea, extensionId, installSaltB64 = null } = {}) {
+export async function createSecretVault({
+  storageArea,
+  extensionId,
+  installSaltB64 = null,
+  passphrase = null,
+  passphraseStore = null,
+} = {}) {
   if (!storageArea || typeof storageArea.get !== "function" || typeof storageArea.set !== "function") {
     throw new TypeError("secret vault requires a chrome.storage.local-shaped storageArea");
   }
@@ -210,20 +251,129 @@ export async function createSecretVault({ storageArea, extensionId, installSaltB
   // profile (the id is public, the salt is stored beside the ciphertext), which
   // is exactly the limit the module header states: whoever holds the storage
   // area can rebuild this key offline (hy0v0). Do not describe this as secrecy.
-  const baseKey = await crypto.subtle.importKey(
-    "raw",
-    ENCODER.encode(`${extensionId}:${saltB64}`),
-    "PBKDF2",
-    false,
-    ["deriveKey"],
-  );
-  const aesKey = await crypto.subtle.deriveKey(
-    { name: "PBKDF2", salt: unb64(saltB64), iterations: PBKDF2_ITERATIONS, hash: "SHA-256" },
-    baseKey,
-    { name: "AES-GCM", length: 256 },
-    false, // non-extractable: the key cannot be serialized out of the worker
-    ["encrypt", "decrypt"],
-  );
+  let legacyKeyCache = null;
+  /** The LEGACY key: derived from the public extension id + the salt stored
+   * beside the ciphertext. Not a secret (hy0v0) — it exists only so vaults
+   * written before the passphrase lock can be read and re-sealed. */
+  async function legacyKey() {
+    if (legacyKeyCache) return legacyKeyCache;
+    const baseKey = await crypto.subtle.importKey(
+      "raw",
+      ENCODER.encode(`${extensionId}:${saltB64}`),
+      "PBKDF2",
+      false,
+      ["deriveKey"],
+    );
+    legacyKeyCache = await crypto.subtle.deriveKey(
+      { name: "PBKDF2", salt: unb64(saltB64), iterations: PBKDF2_ITERATIONS, hash: "SHA-256" },
+      baseKey,
+      { name: "AES-GCM", length: 256 },
+      false, // non-extractable: the key cannot be serialized out of the worker
+      ["encrypt", "decrypt"],
+    );
+    return legacyKeyCache;
+  }
+
+  /** The in-memory passphrase for this vault instance. Never persisted here:
+   * the caller may wire a store (the service worker uses chrome.storage.session,
+   * which is memory-only and cleared at browser exit). */
+  const session = {
+    passphrase: typeof passphrase === "string" && passphrase.length > 0 ? passphrase : null,
+  };
+
+  async function readSeal() {
+    const got = await storageArea.get(SEAL_KEY);
+    const seal = got?.[SEAL_KEY];
+    if (!seal || seal.scheme !== SCHEME_SEALED || typeof seal.kdfSalt !== "string") return null;
+    if (!seal.verifier || typeof seal.verifier.iv !== "string" || typeof seal.verifier.ct !== "string") return null;
+    return seal;
+  }
+
+  async function deriveSealedKey(pass, seal) {
+    const base = await crypto.subtle.importKey(
+      "raw",
+      ENCODER.encode(`cap.vault.owner.passphrase:${pass}`),
+      "PBKDF2",
+      false,
+      ["deriveKey"],
+    );
+    return crypto.subtle.deriveKey(
+      {
+        name: "PBKDF2",
+        salt: unb64(seal.kdfSalt),
+        iterations: seal.iterations ?? PASSPHRASE_ITERATIONS,
+        hash: "SHA-256",
+      },
+      base,
+      { name: "AES-GCM", length: 256 },
+      false,
+      ["encrypt", "decrypt"],
+    );
+  }
+
+  /** Unlock test that does not depend on any stored secret record: decrypt a
+   * fixed sentinel under the derived key. A wrong passphrase fails here, BEFORE
+   * any record is touched, which is what makes "wrong passphrase destroys
+   * nothing" testable rather than promised. */
+  async function sealVerifier(key) {
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const ct = await crypto.subtle.encrypt(
+      { name: "AES-GCM", iv, additionalData: ENCODER.encode(SEAL_KEY) },
+      key,
+      ENCODER.encode(VERIFIER_TEXT),
+    );
+    return { iv: b64(iv), ct: b64(new Uint8Array(ct)) };
+  }
+
+  async function verifierOpens(key, seal) {
+    try {
+      const plain = await crypto.subtle.decrypt(
+        { name: "AES-GCM", iv: unb64(seal.verifier.iv), additionalData: ENCODER.encode(SEAL_KEY) },
+        key,
+        unb64(seal.verifier.ct),
+      );
+      return DECODER.decode(plain) === VERIFIER_TEXT;
+    } catch {
+      return false;
+    }
+  }
+
+  async function storedPassphrase() {
+    if (session.passphrase) return session.passphrase;
+    if (typeof passphraseStore?.get === "function") {
+      const stored = await passphraseStore.get().catch(() => null);
+      if (typeof stored === "string" && stored.length > 0) return stored;
+    }
+    return null;
+  }
+
+  /** Resolve what this vault can do RIGHT NOW.
+   *  - obfuscation: no seal record — the legacy key (public-by-copy) reads/writes.
+   *  - sealed: seal + a passphrase that passes the verifier — real at-rest keys.
+   *  - locked: seal present but no usable passphrase — every record read refuses.
+   */
+  async function resolveKeys() {
+    const seal = await readSeal();
+    if (!seal) return { mode: "obfuscation", seal: null, key: await legacyKey() };
+    const pass = await storedPassphrase();
+    if (!pass) return { mode: "locked", seal, key: null, reason: "no_passphrase" };
+    const key = await deriveSealedKey(pass, seal);
+    if (!(await verifierOpens(key, seal))) {
+      return { mode: "locked", seal, key: null, reason: "wrong_passphrase" };
+    }
+    return { mode: "sealed", seal, key };
+  }
+
+  function requireWritable(resolved) {
+    if (resolved.mode === "sealed") return { key: resolved.key, scheme: SCHEME_SEALED };
+    if (resolved.mode === "obfuscation") return { key: resolved.key, scheme: SCHEME };
+    throw vaultError(
+      "vault_locked",
+      resolved.reason === "wrong_passphrase"
+        ? "the vault is locked: the stored passphrase does not open it — unlock it in Settings"
+        : "the vault is locked: unlock it with the vault passphrase before storing or reading secrets",
+    );
+  }
 
   const registerRawRead = (access, caller, what) => {
     assertSwCaller(caller, what);
@@ -244,11 +394,11 @@ export async function createSecretVault({ storageArea, extensionId, installSaltB
   async function loadRecord(keyId) {
     const got = await storageArea.get(recordKey(keyId));
     const record = got?.[recordKey(keyId)];
-    if (!record || record.scheme !== SCHEME) return null;
+    if (!record || (record.scheme !== SCHEME && record.scheme !== SCHEME_SEALED)) return null;
     return record;
   }
 
-  async function encryptToRecord(keyId, value, previous) {
+  async function encryptToRecord(keyId, value, previous, { key, scheme }) {
     const iv = crypto.getRandomValues(new Uint8Array(12));
     // The key id is authenticated as additionalData: a record's {iv, ct}
     // cannot be swapped into another id's slot and still decrypt
@@ -256,12 +406,12 @@ export async function createSecretVault({ storageArea, extensionId, installSaltB
     const aad = ENCODER.encode(recordKey(keyId));
     const ct = await crypto.subtle.encrypt(
       { name: "AES-GCM", iv, additionalData: aad },
-      aesKey,
+      key,
       ENCODER.encode(value),
     );
     const now = Date.now();
     return {
-      scheme: SCHEME,
+      scheme,
       v: 1,
       iv: b64(iv),
       ct: b64(new Uint8Array(ct)),
@@ -271,17 +421,154 @@ export async function createSecretVault({ storageArea, extensionId, installSaltB
     };
   }
 
-  async function decryptRecord(keyId, record) {
+  async function decryptRecord(keyId, record, key) {
     const plain = await crypto.subtle.decrypt(
       { name: "AES-GCM", iv: unb64(record.iv), additionalData: ENCODER.encode(recordKey(keyId)) },
-      aesKey,
+      key,
       unb64(record.ct),
     );
     return DECODER.decode(plain);
   }
 
+  /** Which key opens THIS record, or a named refusal. The scheme decides, never
+   * the caller: a legacy record is only ever opened while the seal exists purely
+   * to migrate it (`migrated !== true`), and a sealed record is never opened by
+   * the legacy key. */
+  async function keyForRecord(record, resolved) {
+    if (record.scheme === SCHEME_SEALED) {
+      if (resolved.mode === "sealed") return resolved.key;
+      throw vaultError("vault_locked", "this record is sealed with a vault passphrase — unlock the vault in Settings");
+    }
+    // legacy record
+    if (resolved.mode === "obfuscation") return resolved.key;
+    if (resolved.mode === "sealed" && resolved.seal?.migrated !== true) return await legacyKey();
+    throw vaultError(
+      "legacy_record_unsealed",
+      "this record predates the vault passphrase and was never re-sealed — enabling the lock again resumes the migration",
+    );
+  }
+
+  async function listVaultRecords() {
+    const all = await storageArea.get(null);
+    return Object.entries(all || {})
+      .filter(([key, record]) => key.startsWith(VAULT_PREFIX) && (record?.scheme === SCHEME || record?.scheme === SCHEME_SEALED))
+      .map(([key, record]) => ({ key, keyId: key.slice(VAULT_PREFIX.length), record }));
+  }
+
   return {
     scheme: SCHEME,
+    sealedScheme: SCHEME_SEALED,
+
+    /** What the vault can do right now, for the Settings panel and the proxy.
+     * `encryptedAtRest` is TRUE only while sealed — the panel must render the
+     * obfuscation/locked states from THIS, not from its own copy. */
+    async protection() {
+      const resolved = await resolveKeys();
+      const records = await listVaultRecords();
+      return {
+        state: resolved.mode, // obfuscation | sealed | locked
+        encryptedAtRest: resolved.mode === "sealed",
+        lockedReason: resolved.mode === "locked" ? resolved.reason : null,
+        sealedAt: resolved.seal?.sealedAt ?? null,
+        migrationPending: Boolean(resolved.seal && resolved.seal.migrated !== true),
+        legacyRecords: records.filter(({ record }) => record.scheme === SCHEME).length,
+        sealedRecords: records.filter(({ record }) => record.scheme === SCHEME_SEALED).length,
+      };
+    },
+
+    /** Install the owner passphrase lock, re-sealing every legacy record IN
+     * PLACE (no re-entry, no data loss) — chrome-agent-platform-zxo4i.
+     *
+     * Crash-safety is ordered, not promised: the seal record is written first
+     * with `migrated:false` (legacy records stay readable through `keyForRecord`
+     * because the seal exists to migrate them), each record is re-sealed with a
+     * single write, and `migrated:true` is written LAST. An interrupted run can
+     * therefore be resumed by calling this again with the SAME passphrase. */
+    async enableLock(pass) {
+      if (typeof pass !== "string" || pass.length < PASSPHRASE_MIN_LENGTH) {
+        throw vaultError("passphrase_too_short", `a vault passphrase must be at least ${PASSPHRASE_MIN_LENGTH} characters`);
+      }
+      const existing = await readSeal();
+      if (existing?.migrated === true) {
+        throw vaultError("already_sealed", "the vault already has a passphrase lock");
+      }
+
+      let seal = existing;
+      let key;
+      if (!seal) {
+        const kdfSalt = b64(crypto.getRandomValues(new Uint8Array(32)));
+        const draft = { scheme: SCHEME_SEALED, v: 1, kdfSalt, iterations: PASSPHRASE_ITERATIONS };
+        key = await deriveSealedKey(pass, draft);
+        seal = {
+          ...draft,
+          verifier: await sealVerifier(key),
+          migrated: false,
+          sealedAt: Date.now(),
+        };
+        await storageArea.set({ [SEAL_KEY]: seal });
+      } else {
+        key = await deriveSealedKey(pass, seal);
+        if (!(await verifierOpens(key, seal))) {
+          throw vaultError("wrong_passphrase", "this vault's seal was started with a different passphrase — resume it with that one");
+        }
+      }
+
+      // Decrypt EVERYTHING before writing ANYTHING: a record that cannot be read
+      // aborts the migration with the vault still fully openable.
+      const legacy = (await listVaultRecords()).filter(({ record }) => record.scheme === SCHEME);
+      const legacyKeyValue = await legacyKey();
+      const plaintexts = [];
+      for (const { keyId, record } of legacy) {
+        try {
+          plaintexts.push({ keyId, record, value: await decryptRecord(keyId, record, legacyKeyValue) });
+        } catch {
+          throw vaultError(
+            "migration_aborted",
+            `secret vault: the record for ${keyId} could not be read, so nothing was re-sealed — the vault is unchanged`,
+          );
+        }
+      }
+
+      for (const { keyId, record, value } of plaintexts) {
+        const next = await encryptToRecord(keyId, value, record, { key, scheme: SCHEME_SEALED });
+        // Re-sealing is not a rotation: counters and timestamps are preserved.
+        next.rotations = record.rotations ?? 0;
+        next.configuredAt = record.configuredAt ?? next.configuredAt;
+        next.lastUsed = record.lastUsed ?? 0;
+        await storageArea.set({ [recordKey(keyId)]: next });
+      }
+
+      await storageArea.set({ [SEAL_KEY]: { ...seal, migrated: true } });
+      session.passphrase = pass;
+      if (typeof passphraseStore?.set === "function") await passphraseStore.set(pass);
+      return { ok: true, state: "sealed", resealed: plaintexts.length };
+    },
+
+    /** Unlock a sealed vault for this process. A wrong passphrase fails at the
+     * verifier before any record is touched. */
+    async unlock(pass) {
+      const seal = await readSeal();
+      if (!seal) throw vaultError("not_sealed", "this vault has no passphrase lock, so there is nothing to unlock");
+      if (typeof pass !== "string" || pass.length === 0) {
+        throw vaultError("wrong_passphrase", "a vault passphrase is required to unlock a sealed vault");
+      }
+      const key = await deriveSealedKey(pass, seal);
+      if (!(await verifierOpens(key, seal))) {
+        throw vaultError("wrong_passphrase", "the vault passphrase does not match this vault — nothing was changed");
+      }
+      session.passphrase = pass;
+      if (typeof passphraseStore?.set === "function") await passphraseStore.set(pass);
+      return { ok: true, state: "sealed", migrationPending: seal.migrated !== true };
+    },
+
+    /** Forget the passphrase for this process (a browser restart does this for
+     * the service worker because the store is chrome.storage.session). */
+    async relock() {
+      session.passphrase = null;
+      if (typeof passphraseStore?.clear === "function") await passphraseStore.clear();
+      const seal = await readSeal();
+      return { ok: true, state: seal ? "locked" : "obfuscation" };
+    },
 
     /** Store (or overwrite) a secret. Mutations are service-worker authority. */
     async setSecret(keyId, value, { by } = {}) {
@@ -292,8 +579,9 @@ export async function createSecretVault({ storageArea, extensionId, installSaltB
       if (typeof value !== "string" || value.length === 0) {
         throw new TypeError("secret vault values must be non-empty strings");
       }
+      const writer = requireWritable(await resolveKeys());
       const previous = await loadRecord(keyId);
-      const record = await encryptToRecord(keyId, value, previous);
+      const record = await encryptToRecord(keyId, value, previous, writer);
       record.rotations = previous?.rotations ?? 0;
       await storageArea.set({ [recordKey(keyId)]: record });
       return { keyId, configured: true };
@@ -303,9 +591,10 @@ export async function createSecretVault({ storageArea, extensionId, installSaltB
      * cannot mint a new record. */
     async rotateSecret(keyId, value, { by } = {}) {
       assertSwCaller(by, "rotating a secret");
+      const writer = requireWritable(await resolveKeys());
       const previous = await loadRecord(keyId);
       if (!previous) throw new Error(`secret vault: ${keyId} is not configured — nothing to rotate`);
-      const record = await encryptToRecord(keyId, value, previous);
+      const record = await encryptToRecord(keyId, value, previous, writer);
       await storageArea.set({ [recordKey(keyId)]: record });
       return { keyId, rotated: true, rotations: record.rotations };
     },
@@ -319,8 +608,10 @@ export async function createSecretVault({ storageArea, extensionId, installSaltB
       }
       const record = await loadRecord(keyId);
       if (!record) throw new Error(`secret vault: ${keyId} is not configured`);
+      const resolved = await resolveKeys();
+      const recordKeyMaterial = await keyForRecord(record, resolved);
       try {
-        const value = await decryptRecord(keyId, record);
+        const value = await decryptRecord(keyId, record, recordKeyMaterial);
         const touched = { ...record, lastUsed: Date.now() };
         await storageArea.set({ [recordKey(keyId)]: touched });
         return { keyId, value, lastUsed: touched.lastUsed };
@@ -336,17 +627,21 @@ export async function createSecretVault({ storageArea, extensionId, installSaltB
       if (caller !== "ui" && caller !== "sw") {
         throw new Error(`masked projections are ui-or-service-worker surface; refused for ${String(caller ?? "unspecified")}`);
       }
+      const resolved = await resolveKeys();
       const all = await storageArea.get(null);
       const out = [];
+      const maskedFallback = resolved.mode === "locked" ? "…(locked)" : "…(unsealed)";
       for (const [key, record] of Object.entries(all || {})) {
         if (!key.startsWith(VAULT_PREFIX)) continue;
         const keyId = key.slice(VAULT_PREFIX.length);
-        if (!record || record.scheme !== SCHEME) continue;
+        if (!record || (record.scheme !== SCHEME && record.scheme !== SCHEME_SEALED)) continue;
         let tail = "";
         try {
-          tail = maskValue(await decryptRecord(keyId, record));
+          tail = maskValue(await decryptRecord(keyId, record, await keyForRecord(record, resolved)));
         } catch {
-          tail = "…(integrity)";
+          // A locked vault still reports WHICH ids exist (metadata is not a
+          // secret); it never reports a value, and it says why it cannot.
+          tail = record.scheme === SCHEME_SEALED || resolved.mode === "locked" ? maskedFallback : "…(integrity)";
         }
         out.push({
           keyId,
