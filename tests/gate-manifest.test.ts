@@ -7,6 +7,7 @@
 // "unreadable green" that made 146 cached PASS records undecidable and blocks the strict consumer
 // (coord, 2026-10-14: producer-first sequencing).
 import { assert, assertEquals, assertStringIncludes, assertThrows } from "jsr:@std/assert@1";
+import { guardsForChangedFile } from "../scripts/lib/changed-file-mapping.mjs";
 import {
   BUILD_GATE_DEFERRAL_SUFFIX,
   FLEET_MANIFEST_GRAPHS,
@@ -548,6 +549,60 @@ Deno.test("fhh50 ledger: repo metadata is not-applicable, agent tooling is unmap
     !written.some((line) => line.includes(".beads/issues.jsonl")),
     "declared metadata is exempt, so it must not be reported as unmapped",
   );
+});
+
+Deno.test("fjnkl: a DECLARED guard maps an unreachable file — and a guard that did not run stays a gap", () => {
+  // The canonical case is a harness a test SPAWNS BY PATH: no import edge can exist, so `candidates` is
+  // empty for it by construction and the selector lists it as unmappable. DEDICATED_FILE_GUARDS exists
+  // for exactly that file, and h346c forces its guard into the selection for every changed file — so if
+  // the guard RAN, the file is policed and the ledger must say so. Before this, the receipt printed
+  // "unmapped" on a green run in which the guard had executed (measured on chrome-agent-platform-2syam,
+  // whose six wired journeys include a spawned harness).
+  // A declared-guard file with no import edge into its guard: the write primitive is driven as DATA by
+  // the sweep that enforces its rule, so it is unmappable by graph and mapped by declaration. (The
+  // spawned-harness case from chrome-agent-platform-2syam is the same shape.)
+  const file = "scripts/lib/best-effort-write.mjs";
+  const guard = "tests/best-effort-write-guard.test.ts";
+  // Assert the fixture is real rather than invented: the table must actually declare that guard.
+  assert(guardsForChangedFile(file).includes(guard), `${file} must be declared against ${guard} in DEDICATED_FILE_GUARDS`);
+
+  const base = {
+    changed: [file],
+    candidates: {}, // a spawned harness is import-unreachable by construction
+    unmappable: [{ file, mechanism: "no executable inspecting suite is reachable from this changed path" }],
+  };
+
+  // (a) the declared guard EXECUTED -> mapped, and it names the suite that policed the file.
+  const mapped = explainChangedFileMapping({ ...base, executedSuites: [guard], runExitCode: 0 });
+  assertEquals(mapped[0].status, "mapped", "a declared guard that ran is coverage, not a gap");
+  assertEquals(mapped[0].executed_suites, [guard]);
+  assert(mapped[0].reason.includes("dedicated guard executed"), `the reason must say why it counts: ${mapped[0].reason}`);
+
+  // (b) the guard did NOT run -> still a GAP, and the reason names the guard that should have.
+  const gap = explainChangedFileMapping({ ...base, executedSuites: [], runExitCode: 0 });
+  assertEquals(gap[0].status, "unmapped", "a declared-but-unexecuted guard is a gap, never a pass");
+  assert(gap[0].reason.includes(guard), `the gap must name the guard: ${gap[0].reason}`);
+
+  // (c) a POLICY refusal is never overridden, even when a declared guard DID run: the selector's own
+  // machinery (and an uncertifiable lockfile delta) cannot be certified by a suite it selected. The
+  // fixture uses a guard-bearing file on purpose — the first version of this leg used the mapping table
+  // itself, which owns NO guard, so it stayed green with the precedence check removed (measured: the
+  // mutant survived). A leg that cannot fail is not a pin.
+  const policy = explainChangedFileMapping({
+    changed: [file],
+    candidates: {},
+    unmappable: [{ file, mechanism: "the test selector's own machinery", kind: "policy" }],
+    executedSuites: [guard],
+    runExitCode: 0,
+  });
+  assertEquals(policy[0].status, "fail-closed", "policy outranks a declared guard, even one that ran");
+
+  // (d) a FAILED run claims nothing. The caller already empties executedSuites on a red run (ea2qv), so
+  // the interesting case is the defensive one: an rc=1 receipt that still lists the guard must NOT be
+  // read as coverage (the first version of this leg passed [] and so stayed green with the check
+  // removed — measured).
+  const red = explainChangedFileMapping({ ...base, executedSuites: [guard], runExitCode: 1 });
+  assertEquals(red[0].status, "unmapped", "a red run certifies no coverage, whatever the suite list says");
 });
 
 // chrome-agent-platform-j677e: the fleet-shaped terminal receipt. The wire contract belongs to
