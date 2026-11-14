@@ -207,7 +207,11 @@
 
   code {
     font-family: var(--mono);
-    font-size: 0.875em;
+    /* 8mw5l: 0.875em of the --step--1 small print is 11.375px, i.e. inline
+       file paths and selectors in prose also fell under the 12px floor. The
+       clamp keeps the proportional ratio wherever it clears the floor and
+       stops at 0.75rem (12px) where it would not. */
+    font-size: max(0.875em, 0.75rem);
     background: var(--surface-2);
     border: 1px solid var(--hair);
     border-radius: 3px;

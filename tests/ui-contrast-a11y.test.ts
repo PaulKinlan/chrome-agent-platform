@@ -936,6 +936,23 @@ Deno.test("8mw5l: static docs pages honour the 12px readability floor", async ()
 // folded in here so this pin asserts exactly what was fixed.
 const DOCS_TOKEN_COLOUR_PAGES = ["index.html"];
 
+// A relative size cannot be computed statically, so the ONE relative rule on a
+// docs page that lands under the floor is pinned by its clamp instead: 0.875em
+// of the --step--1 small print is 11.375px, and max() stops it at 12px. The
+// browser measurement (13px for the six fixed sites, 11.375px for inline code)
+// is why this exists — the px/rem rule above cannot see it.
+Deno.test("8mw5l: inline docs code is clamped to the 12px floor, not 0.875em of small print", async () => {
+  const html = await Deno.readTextFile(new URL("../docs/review-2026-08-21.html", import.meta.url));
+  const rule = html.match(/\bcode\s*\{([^}]*)\}/);
+  assert(rule, "docs/review-2026-08-21.html must style code");
+  const size = rule[1].match(/font-size\s*:\s*([^;]+)/);
+  assert(size, "the code rule must set font-size explicitly");
+  assert(
+    /max\(\s*0\.875em\s*,\s*0\.75rem\s*\)/.test(size[1]),
+    `inline code must clamp its relative size to the 0.75rem floor, got "${size[1].trim()}"`,
+  );
+});
+
 Deno.test("8mw5l: static docs pages take their colours from docs/theme.css, never from literals", async () => {
   for (const page of DOCS_TOKEN_COLOUR_PAGES) {
     const html = await Deno.readTextFile(new URL(`../docs/${page}`, import.meta.url));
