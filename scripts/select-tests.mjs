@@ -956,6 +956,12 @@ export function testFilesWithContent({ reload = false } = {}) {
  *
  * Basename matching basis:
  * - A filename <10 chars is too generic to serve as evidence of consumption.
+ * - Basenames match for scripts/, tests/fixtures/, and .agents/ paths. The .agents/
+ *   rule exists because skill tooling is referenced through path.join(COMPUTED_DIR,
+ *   "<basename>") — the full literal path never appears in the suite's text, so a
+ *   path-only match found nothing and a change to a DRIVEN script fell back to the
+ *   FULL suite (chrome-agent-platform-100zg: live-browser-dom.js + live-browser.js,
+ *   pinned behaviourally by the impeccable cache suites, ran 782 suites ~362s).
  * - The tests/fixtures/artifact-tx-4eaf0d34/ snapshot carries generic module names
  *   ('README.md', 'memory.js', 'artifacts.js', 'kv.js') that would match completely
  *   unrelated tests if matched by basename. Those fixtures map by literal path only.
@@ -967,7 +973,9 @@ export function referrersFor(rel, { reload = false } = {}) {
     candidates.push(normalized.slice("tests/".length));
   }
   const base = normalized.split("/").pop();
-  if (normalized.startsWith("scripts/") && base && base.length >= 10) {
+  // chrome-agent-platform-100zg: .agents/ joins the scripts/ basename rule — skill tooling
+  // is named by tests via path.join(SCRIPTS_DIR, "<basename>"), never by full literal path.
+  if ((normalized.startsWith("scripts/") || normalized.startsWith(".agents/")) && base && base.length >= 10) {
     candidates.push(base);
   }
   if (

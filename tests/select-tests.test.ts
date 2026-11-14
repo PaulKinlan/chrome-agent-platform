@@ -176,7 +176,10 @@ Deno.test("zwpp9: the gate ledger names the quiet-box omission, not the generic 
 // path, so a literal path in this file would make the test itself the coverage for the file it is
 // asserting has none. The fragments keep this suite out of its own fixture.
 const TOOLING_REFERENCED = [".agents", "skills", "impeccable", "scripts", "context.mjs"].join("/");
-const TOOLING_UNREFERENCED = [".agents", "skills", "impeccable", "scripts", "live-wrap.mjs"].join("/");
+// The basename is fragmented as well as the path: referrersFor() matches .agents/ paths by
+// basename (100zg), so spelling the fixture's basename literally here would make this suite
+// its own referrer.
+const TOOLING_UNREFERENCED = [".agents", "skills", "impeccable", "scripts", ["live", "wrap.mjs"].join("-")].join("/");
 
 Deno.test("fhh50: dot-prefixed paths reach the ledger instead of vanishing from the changed set", () => {
   // RED before the fix: the impeccable tooling path was dropped by a blanket `!f.startsWith(".")`,
@@ -248,6 +251,51 @@ Deno.test("fhh50: a plan that cannot map the delta says so (selection_covers_del
   assertEquals(refused.kind, "full", "unreferenced agent tooling must fail closed, not warn and proceed");
   assertEquals(fileMappingContextForPlan(refused).selectionCoversDelta, false);
   assertEquals(refused.unmappable.map((row: { file: string }) => row.file), [TOOLING_UNREFERENCED]);
+});
+
+// ---- chrome-agent-platform-100zg: .agents/ tooling referenced by BASENAME maps, not warns ----
+//
+// The bead's case 1, measured live on this VM (2026-11-05, ffp7s): a change to the impeccable
+// live-browser scripts fell back to 782 suites (~362s) although the cache suites pin both files
+// behaviourally. The referrer scan missed them because the suites name the files through
+// path.join(SCRIPTS_DIR, "<basename>") — a COMPUTED path, so neither the full literal path nor
+// (before the fix) the basename was a candidate for an .agents/ path. The fragments below keep
+// this suite out of its own fixture for the same reason as TOOLING_UNREFERENCED above.
+const LIVE_BROWSER_DOM = [".agents", "skills", "impeccable", "scripts", ["live", "browser", "dom.js"].join("-")].join("/");
+const LIVE_BROWSER = [".agents", "skills", "impeccable", "scripts", ["live", "browser.js"].join("-")].join("/");
+
+Deno.test("100zg: .agents/ skill tooling referenced by basename maps to the suites that drive it", () => {
+  // RED before the fix: both referrer sets were [], so classifyUncovered failed the files closed
+  // to the FULL suite and the gate raised a COVERAGE WARNING over files a suite drives directly.
+  const domRefs = referrersFor(LIVE_BROWSER_DOM);
+  assert(
+    domRefs.includes("tests/impeccable-insert-rect-cache.test.ts"),
+    `the cache suite names live-browser-dom.js by basename; got ${JSON.stringify(domRefs)}`,
+  );
+  assert(
+    domRefs.includes("tests/impeccable-live-browser-dom-lifecycle.test.ts"),
+    `the lifecycle suite names live-browser-dom.js by basename; got ${JSON.stringify(domRefs)}`,
+  );
+  const browserRefs = referrersFor(LIVE_BROWSER);
+  assert(
+    browserRefs.includes("tests/impeccable-insert-rect-cache.test.ts"),
+    `the cache suite names live-browser.js by basename; got ${JSON.stringify(browserRefs)}`,
+  );
+
+  // The gate-level verdict the bead measured: the pair must plan as a SUBSET whose selection
+  // executes the pinning suites — not a 782-suite fail-closed fallback.
+  const plan = planSelection({
+    changedFiles: () => [LIVE_BROWSER_DOM, LIVE_BROWSER],
+    reverseGraph: () => buildReverseGraph(),
+  });
+  assertEquals(plan.kind, "subset", `the driven pair must not fail closed; unmappable=${JSON.stringify(plan.unmappable)}`);
+  const mappedFiles = plan.mapped.map((row: { file: string }) => row.file);
+  assert(mappedFiles.includes(LIVE_BROWSER_DOM) && mappedFiles.includes(LIVE_BROWSER),
+    `both files map via their naming suites; got ${JSON.stringify(plan.mapped)}`);
+  for (const suite of ["tests/impeccable-insert-rect-cache.test.ts", "tests/impeccable-live-browser-dom-lifecycle.test.ts"]) {
+    assert(plan.files?.includes(suite), `the subset must execute ${suite}`);
+  }
+  assertEquals(fileMappingContextForPlan(plan).selectionCoversDelta, true);
 });
 
 // ---- chrome-agent-platform-nn5eq: a hot module's fan-in is stated, not discovered ----
