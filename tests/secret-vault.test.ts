@@ -14,6 +14,11 @@
 //     (PBKDF2-SHA-256 @ 210k over extension-id + per-install salt ->
 //     non-extractable AES-GCM-256, record id as additionalData) and under
 //     no near-miss parameter set, and two fresh installs never share a salt.
+//  7. the at-rest claim is SCOPED correctly (chrome-agent-platform-hy0v0): the
+//     derivation material is not secret, so a copied storage area decrypts
+//     offline — the limit is pinned executably, the refusals the encryption
+//     does buy are pinned too, and the header may not re-assert the retracted
+//     "carries no readable credential" claim.
 
 import { assert, assertEquals, assertRejects, assertThrows } from "jsr:@std/assert@1";
 import {
@@ -245,6 +250,131 @@ Deno.test("03p47: the install salt is per-install RANDOM, persisted, and reused 
   const v1again = await createSecretVault({ storageArea: s1, extensionId: EXT });
   const got = await v1again.getSecretRaw("CROSS_INSTALL_KEY", { caller: "sw", access: SW_ACCESS });
   assertEquals(got.value, SECRET, "the same install reopens its own record via the persisted salt");
+});
+
+// ── hy0v0: the at-rest guarantee, stated exactly, in BOTH directions ─────
+// The module header used to claim that "a storage snapshot taken out of context
+// (a copied profile, a backup file) carries no readable credential". That was
+// false: the extension id is public and the install salt is stored beside the
+// ciphertext, so a snapshot IS the key. chrome-agent-platform-hy0v0 corrected
+// the header. These legs pin the limit (an offline copy DOES decrypt — a future
+// author cannot quietly re-assert the stronger claim) and pin what the
+// encryption genuinely defeats, so neither side of the sentence can drift.
+
+Deno.test("hy0v0: a copied storage area decrypts OFFLINE — the documented limit is real", async () => {
+  const EXT = CLAIM_EXT_ID;
+  const SECRET = "sk-offline-copy-0123456789";
+  const storage = fakeStorage();
+  // The REAL salt path: no injected salt, so ensureInstallSalt persists one.
+  const vault = await createSecretVault({ storageArea: storage, extensionId: EXT });
+  await vault.setSecret("COPIED_PROFILE_KEY", SECRET, { by: "sw" });
+
+  // What an attacker who copies the profile actually holds: every key in the
+  // storage area (ciphertext + install salt + lock records) and nothing else.
+  const snapshot = JSON.parse(JSON.stringify(await storage.get(null)));
+  const saltB64 = snapshot["cap:vault:install-salt"];
+  const record = snapshot["cap:vault:secret:COPIED_PROFILE_KEY"];
+  assert(typeof saltB64 === "string" && saltB64.length > 0, "the snapshot carries the install salt");
+  assert(record?.iv && record?.ct, "the snapshot carries the ciphertext envelope");
+
+  // The ONLY other input is the extension id, which is public: it is in the
+  // manifest and visible at chrome://extensions on any machine running this.
+  const attackerKey = await deriveClaimKey({ material: `${EXT}:${saltB64}`, saltB64 });
+  const plain = new TextDecoder().decode(
+    await crypto.subtle.decrypt(
+      {
+        name: "AES-GCM",
+        iv: Uint8Array.from(atob(record.iv), (c) => c.charCodeAt(0)) as unknown as BufferSource,
+        additionalData: new TextEncoder().encode("cap:vault:secret:COPIED_PROFILE_KEY") as unknown as BufferSource,
+      },
+      attackerKey,
+      Uint8Array.from(atob(record.ct), (c) => c.charCodeAt(0)) as unknown as BufferSource,
+    ),
+  );
+  // If this ever stops decrypting, the header's stated limit became stale — the
+  // comment and this leg must move together (that is the point of pinning the
+  // limit rather than only the guarantee).
+  assertEquals(plain, SECRET,
+    "a copied storage area plus the PUBLIC extension id re-derives the key and decrypts offline (R26 in docs/RISK-REGISTER.md; the owner-secret fix is chrome-agent-platform-zxo4i)");
+
+  // And the plaintext is genuinely absent from the bytes, which is the part the
+  // encryption does buy: a grep over the profile finds nothing readable.
+  assert(!JSON.stringify(snapshot).includes(SECRET), "the snapshot has no readable plaintext — the guarantee the encryption DOES provide");
+});
+
+Deno.test("hy0v0: a full snapshot of ANOTHER install or ANOTHER extension id is refused, and a record cannot move between key ids", async () => {
+  const EXT = CLAIM_EXT_ID;
+  const SECRET = "sk-scope-1234567890acme";
+  const source = fakeStorage();
+  const v1 = await createSecretVault({ storageArea: source, extensionId: EXT });
+  await v1.setSecret("SCOPE_KEY", SECRET, { by: "sw" });
+  const snapshot = JSON.parse(JSON.stringify(await source.get(null)));
+
+  // (a) The WHOLE snapshot (salt included) planted into a DIFFERENT extension's
+  // storage does not open: the derivation needs that extension's id.
+  const foreign = fakeStorage();
+  for (const [k, v] of Object.entries(snapshot)) foreign.map.set(k, v);
+  const vForeign = await createSecretVault({ storageArea: foreign, extensionId: "z".repeat(32) + "y" });
+  await assertRejects(
+    () => vForeign.getSecretRaw("SCOPE_KEY", { caller: "sw", access: SW_ACCESS }),
+    Error,
+    undefined,
+    "a whole storage snapshot must not open under another extension id",
+  );
+
+  // (b) The salt is what binds an install: same extension id, DIFFERENT salt
+  // (a fresh install's storage) refuses the copied record.
+  const otherInstall = fakeStorage();
+  otherInstall.map.set("cap:vault:secret:SCOPE_KEY", snapshot["cap:vault:secret:SCOPE_KEY"]);
+  const vOther = await createSecretVault({ storageArea: otherInstall, extensionId: EXT });
+  await assertRejects(
+    () => vOther.getSecretRaw("SCOPE_KEY", { caller: "sw", access: SW_ACCESS }),
+    Error,
+    undefined,
+    "a record from another install must not open under this install's salt",
+  );
+
+  // (c) additionalData binds a record to its key id: moving {iv, ct} into
+  // another id's slot fails integrity even in the SAME install.
+  const moved = fakeStorage();
+  for (const [k, v] of Object.entries(snapshot)) moved.map.set(k, v);
+  moved.map.set("cap:vault:secret:OTHER_KEY", snapshot["cap:vault:secret:SCOPE_KEY"]);
+  const vMoved = await createSecretVault({ storageArea: moved, extensionId: EXT });
+  await assertRejects(
+    () => vMoved.getSecretRaw("OTHER_KEY", { caller: "sw", access: SW_ACCESS }),
+    Error,
+    undefined,
+    "a record's ciphertext must not decrypt in another key id's slot",
+  );
+});
+
+Deno.test("hy0v0: the module header states the limit and never re-asserts the retracted claim", async () => {
+  const source = await Deno.readTextFile(new URL("../extension/lib/secret-vault.js", import.meta.url));
+  const header = source.split("export function createServiceWorkerAccess")[0];
+  // The retracted sentence may only survive as a QUOTED retraction: every
+  // paragraph that repeats it must also carry the RETRACTED marker, so deleting
+  // the correction (or re-asserting the claim elsewhere) fails here rather than
+  // shipping a guarantee the code does not deliver.
+  // Comment paragraphs are separated by a `//`-only line in this file; a blank
+  // source line inside a comment block is not a boundary, so split on the
+  // comment separator instead (a plain /\n\s*\n/ split leaves one giant
+  // paragraph and made this pin pass on a re-asserted claim — measured).
+  const claiming = header.split(/\n\s*\/\/\s*\n/).filter((para) => para.includes("carries no readable credential"));
+  assert(claiming.length > 0, "the header should name the retracted claim it replaced, not silently drop it");
+  for (const para of claiming) {
+    assert(para.includes("RETRACTED"), `the false claim must appear only as a marked retraction: ${para.slice(0, 120)}…`);
+  }
+  assert(
+    header.includes("decrypt every record OFFLINE"),
+    "the header must state the true limit: a storage-area holder decrypts offline",
+  );
+  assert(
+    header.includes("chrome-agent-platform-zxo4i") && header.includes("docs/RISK-REGISTER.md"),
+    "the header must point at the tracked fix and the register entry instead of implying the vault is safe",
+  );
+  // The scheme id is a FORMAT id, not a security claim: records written by the
+  // previous version must keep opening, so it is deliberately unchanged.
+  assert(header.includes("extension id is public"), "the header must name the public half of the derivation material");
 });
 
 Deno.test("jao1.1: masked projection — shape, tail-only mask, and zero plaintext in its serialization", async () => {

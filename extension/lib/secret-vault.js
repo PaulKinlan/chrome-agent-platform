@@ -2,16 +2,38 @@
 // (chrome-agent-platform-jao1.1, CAP-SECURE-ENCLAVE Stage 1).
 //
 // WHAT THIS IS: the one place service credentials (API keys, bearer tokens)
-// live. Secrets are encrypted at rest with AES-GCM-256 under a key derived
+// live. Records are encrypted at rest with AES-GCM-256 under a key derived
 // (PBKDF2-SHA-256, 210k iterations) from the extension id + a per-install
-// random salt, so a storage snapshot taken out of context (a copied profile,
-// a backup file) carries no readable credential and a different extension
-// derivation cannot decrypt it.
+// random salt, and each record is bound to its key id via additionalData.
 //
-// WHAT THIS IS NOT (the honest threat model): the derived key material is
-// reconstructible inside this extension's own contexts, so this encryption is
-// defense-in-depth for AT-REST snapshots — it is NOT a boundary against code
-// executing with extension-context privileges.
+// WHAT THE ENCRYPTION DEFEATS, EXACTLY (chrome-agent-platform-hy0v0 — the
+// wording above used to claim that "a storage snapshot taken out of context (a
+// copied profile, a backup file) carries no readable credential", and that was
+// MORE THAN THE CODE DELIVERS, so it is RETRACTED here):
+//   - credentials sitting in storage as plaintext bytes (a grep, a log scraper,
+//     a support bundle, a naive backup diff);
+//   - a record presented to another extension id, or to another install's salt
+//     — both fail integrity, so a planted or swapped record does not open;
+//   - a record moved between key ids (additionalData binds it to its id).
+//
+// WHAT IT DOES NOT DEFEAT — THE HONEST LIMIT: the derivation material is NOT a
+// secret. The extension id is public (manifest, chrome://extensions) and the
+// install salt is stored BESIDE the ciphertext in the same storage area
+// (SALT_KEY, written by ensureInstallSalt). An attacker holding this
+// extension's storage area — a copied profile directory, a profile backup, an
+// exported LevelDB — can re-derive the key and decrypt every record OFFLINE,
+// with nothing else. This is a storage-shape boundary, not a confidentiality
+// boundary against the storage holder; tests/secret-vault.test.ts pins the limit
+// in both directions ("hy0v0") so no future edit can quietly re-assert more.
+// Closing that limit needs a key the storage holder does not have (an owner
+// passphrase-derived KEK with a locked vault state); it is NOT implemented here
+// and is tracked as chrome-agent-platform-zxo4i, registered as R26 in
+// docs/RISK-REGISTER.md.
+//
+// WHAT THIS IS NOT (the rest of the honest threat model): the derived key
+// material is reconstructible inside this extension's own contexts, so this
+// encryption is defense-in-depth for AT-REST snapshots — it is NOT a boundary
+// against code executing with extension-context privileges.
 //
 // THE RAW-READ AUTHORITY IS A MINTED ACCESS TOKEN, NOT A CALLER STRING
 // (voicebox-dsflash1's review of jao1.1, hardened by chrome-agent-platform-jao1.7):
@@ -184,6 +206,10 @@ export async function createSecretVault({ storageArea, extensionId, installSaltB
     ? installSaltB64
     : await ensureInstallSalt(storageArea);
 
+  // The derivation material is `extensionId:saltB64`. Both halves are in the
+  // profile (the id is public, the salt is stored beside the ciphertext), which
+  // is exactly the limit the module header states: whoever holds the storage
+  // area can rebuild this key offline (hy0v0). Do not describe this as secrecy.
   const baseKey = await crypto.subtle.importKey(
     "raw",
     ENCODER.encode(`${extensionId}:${saltB64}`),
