@@ -208,7 +208,9 @@ try {
 
   // 5. Start ACP loopback bridge and test connection button again
   console.log(`Starting loopback ACP bridge on port ${TEST_PORT} with fake adapter (token required)...`);
-  bridge = createAcpServer(TEST_PORT, FAKE_ADAPTER, {}, "", BRIDGE_TOKEN);
+  // ks4on: pin the LOADED extension's id — the bridge admits extension pages by
+  // identity, and `extId` above is read from the service worker URL of this run.
+  bridge = createAcpServer(TEST_PORT, FAKE_ADAPTER, {}, "", BRIDGE_TOKEN, false, "127.0.0.1", [extId]);
   await sleep(500);
 
   console.log("Clicking Test connection with bridge running...");

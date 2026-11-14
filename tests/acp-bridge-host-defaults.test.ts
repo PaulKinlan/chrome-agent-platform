@@ -269,8 +269,10 @@ process.exit(0);
   }
 });
 
-Deno.test("c76l7: /health rejects untrusted web origins with HTTP 403 and allows extension origins", async () => {
-  const server = createAcpServer(0, undefined, {}, undefined, TEST_BRIDGE_TOKEN);
+Deno.test("c76l7: /health rejects untrusted web origins with HTTP 403 and admits ONLY the pinned extension id (ks4on)", async () => {
+  const pinnedId = "abcdefghijklmnopabcdefghijklmnop";
+  const differentId = "ponmlkjihgfedcbaponmlkjihgfedcba";
+  const server = createAcpServer(0, undefined, {}, undefined, TEST_BRIDGE_TOKEN, false, "127.0.0.1", [pinnedId]);
   const port = (server as any).addr.port;
   try {
     // 1. Untrusted web origins must be rejected
@@ -288,19 +290,24 @@ Deno.test("c76l7: /health rejects untrusted web origins with HTTP 403 and allows
       assert(body.includes("web origins are not allowed"), `response body must state origin refusal for ${origin}`);
     }
 
-    // 2. Allowed extension origins must succeed
-    const extOrigins = [
-      "chrome-extension://abcdefghijklmnopabcdefghijklmnop",
-      "moz-extension://12345678-1234-1234-1234-1234567890ab",
-    ];
-    for (const origin of extOrigins) {
-      const res = await fetch(`http://127.0.0.1:${port}/health`, {
-        headers: { "Origin": origin },
-      });
-      assertEquals(res.status, 200, `extension origin ${origin} must be allowed`);
-      const json = await res.json();
-      assertEquals(json.ok, true);
-    }
+    // 2. Extension origins are an IDENTITY test (chrome-agent-platform-ks4on), not
+    // a scheme test: the pinned id is admitted, any other installed extension's
+    // page is refused exactly like a web page.
+    const res = await fetch(`http://127.0.0.1:${port}/health`, {
+      headers: { "Origin": `chrome-extension://${pinnedId}` },
+    });
+    assertEquals(res.status, 200, "the pinned extension origin must be allowed");
+    const json = await res.json();
+    assertEquals(json.ok, true);
+
+    const other = await fetch(`http://127.0.0.1:${port}/health`, {
+      headers: { "Origin": `chrome-extension://${differentId}` },
+    });
+    assertEquals(other.status, 403, "a DIFFERENT installed extension's origin must be refused");
+    assert(
+      (await other.text()).includes("extension origin not pinned"),
+      "the refusal must say the identity is not pinned, not that it is a web origin",
+    );
   } finally {
     await server.shutdown();
   }

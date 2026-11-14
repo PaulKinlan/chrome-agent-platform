@@ -24,11 +24,16 @@ Deno.test("ACP local bind-race residual is named, reversible, and separate from 
     "scripts/acp-bridge.ts:136-141", "scripts/acp-bridge.ts:173-178", "scripts/acp-bridge.ts:196-201",
     "scripts/acp-bridge.ts:636-646", "scripts/acp-bridge.ts:641-646",
     "scripts/acp-bridge.ts:723-743", "scripts/acp-bridge.ts:825-833", "scripts/acp-bridge.ts:852-860",
+    // ks4on moved the Origin guard off this anchor: INV-14 pins the identity predicate now.
+    "scripts/acp-bridge.ts:203-208",
   ]) {
     assert(!model.includes(outdated), `THREAT_MODEL.md must not retain stale ACP pin ${outdated}`);
   }
   for (const anchor of [
-    "scripts/acp-bridge.ts:52", "scripts/acp-bridge.ts:203-208",
+    "scripts/acp-bridge.ts:52",
+    // ks4on: the Origin guard is an IDENTITY test now, so INV-14 pins the parser,
+    // the predicate and the shared refusal — not the old prefix-match lines.
+    "scripts/acp-bridge.ts:265", "scripts/acp-bridge.ts:317", "scripts/acp-bridge.ts:328",
     "scripts/acp-bridge.ts:859-867",
   ]) {
     assert(model.includes(anchor), `THREAT_MODEL.md must retain current ACP pin ${anchor}`);

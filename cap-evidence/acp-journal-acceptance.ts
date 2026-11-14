@@ -8,7 +8,7 @@
 //   deno run -A cap-evidence/acp-journal-acceptance.ts
 // @ts-nocheck — untyped CDP scripting in the house pattern.
 
-import { launchChrome } from "../scripts/lib/chrome-launch.ts";
+import { launchChrome, computeUnpackedExtensionId } from "../scripts/lib/chrome-launch.ts";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
 import { createAcpServer } from "../scripts/acp-bridge.ts";
 import { fileURLToPath } from "node:url";
@@ -31,7 +31,9 @@ function check(name: string, cond: boolean, detail: unknown = "") {
 // the bridge WITH it, and seed the SAME token into the extension's acp.token so
 // the authenticated path is exercised (never the anonymous-loopback bypass).
 const BRIDGE_TOKEN = "cap-acp-journal-acceptance-token";
-const bridge = createAcpServer(3210, FAKE_ADAPTER, {}, "", BRIDGE_TOKEN);
+// ks4on: pin the loaded copy's id; the Origin guard matches identity, not scheme.
+const EXTENSION_ID = await computeUnpackedExtensionId(EXT);
+const bridge = createAcpServer(3210, FAKE_ADAPTER, {}, "", BRIDGE_TOKEN, false, "127.0.0.1", [EXTENSION_ID]);
 
 await Deno.mkdir(EVIDENCE_DIR, { recursive: true });
 const profile = durableDir(`cap-acp-journal-profile-${Date.now()}`);

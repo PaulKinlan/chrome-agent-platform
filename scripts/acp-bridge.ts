@@ -2,7 +2,7 @@
 // CAP-FB-20260912-ACP-INTEGRATION-01 (tracking epic chrome-agent-platform-qlho)
 //
 // Bridges Chrome Extension WebSocket connections to a locally spawned ACP adapter (e.g. pi-acp).
-// Usage: npm run acp:bridge [--port 3210] [--adapter path/to/adapter] [--cwd /working/dir] [--allow-anonymous-loopback]
+// Usage: npm run acp:bridge [--port 3210] [--adapter path/to/adapter] [--cwd /working/dir] [--extension-id <id>] [--allow-anonymous-loopback]
 //
 // Host defaults the extension cannot know live HERE, never as source literals:
 // the adapter path and the session working directory resolve from $HOME at run
@@ -24,9 +24,9 @@ import { hostname } from "node:os";
 import { acpToolChannel, createAcpTools } from "./lib/acp-tools.ts";
 
 const args = parseArgs(Deno.args, {
-  string: ["port", "adapter", "harness", "cwd", "token", "token-file", "allow-origin", "host"],
+  string: ["port", "adapter", "harness", "cwd", "token", "token-file", "allow-origin", "extension-id", "host"],
   boolean: ["allow-anonymous-loopback"],
-  collect: ["allow-origin"],
+  collect: ["allow-origin", "extension-id"],
   default: {
     port: "3210",
     adapter: "",
@@ -35,6 +35,7 @@ const args = parseArgs(Deno.args, {
     token: "",
     "token-file": "",
     "allow-origin": [],
+    "extension-id": [],
     // Loopback by default: this process spawns a shell-capable agent, so it is
     // only exposed deliberately (--host 0.0.0.0 / a LAN address).
     host: "127.0.0.1",
@@ -51,6 +52,62 @@ const HOME = Deno.env.get("HOME") ?? "";
 
 /** Extra exact origins `--allow-origin` admitted (repeatable). */
 const ALLOWED_ORIGINS = (Array.isArray(args["allow-origin"]) ? args["allow-origin"] : []).filter(Boolean);
+
+/** The extension IDENTITIES this bridge trusts (`--extension-id`, repeatable).
+ *
+ * chrome-agent-platform-ks4on (coord ruling 2026-11-14, option (a)): the Origin
+ * guard used to end in `/^(chrome|moz)-extension:\/\//`, a SCHEME PREFIX, so any
+ * page of any installed extension was an admitted Origin. Under
+ * `--allow-anonymous-loopback` that handed a shell-capable harness to any
+ * installed extension with no credential at all. The narrow default is now the
+ * DEFAULT: this list is EMPTY unless the operator pins an id, and an empty list
+ * means every extension origin is refused (fail closed, never "any extension").
+ * `extension/manifest.json` carries no `key`, so an unpacked CAP's id is not
+ * derivable from the repo — the pin has to be configuration. `--allow-origin`
+ * stays the exact-origin escape hatch for anything else. */
+const TRUSTED_EXTENSION_IDS = (() => {
+  try {
+    return normalizeTrustedExtensionIds(Array.isArray(args["extension-id"]) ? args["extension-id"] : []);
+  } catch (e) {
+    // Fail closed on a malformed pin, but as a one-line CLI refusal rather than an
+    // import-time stack trace. In-process callers keep the throw.
+    if (import.meta.main) {
+      console.error(`[acp-bridge] ${(e as Error).message}`);
+      Deno.exit(1);
+    }
+    throw e;
+  }
+})();
+
+/** Validate and canonicalise `--extension-id` values, FAIL CLOSED.
+ *
+ * The value must be a bare extension id, because that is the whole identity the
+ * guard compares. A value that carries a scheme or a path is a mistake the
+ * operator would otherwise only discover as a refused connection, so it is a
+ * startup error naming the right flag (`--allow-origin` for a full origin).
+ * Case is folded: Chrome ids are lower-case a-p, Firefox uuids lower-case hex,
+ * and a browser lower-cases the host it puts in Origin. */
+export function normalizeTrustedExtensionIds(raw: readonly string[]): string[] {
+  const out: string[] = [];
+  for (const value of raw) {
+    const id = String(value ?? "").trim();
+    if (!id) continue;
+    if (/\s/.test(id) || id.includes("/") || id.includes(":")) {
+      throw new Error(
+        `--extension-id must be a bare extension id (e.g. abcdefghijklmnopabcdefghijklmnop or a Firefox extension uuid), got "${sanitizeLogString(id).slice(0, 64)}". ` +
+          `For a full origin such as chrome-extension://<id> use --allow-origin instead.`,
+      );
+    }
+    const folded = id.toLowerCase();
+    if (extensionSchemeForId(folded) === null) {
+      throw new Error(
+        `--extension-id does not look like an extension id (expected Chrome's 32 characters a-p, or a Firefox uuid / name@domain), got "${sanitizeLogString(id).slice(0, 64)}".`,
+      );
+    }
+    if (!out.includes(folded)) out.push(folded);
+  }
+  return out;
+}
 
 const HOST = normalizeLoopbackHost(String(args.host || "127.0.0.1"));
 
@@ -191,6 +248,56 @@ const TOKEN = ALLOW_ANONYMOUS_LOOPBACK
   ? ""
   : (String(args.token ?? "") || readOrCreateToken(TOKEN_FILE));
 
+/** An extension Origin decomposed into the IDENTITY the guard compares.
+ *
+ * ks4on: parsing (not prefix-testing) is the point. An Origin is a SCHEME plus a
+ * HOST and nothing else — no port, path, userinfo, query or fragment. Anything
+ * that does not parse into exactly that shape is not an identity this bridge can
+ * pin, so it is refused rather than pattern-matched. Chrome puts the extension
+ * id in the host (`chrome-extension://<id>`), Firefox puts the per-install
+ * moz-extension uuid there, so ONE host-equality rule covers both schemes and no
+ * second scheme path exists. */
+export type ExtensionOriginIdentity = {
+  scheme: "chrome-extension" | "moz-extension";
+  id: string;
+};
+
+export function extensionOriginIdentity(origin: string | null): ExtensionOriginIdentity | null {
+  if (!origin) return null;
+  if (!/^(chrome|moz)-extension:\/\//i.test(origin)) return null;
+  let url: URL;
+  try {
+    url = new URL(origin);
+  } catch {
+    return null; // not a parseable origin
+  }
+  const scheme = url.protocol.replace(/:$/, "").toLowerCase();
+  if (scheme !== "chrome-extension" && scheme !== "moz-extension") return null;
+  // An Origin has no path/port/userinfo/query/fragment. For a NON-SPECIAL scheme
+  // the URL parser leaves an empty path as "" (it does not normalise it to "/" the
+  // way it does for http), so both "" and "/" are the origin-only shapes.
+  if (url.port || url.username || url.password || url.search || url.hash) return null;
+  if (url.pathname !== "" && url.pathname !== "/") return null;
+  const id = url.hostname.toLowerCase();
+  if (!id) return null;
+  return { scheme, id };
+}
+
+/** The scheme an extension id can belong to, from the id's OWN format.
+ *
+ * Chrome mints 32 characters from a-p; Firefox uses a per-install uuid (or a
+ * `name@domain` id for a listed add-on). A pinned id is therefore not a bare
+ * string to be compared in isolation: the ORIGIN's scheme has to agree with what
+ * the id can be, or `chrome-extension://<firefox uuid>` would be admitted on the
+ * strength of the id alone. An id that fits no scheme is not a pin at all. */
+export function extensionSchemeForId(id: string): ExtensionOriginIdentity["scheme"] | null {
+  const v = String(id ?? "").toLowerCase();
+  if (/^[a-p]{32}$/.test(v)) return "chrome-extension";
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(v)) return "moz-extension";
+  if (/^[^@\s]+@[^@\s]+$/.test(v)) return "moz-extension";
+  return null;
+}
+
 /**
  * May this request drive the harness? Both guards run, in this order:
  *  1. iadt's Origin guard (kept, not replaced): browsers ALWAYS send Origin on
@@ -202,12 +309,52 @@ const TOKEN = ALLOW_ANONYMOUS_LOOPBACK
  *     `--allow-anonymous-loopback` (Paul, 2026-10-07): loopback-only, so any
  *     LOCAL process may drive the harness without a token — never a web origin,
  *     and never on a routable bind (which refuses to start).
+ *
+ * Guard 1 is an IDENTITY test (ks4on): an extension origin is admitted only when
+ * its parsed id is one the operator pinned with `--extension-id` (or the whole
+ * origin was named with `--allow-origin`). A scheme prefix admits every installed
+ * extension, which under the anonymous opt-out is a credential-free shell.
  */
-function originAllowed(origin: string | null): boolean {
+function originAllowed(origin: string | null, trustedExtensionIds: readonly string[] = TRUSTED_EXTENSION_IDS): boolean {
   if (!origin) return true; // local script client
   const normalized = origin.replace(/\/$/, "");
   if (ALLOWED_ORIGINS.some((p) => p.replace(/\/$/, "") === normalized)) return true;
-  return /^(chrome|moz)-extension:\/\//.test(origin);
+  const identity = extensionOriginIdentity(origin);
+  return identity !== null && trustedExtensionIds.includes(identity.id) &&
+    extensionSchemeForId(identity.id) === identity.scheme;
+}
+
+/** Why an Origin was refused, in the words the operator can act on. One function
+ * so the live upgrade, /health and /acp/preflight can never disagree (ks4on). */
+export function originRefusalDetail(
+  origin: string | null,
+  trustedExtensionIds: readonly string[] = TRUSTED_EXTENSION_IDS,
+): string {
+  const identity = extensionOriginIdentity(origin);
+  if (identity) {
+    if (trustedExtensionIds.includes(identity.id)) {
+      // Pinned, but under a scheme that id cannot belong to (a Firefox uuid asked
+      // for over chrome-extension://, or a Chrome id over moz-extension://).
+      return `extension scheme mismatch: ${identity.id} is pinned as a ${extensionSchemeForId(identity.id)} identity, but this Origin is ${identity.scheme}://`;
+    }
+    return trustedExtensionIds.length
+      ? `extension origin not pinned: this bridge admits only the extension ids given with --extension-id (${trustedExtensionIds.join(", ")})`
+      : "extension origin not pinned: no --extension-id was given, so this bridge refuses every extension page (start it with --extension-id <your extension id> from chrome://extensions)";
+  }
+  // An extension SCHEME that did not parse is not a web origin, and saying so would
+  // send the operator looking in the wrong place (e.g. an Origin carrying a path).
+  if (/^(chrome|moz)-extension:\/\//i.test(String(origin ?? ""))) {
+    return "malformed extension origin: an Origin is a scheme and a host only (no path, port, userinfo, query or fragment), so it cannot match a pinned extension id";
+  }
+  return "web origins are not allowed to drive the harness";
+}
+
+/** The sanitised log line for a refused Origin. Pure so it can be pinned without
+ * patching the console, and the caller logs it on every refused upgrade: a
+ * refusal the operator cannot see is indistinguishable from a bridge that is
+ * down (ks4on acceptance: refused, not silent). */
+export function originRefusalLogLine(origin: string | null, trustedExtensionIds: readonly string[] = TRUSTED_EXTENSION_IDS): string {
+  return `[acp-bridge] refused origin ${sanitizeLogString(String(origin ?? "")).slice(0, 128) || "(none)"}: ${originRefusalDetail(origin, trustedExtensionIds)}`;
 }
 
 /** A structured connection refusal: the reason an ACP upgrade is refused, in the
@@ -233,10 +380,11 @@ export function acpConnectionRefusal(
   url: URL,
   tokenOverride: string,
   allowAnonymousLoopback = false,
+  trustedExtensionIds: readonly string[] = TRUSTED_EXTENSION_IDS,
 ): AcpConnectionRefusal | null {
   const clientOrigin = req.headers.get("origin");
-  if (!originAllowed(clientOrigin)) {
-    return { reason: "origin-rejected", detail: "web origins are not allowed to drive the harness" };
+  if (!originAllowed(clientOrigin, trustedExtensionIds)) {
+    return { reason: "origin-rejected", detail: originRefusalDetail(clientOrigin, trustedExtensionIds) };
   }
   // Anonymous loopback opt-out: the origin guard still runs (web origins stay
   // refused), but the token guard is skipped entirely — the operator chose
@@ -962,6 +1110,11 @@ export function createAcpServer(
   tokenOverride: string = TOKEN,
   allowAnonymousLoopback: boolean = ALLOW_ANONYMOUS_LOOPBACK,
   hostOverride: string = HOST,
+  /** The extension IDENTITIES the Origin guard admits (chrome-agent-platform-ks4on).
+   * Defaults to the module-level `--extension-id` pin; an empty list refuses every
+   * extension page rather than any installed one. A test passes its own so it can
+   * pin a fake id and probe a different one. */
+  trustedExtensionIds: readonly string[] = TRUSTED_EXTENSION_IDS,
 ) {
   const effectiveHost = normalizeLoopbackHost(String(hostOverride || HOST));
   // FAIL CLOSED, both halves asserted rather than documented:
@@ -991,15 +1144,20 @@ export function createAcpServer(
 
     if (url.pathname === "/health") {
       const clientOrigin = req.headers.get("origin");
-      if (!originAllowed(clientOrigin)) {
-        return new Response("ACP Bridge: web origins are not allowed to access health endpoint", {
+      // ks4on: the SAME refusal function the upgrade and /acp/preflight use, so
+      // the health probe reports the real cause (unpinned extension, web origin)
+      // instead of a generic "web origins" line that misdescribes an extension.
+      if (!originAllowed(clientOrigin, trustedExtensionIds)) {
+        const detail = originRefusalDetail(clientOrigin, trustedExtensionIds);
+        console.error(originRefusalLogLine(clientOrigin, trustedExtensionIds));
+        return new Response(`ACP Bridge: ${detail}`, {
           status: 403,
           headers: { "Content-Type": "text/plain" },
         });
       }
 
       // c76l7: check authentication to avoid leaking process details (cwd, cli paths) pre-auth
-      const refusal = acpConnectionRefusal(req, url, tokenOverride, allowAnonymousLoopback);
+      const refusal = acpConnectionRefusal(req, url, tokenOverride, allowAnonymousLoopback, trustedExtensionIds);
       const authenticated = refusal === null;
 
       const rawProbeHarness = url.searchParams.get("harness")?.trim() || HARNESS;
@@ -1079,7 +1237,7 @@ export function createAcpServer(
     // (chrome-agent-platform-e25gk). An unknown harness is already refused with
     // 400 above, so this reports the two causes a browser cannot see.
     if (url.pathname === "/acp/preflight") {
-      const refusal = acpConnectionRefusal(req, url, tokenOverride, allowAnonymousLoopback);
+      const refusal = acpConnectionRefusal(req, url, tokenOverride, allowAnonymousLoopback, trustedExtensionIds);
       return new Response(
         JSON.stringify(refusal ? { ok: false, ...refusal } : { ok: true }),
         { status: refusal ? 403 : 200, headers: { "Content-Type": "application/json" } },
@@ -1095,8 +1253,16 @@ export function createAcpServer(
     // actual refusal can never disagree. The comparison stays CONSTANT-TIME
     // (jsjy review F2) and on byte lengths (delta-review polish) — see
     // acpConnectionRefusal.
-    const refusal = acpConnectionRefusal(req, url, tokenOverride, allowAnonymousLoopback);
+    const refusal = acpConnectionRefusal(req, url, tokenOverride, allowAnonymousLoopback, trustedExtensionIds);
     if (refusal) {
+      // ks4on: a refusal the operator cannot see is indistinguishable from a
+      // bridge that is down, and the browser hides the upgrade's 403 body. Log it
+      // (sanitised) on every refused attempt, not only the origin case.
+      if (refusal.reason === "origin-rejected") {
+        console.error(originRefusalLogLine(req.headers.get("origin"), trustedExtensionIds));
+      } else {
+        console.error(`[acp-bridge] refused upgrade: ${refusal.detail}`);
+      }
       return new Response(`ACP Bridge: ${refusal.detail}`, { status: 403 });
     }
 
@@ -1363,6 +1529,17 @@ if (import.meta.main) {
   }
   const server = createAcpServer(PORT);
   const bound = (server as any).addr?.port ?? PORT;
+  // ks4on: the Origin guard's identity pin must be VISIBLE at start-up. An empty
+  // pin is the narrow default (every extension page is refused) and the operator
+  // who expected their extension to connect needs to read why here, before
+  // hunting a "failed to connect" in the extension.
+  if (TRUSTED_EXTENSION_IDS.length) {
+    console.log(`[acp-bridge] extension origins admitted (--extension-id): ${TRUSTED_EXTENSION_IDS.join(", ")}`);
+  } else {
+    console.log("[acp-bridge] no --extension-id pinned: EVERY extension page is refused (any installed extension could");
+    console.log("[acp-bridge]   otherwise drive this shell-capable harness). Pass --extension-id <your extension id> from");
+    console.log("[acp-bridge]   chrome://extensions to admit CAP's pages.");
+  }
   if (isLoopbackHost(HOST)) {
     // jsjy review (challenged judgement call): the token is NOT printed here. A
     // PERSISTED secret in scrollback, shell history, journald or a `> bridge.log`

@@ -30,7 +30,10 @@ const EVIDENCE_DIR = durableDir(`cap-vl6c-acceptance-${Date.now()}`);
 await Deno.mkdir(EVIDENCE_DIR, { recursive: true });
 
 console.log(`[acceptance] Starting ACP bridge on port ${PORT} (token required)...`);
-const bridge = createAcpServer(PORT, undefined, {}, undefined, BRIDGE_TOKEN);
+// ks4on: the bridge admits the extension by IDENTITY, so pin the id of the copy
+// this run loads (computed below, before Chrome starts).
+const EXTENSION_ID_FOR_BRIDGE = await computeUnpackedExtensionId(EXT);
+const bridge = createAcpServer(PORT, undefined, {}, undefined, BRIDGE_TOKEN, false, "127.0.0.1", [EXTENSION_ID_FOR_BRIDGE]);
 
 console.log(`[acceptance] Launching headless Chrome with extension at ${EXT}...`);
 const profile = durableDir(`cap-vl6c-profile-${Date.now()}`);

@@ -23,7 +23,10 @@ import {
 import { TEST_BRIDGE_TOKEN } from "./fixtures/acp-bridge-token.ts";
 
 const FAKE_ADAPTER = fromFileUrl(new URL("./fixtures/acp-fake-adapter.mjs", import.meta.url));
-const EXTENSION_ORIGIN = "chrome-extension://abcdefghijklmnopabcdefghijklmnop";
+const TRUSTED_EXTENSION_ID = "abcdefghijklmnopabcdefghijklmnop";
+// ks4on: the origin guard is an identity test, so the bridge must be started with
+// this id pinned for the extension client path to be admitted at all.
+const EXTENSION_ORIGIN = `chrome-extension://${TRUSTED_EXTENSION_ID}`;
 
 /** Probe the preflight endpoint exactly as the extension would: an HTTP GET with
  * an Origin header, returning the raw status + parsed JSON. */
@@ -41,7 +44,7 @@ async function preflight(port: number, { token, harness = "", origin = EXTENSION
 }
 
 Deno.test("ACP bridge /acp/preflight: reports the EXACT refusal reason the upgrade would hide", async () => {
-  const bridge = createAcpServer(0, FAKE_ADAPTER, {}, "", TEST_BRIDGE_TOKEN);
+  const bridge = createAcpServer(0, FAKE_ADAPTER, {}, "", TEST_BRIDGE_TOKEN, false, "127.0.0.1", [TRUSTED_EXTENSION_ID]);
   const port = (bridge as any).addr.port;
   try {
     const noToken = await preflight(port, { harness: "claude-code" });

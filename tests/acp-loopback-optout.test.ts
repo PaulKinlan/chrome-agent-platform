@@ -17,7 +17,10 @@ import { fromFileUrl } from "jsr:@std/path@1/from-file-url";
 import { createAcpServer, isValidatedLiteralLoopback } from "../scripts/acp-bridge.ts";
 import { TEST_BRIDGE_TOKEN } from "./fixtures/acp-bridge-token.ts";
 
-const EXTENSION_ORIGIN = "chrome-extension://abcdefghijklmnopabcdefghijklmnop";
+const TRUSTED_EXTENSION_ID = "abcdefghijklmnopabcdefghijklmnop";
+// ks4on: the Origin guard admits an extension only by IDENTITY, so every bridge
+// below pins this id explicitly.
+const EXTENSION_ORIGIN = `chrome-extension://${TRUSTED_EXTENSION_ID}`;
 const FAKE_ADAPTER = fromFileUrl(new URL("./fixtures/acp-fake-adapter.mjs", import.meta.url));
 
 /** Send a WebSocket upgrade by hand and return the response status line, exactly
@@ -58,7 +61,7 @@ async function preflight(port: number, { token, origin = EXTENSION_ORIGIN }: {
 
 // (a) The default is UNCHANGED: no flag, loopback, no token → still refused.
 Deno.test("ACP loopback opt-out: default (no flag) still requires a token on loopback", async () => {
-  const bridge = createAcpServer(0, FAKE_ADAPTER, {}, "", TEST_BRIDGE_TOKEN);
+  const bridge = createAcpServer(0, FAKE_ADAPTER, {}, "", TEST_BRIDGE_TOKEN, false, "127.0.0.1", [TRUSTED_EXTENSION_ID]);
   const port = (bridge as any).addr.port;
   try {
     const noToken = await upgradeStatus(port, EXTENSION_ORIGIN);
@@ -74,7 +77,7 @@ Deno.test("ACP loopback opt-out: default (no flag) still requires a token on loo
 
 // (b) Flag + loopback + no token → the upgrade succeeds (tokenless).
 Deno.test("ACP loopback opt-out: --allow-anonymous-loopback admits a tokenless loopback upgrade", async () => {
-  const bridge = createAcpServer(0, FAKE_ADAPTER, {}, "", "", true);
+  const bridge = createAcpServer(0, FAKE_ADAPTER, {}, "", "", true, "127.0.0.1", [TRUSTED_EXTENSION_ID]);
   const port = (bridge as any).addr.port;
   try {
     const noToken = await upgradeStatus(port, EXTENSION_ORIGIN);
@@ -87,7 +90,7 @@ Deno.test("ACP loopback opt-out: --allow-anonymous-loopback admits a tokenless l
 // (c) Flag + token supplied and WRONG → still accepted on loopback (the operator
 //     chose tokenless access, so a stray/wrong token is ignored, never a refusal).
 Deno.test("ACP loopback opt-out: a wrong (or any) token is irrelevant while the opt-out is active", async () => {
-  const bridge = createAcpServer(0, FAKE_ADAPTER, {}, "", "some-supplied-token", true);
+  const bridge = createAcpServer(0, FAKE_ADAPTER, {}, "", "some-supplied-token", true, "127.0.0.1", [TRUSTED_EXTENSION_ID]);
   const port = (bridge as any).addr.port;
   try {
     const wrongToken = await upgradeStatus(port, EXTENSION_ORIGIN, "not-the-token");
@@ -214,7 +217,7 @@ Deno.test("ACP loopback opt-out: flag + '0.0.0.0' refuses to start", async () =>
 });
 
 Deno.test("ACP loopback opt-out: flag + '127.0.0.1' binds loopback and upgrades", async () => {
-  const bridge = createAcpServer(0, FAKE_ADAPTER, {}, "", "", true, "127.0.0.1");
+  const bridge = createAcpServer(0, FAKE_ADAPTER, {}, "", "", true, "127.0.0.1", [TRUSTED_EXTENSION_ID]);
   const boundAddr = (bridge as any).addr;
   assertEquals(boundAddr.hostname, "127.0.0.1", "actual bound address must be 127.0.0.1");
   const port = boundAddr.port;
@@ -227,7 +230,7 @@ Deno.test("ACP loopback opt-out: flag + '127.0.0.1' binds loopback and upgrades"
 });
 
 Deno.test("ACP loopback opt-out: flag + '::1' binds IPv6 loopback and upgrades", async () => {
-  const bridge = createAcpServer(0, FAKE_ADAPTER, {}, "", "", true, "::1");
+  const bridge = createAcpServer(0, FAKE_ADAPTER, {}, "", "", true, "::1", [TRUSTED_EXTENSION_ID]);
   const boundAddr = (bridge as any).addr;
   assertEquals(boundAddr.hostname, "::1", "actual bound address must be ::1");
   const port = boundAddr.port;
@@ -259,7 +262,7 @@ Deno.test("ACP loopback opt-out: flag + '::1' binds IPv6 loopback and upgrades",
 });
 
 Deno.test("ACP loopback opt-out: flag + '[::1]' canonicalizes to bare '::1', binds IPv6 loopback and upgrades", async () => {
-  const bridge = createAcpServer(0, FAKE_ADAPTER, {}, "", "", true, "[::1]");
+  const bridge = createAcpServer(0, FAKE_ADAPTER, {}, "", "", true, "[::1]", [TRUSTED_EXTENSION_ID]);
   const boundAddr = (bridge as any).addr;
   assertEquals(boundAddr.hostname, "::1", "actual bound address for [::1] must canonicalize to bare ::1");
   const port = boundAddr.port;
@@ -294,7 +297,7 @@ Deno.test("ACP loopback opt-out: flag + '[::1]' canonicalizes to bare '::1', bin
 //     admitted under the flag, but a web-page Origin is STILL refused (the origin
 //     guard is kept, never bypassed by the opt-out).
 Deno.test("ACP loopback opt-out: /acp/preflight agrees with the live path under the flag", async () => {
-  const bridge = createAcpServer(0, FAKE_ADAPTER, {}, "", "", true);
+  const bridge = createAcpServer(0, FAKE_ADAPTER, {}, "", "", true, "127.0.0.1", [TRUSTED_EXTENSION_ID]);
   const port = (bridge as any).addr.port;
   try {
     const tokenless = await preflight(port, {});

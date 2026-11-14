@@ -5,7 +5,13 @@
 // authentication is required on EVERY upgrade (chrome-agent-platform-jsjy), so
 // paste the token into the extension's acp.token setting as well as the endpoint.
 //
-//   node scripts/acp-service.mjs install [--harness pi] [--port 3210] [--token SECRET] [--allow-anonymous-loopback]
+//   node scripts/acp-service.mjs install [--harness pi] [--port 3210] [--token SECRET] [--extension-id ID] [--allow-anonymous-loopback]
+//     --extension-id pins the ONE extension identity whose pages may drive the bridge
+//     (chrome-agent-platform-ks4on). Repeat it to pin more than one. Without it the bridge
+//     refuses EVERY extension page, because the Origin guard checks identity, not the
+//     extension scheme: any installed extension could otherwise drive this shell-capable
+//     harness, and under --allow-anonymous-loopback it would need no token at all.
+//     Read the id from chrome://extensions (Firefox: a moz-extension uuid).
 //     --token is optional: without it the bridge GENERATES a secret on first start and
 //     persists it (default $XDG_CONFIG_HOME/cap-acp/bridge-token, mode 0600), and the
 //     status line below says so.
@@ -35,7 +41,14 @@ function parseArgs(argv) {
   const out = { _: [] };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a.startsWith("--")) out[a.slice(2)] = argv[i + 1] && !argv[i + 1].startsWith("--") ? argv[++i] : true;
+    if (a.startsWith("--")) {
+      const key = a.slice(2);
+      const value = argv[i + 1] && !argv[i + 1].startsWith("--") ? argv[++i] : true;
+      // --extension-id is REPEATABLE (ks4on): collect every value, never keep only
+      // the last one, so an install that pins two ids really pins both.
+      if (key === "extension-id") out[key] = [].concat(out[key] ?? [], value);
+      else out[key] = value;
+    }
     else out._.push(a);
   }
   return out;
@@ -65,6 +78,8 @@ function tokenNote() {
 // convention (chrome-agent-platform-7p7e: the old default invented
 // /Users/<name>/journal on a machine that had no such directory).
 const CWD = args.cwd ? String(args.cwd) : "";
+/** The extension ids the bridge's Origin guard admits (ks4on). Repeatable. */
+const EXTENSION_IDS = [].concat(args["extension-id"] ?? []).filter(Boolean).map(String);
 const UNIT_OVERRIDE = args.unit ? String(args.unit) : "";
 const LOG_OVERRIDE = args.log ? String(args.log) : "";
 
@@ -120,6 +135,7 @@ function bridgeArgs() {
   const a = ["run", "-A", join(ROOT, "scripts", "acp-bridge.ts"), "--port", PORT, "--harness", HARNESS];
   if (TOKEN && !ALLOW_ANONYMOUS_LOOPBACK) a.push("--token", TOKEN);
   if (ALLOW_ANONYMOUS_LOOPBACK) a.push("--allow-anonymous-loopback");
+  for (const id of EXTENSION_IDS) a.push("--extension-id", id);
   if (CWD) a.push("--cwd", CWD);
   return a;
 }
@@ -309,6 +325,8 @@ function readInstalledServiceUnit(unitPath) {
     let token = "";
     let port = "";
     let harness = "";
+    /** The pinned extension ids (ks4on); empty = every extension page is refused. */
+    let extensionIds = [];
 
     if (isPlist) {
       // Derive arguments SOLELY from the parsed ProgramArguments string values:
@@ -323,6 +341,9 @@ function readInstalledServiceUnit(unitPath) {
         if (portIdx !== -1 && args[portIdx + 1] !== undefined) port = args[portIdx + 1];
         const harnessIdx = args.indexOf("--harness");
         if (harnessIdx !== -1 && args[harnessIdx + 1] !== undefined) harness = args[harnessIdx + 1];
+        for (let i = 0; i < args.length; i++) {
+          if (args[i] === "--extension-id" && args[i + 1] !== undefined) extensionIds.push(args[i + 1]);
+        }
       }
     } else {
       // Derive arguments SOLELY from the ExecStart line (never comments, descriptions, or working directory)
@@ -335,8 +356,9 @@ function readInstalledServiceUnit(unitPath) {
       if (portMatch) port = portMatch[1];
       const harnessMatch = execLine.match(/(?:^|\s)--harness(?:\s+|=)([^\s]+)/);
       if (harnessMatch) harness = harnessMatch[1];
+      for (const m of execLine.matchAll(/(?:^|\s)--extension-id(?:\s+|=)([^\s]+)/g)) extensionIds.push(m[1]);
     }
-    return { unitPath, isPlist, isAnonymous, token, port, harness };
+    return { unitPath, isPlist, isAnonymous, token, port, harness, extensionIds };
   } catch {
     return null;
   }
@@ -368,6 +390,12 @@ function status() {
   }
 
   const effectivePort = installed?.port || PORT;
+  const pinnedExtensionIds = installed ? installed.extensionIds : EXTENSION_IDS;
+  console.log(
+    pinnedExtensionIds.length
+      ? `extension origins: ${pinnedExtensionIds.join(", ")} (only these ids may drive the bridge)`
+      : "extension origins: NONE pinned — every extension page is refused; reinstall with --extension-id <id from chrome://extensions>",
+  );
   const url = `http://127.0.0.1:${effectivePort}/health`;
   fetch(url).then(async (r) => {
     console.log(`bridge: UP at ${url}`);

@@ -306,9 +306,20 @@ Implemented and verified live (pi-acp 0.0.33 over `npm run acp:bridge`):
   `tool_call_update` share a card, and ACP's `in_progress`/`completed`/`failed`
   are mapped to the `running`/`done`/`error` the card actually renders settled.
 - **Origin scope** — a web page cannot drive the bridge (browsers always send
-  `Origin`; non-extension origins are refused). The residual is that the default
-  allowlist is the extension SCHEME, so any installed extension could connect —
-  which is why the shared secret, not the origin, is the binding. **AUTHENTICATION
+  `Origin`; non-extension origins are refused), and an extension page is admitted
+  only by IDENTITY: the guard parses `chrome-extension://<id>` /
+  `moz-extension://<uuid>` and compares the host with the ids pinned by
+  `--extension-id` (repeatable). **NO ID PINNED MEANS EVERY
+  EXTENSION PAGE IS REFUSED (chrome-agent-platform-ks4on, coord ruling
+  2026-11-14).** The guard used to end in a scheme-prefix test, so ANY installed
+  extension was an admitted Origin — and under `--allow-anonymous-loopback`, which
+  skips the token guard, any installed extension could drive a shell-capable
+  harness with no credential at all. `extension/manifest.json` carries no `key`, so
+  an unpacked CAP's id is not derivable from this repo: the operator reads it at
+  `chrome://extensions` and passes it. A malformed `--extension-id` refuses to
+  start, and a refusal is logged (sanitised) and reported by `/acp/preflight` and
+  `/health`, not swallowed. `--allow-origin <origin>` remains the exact-origin
+  escape hatch for anything else. **AUTHENTICATION
   IS REQUIRED BY DEFAULT (jsjy, 2026-10-06):** every upgrade must carry
   `?token=…`, loopback included, because a local process sends no `Origin` at all
   and the origin guard admits that by design. The bridge GENERATES and PERSISTS a
@@ -377,9 +388,11 @@ Deliberately NOT yet implemented (tracked as beads):
   has nothing to cancel. Bead chrome-agent-platform-c6gq. (Supersede is handled:
   the newer turn cancels the running one, and the runner claims the conversation
   synchronously so two rapid sends cannot prompt the same session at once.)
-- **Bridge client binding** — the default extension-scheme allowlist admits any
-  installed extension; `--token` exists and the extension can send one from kv
-  (`acp.token`), with the Settings UI still pending (bead khkk).
+- **Bridge client binding** — the Origin guard admits an extension page only when
+  its ID was pinned with `--extension-id` (chrome-agent-platform-ks4on), so an
+  installed extension is no longer admitted by default; `--token` exists and the
+  extension can send one from kv (`acp.token`), with the Settings UI still
+  pending (bead khkk).
 - **No CLI to run** — three shapes, narrowest first:
   1. **Chrome Native Messaging** (no bridge, no port, no daemon): Chrome spawns
      `scripts/acp-native-host.ts` (via the wrapper `scripts/acp-native-host.sh`)

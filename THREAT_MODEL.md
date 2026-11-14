@@ -711,12 +711,29 @@ and each names the executable check that would catch a regression.
   `scripts/security-suite.ts:308`.
 - **INV-13 — Every wildcard `postMessage` target is a deliberate, reasoned allowlist
   entry.** `tests/postmessage-wildcard-guard.test.ts:1-15`.
-- **INV-14 — The ACP bridge refuses any non-extension Origin unless one was named
-  explicitly, requires a token even on loopback by default, and binds loopback by default.**
-  The explicit `--allow-anonymous-loopback` opt-out is a deliberate, loopback-only
-  exception; combining the flag with a non-loopback bind or unvalidated hostname is a startup error.
-  `scripts/acp-bridge.ts:52`, `scripts/acp-bridge.ts:109-116`, `scripts/acp-bridge.ts:203-208`,
-  `scripts/acp-bridge.ts:859-867`; `tests/acp-bridge-security.test.ts:49-60`,
+- **INV-14 — The ACP bridge refuses every Origin it was not configured to trust: web
+  origins always, and extension pages unless that extension's ID was pinned with
+  `--extension-id`; it requires a token even on loopback by default, and binds loopback
+  by default.**
+  An extension Origin is matched by IDENTITY — parsed `chrome-extension://<id>` /
+  `moz-extension://<uuid>`, host compared with the pinned ids, and the scheme required to
+  be one that id can belong to — never by scheme prefix (chrome-agent-platform-ks4on).
+  With NO id pinned the bridge admits NO extension page; a malformed `--extension-id`
+  refuses to start, and every refused Origin is logged and reported by `/acp/preflight`
+  and `/health`. The explicit `--allow-anonymous-loopback` opt-out is a deliberate,
+  loopback-only exception: it skips the TOKEN guard and therefore leaves the origin
+  identity guard as the only barrier, which is why the pin is required to be narrow;
+  combining the flag with a non-loopback bind or unvalidated hostname is a startup error.
+  Residual, accepted: the pin is an identity test, not an integrity test — a compromised
+  browser profile running the SAME extension id is still trusted, and on a single-user
+  development machine local processes are owner-controlled (R24).
+  `scripts/acp-bridge.ts:54` (`--allow-origin`), `scripts/acp-bridge.ts:68` (the
+  `--extension-id` pin), `scripts/acp-bridge.ts:90` (pin validation),
+  `scripts/acp-bridge.ts:265` (Origin → identity), `scripts/acp-bridge.ts:317`
+  (`originAllowed`), `scripts/acp-bridge.ts:328` (refusal detail),
+  `scripts/acp-bridge.ts:372` (`acpConnectionRefusal`);
+  `tests/acp-bridge-extension-identity.test.ts` (the identity pins and the
+  prefix-match mutation), `tests/acp-bridge-security.test.ts:52-76`,
   `tests/acp-loopback-optout.test.ts`.
 - **INV-15 — Every new offscreen execution host must authenticate the service
   worker before handling a job.** `isTrustedServiceWorkerSender` at

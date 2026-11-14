@@ -62,9 +62,12 @@ if (PERMISSION_RUN) Deno.env.set("CAP_ACP_FIXTURE_ASK_PERMISSION", "1");
 // the extension's acp.token (below) so the authenticated path is exercised —
 // never the anonymous-loopback bypass.
 const LOCAL_BRIDGE_TOKEN = "cap-acp-browser-acceptance-token";
+// ks4on: the bridge admits an extension page only by IDENTITY, so the id of the
+// unpacked copy this run loads has to be pinned on the bridge explicitly.
+const LOCAL_EXTENSION_ID = await computeUnpackedExtensionId(EXT);
 const bridge = NO_LOCAL_BRIDGE ? null : (ADAPTER
-  ? createAcpServer(3210, ADAPTER, {}, "", LOCAL_BRIDGE_TOKEN)
-  : createAcpServer(3210, undefined, {}, "", LOCAL_BRIDGE_TOKEN));
+  ? createAcpServer(3210, ADAPTER, {}, "", LOCAL_BRIDGE_TOKEN, false, "127.0.0.1", [LOCAL_EXTENSION_ID])
+  : createAcpServer(3210, undefined, {}, "", LOCAL_BRIDGE_TOKEN, false, "127.0.0.1", [LOCAL_EXTENSION_ID]));
 
 await Deno.mkdir(EVIDENCE_DIR, { recursive: true });
 const profile = durableDir(`cap-acp-browser-profile-${Date.now()}`);
