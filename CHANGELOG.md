@@ -1,7 +1,11 @@
 # Changelog
 
 ## [0.3.753] — 2026-11-14
-- none.
+- Saved API keys no longer come with a promise the vault cannot keep: the extension still keeps them out of plain text in your profile, but it now says plainly that anyone who copies that profile can decrypt them, and that closing that needs a vault passphrase (not built yet).
+- Settings now tells the truth about saved service keys: without a vault passphrase they are obfuscated, not encrypted, and a copied Chrome profile can still read them.
+- You can now set a vault passphrase. With it, your saved service keys are genuinely encrypted at rest — a copied Chrome profile can no longer decrypt them, and existing keys are re-sealed in place without re-entering them.
+- Setting a vault passphrase now actually protects your saved keys end to end: after a browser restart the vault locks, and any request that needs a stored key is refused until you unlock it, instead of quietly going out without one.
+- Settings now has a vault passphrase: turn it on and your existing saved keys are re-sealed in place, with the panel telling you plainly whether your keys are encrypted, only obfuscated, or locked after a restart.
 
 ## [0.3.752] — 2026-11-13
 - none
