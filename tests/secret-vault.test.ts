@@ -909,3 +909,90 @@ Deno.test("jao1.7: an abandoned lock does not deadlock initialization", async ()
   const got = await vault.getSecretRaw("GITHUB_TOKEN", { caller: "sw", access: SW_ACCESS });
   assertEquals(got.value, SECRET_B);
 });
+
+// ── zxo4i: the lock route + the proxy's locked refusal (wiring, not crypto) ──
+
+import { createEnclaveProxyRoutes } from "../extension/background/routes/enclave-proxy.js";
+
+Deno.test("zxo4i: vault.lock seals/unlocks/relocks through the Settings route, and status reports the state", async () => {
+  const storage = fakeStorage();
+  const vault = await createSecretVault({
+    storageArea: storage,
+    extensionId: CLAIM_EXT_ID,
+    installSaltB64: CLAIM_SALT_B64,
+  });
+  await vault.setSecret("BRAVE_SEARCH_API_KEY", SECRET_A, { by: "sw" });
+  const routes = createVaultRoutes({
+    vault,
+    requireSettingsSender: (ctx: any) => {
+      if (ctx?.principal !== "owner-options") throw new Error("settings surface required");
+    },
+  });
+  const owner = { principal: "owner-options" };
+
+  assertEquals((await routes["vault.status"]({}, owner)).protection.state, "obfuscation");
+
+  const sealed = await routes["vault.lock"]({ action: "seal", passphrase: SEALED_PASS }, owner);
+  assertEquals(sealed.ok, true);
+  assertEquals(sealed.state, "sealed");
+  assertEquals(sealed.resealed, 1);
+  const sealedStatus = await routes["vault.status"]({}, owner);
+  assertEquals(sealedStatus.protection.state, "sealed");
+  assertEquals(sealedStatus.protection.encryptedAtRest, true);
+
+  const relocked = await routes["vault.lock"]({ action: "relock" }, owner);
+  assertEquals(relocked.state, "locked");
+  assertEquals((await routes["vault.status"]({}, owner)).protection.state, "locked");
+
+  const unlocked = await routes["vault.lock"]({ action: "unlock", passphrase: SEALED_PASS }, owner);
+  assertEquals(unlocked.ok, true);
+  assertEquals((await routes["vault.status"]({}, owner)).protection.state, "sealed");
+
+  // A wrong passphrase is refused by the route and changes nothing.
+  await routes["vault.lock"]({ action: "relock" }, owner);
+  await assertRejects(() => routes["vault.lock"]({ action: "unlock", passphrase: "wrong passphrase!" }, owner), Error, undefined, "a wrong passphrase must not unlock");
+
+  // Settings authority still applies to the lock route.
+  await assertRejects(() => routes["vault.lock"]({ action: "relock" }, { principal: "content" }), Error, "settings surface");
+  // An unknown action is a caller bug, refused by name.
+  await assertRejects(() => routes["vault.lock"]({ action: "shatter" }, owner), TypeError);
+});
+
+Deno.test("zxo4i: the enclave proxy refuses a LOCKED vault with the vault's own code instead of dialing", async () => {
+  const storage = fakeStorage();
+  const vault = await createSecretVault({
+    storageArea: storage,
+    extensionId: CLAIM_EXT_ID,
+    installSaltB64: CLAIM_SALT_B64,
+  });
+  await vault.setSecret("BRAVE_SEARCH_API_KEY", SECRET_A, { by: "sw" });
+  await vault.enableLock(SEALED_PASS);
+  await vault.relock();
+
+  let dialed = 0;
+  const routes = createEnclaveProxyRoutes({
+    vault: { getSecretRaw: (keyId: string, opts: any) => vault.getSecretRaw(keyId, { ...opts, access: SW_ACCESS }) },
+    fetchImpl: () => {
+      dialed++;
+      return Promise.resolve(new Response("{}", { status: 200 }));
+    },
+    services: {
+      "brave-search": {
+        origin: "https://api.search.brave.com",
+        secretKey: "BRAVE_SEARCH_API_KEY",
+        authType: "bearer",
+        path: "/res/v1/web/search",
+      },
+    },
+    isAllowedCaller: () => true,
+  });
+
+  const err = await assertRejects(
+    () => routes["enclave.proxy"]({ service: "brave-search", injectServiceAuth: true }, { [Symbol.for("cap.enclave.sw")]: true }),
+    Error,
+    undefined,
+    "a locked vault must refuse the proxied request",
+  );
+  assertEquals((err as any).code, "vault_locked", "the refusal keeps the vault's code so the UI can say 'unlock'");
+  assertEquals(dialed, 0, "NOTHING was dialed — the request never left the extension without its credential");
+});

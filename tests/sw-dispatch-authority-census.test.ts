@@ -71,7 +71,7 @@ export const CENSUS_CATEGORIES = {
     // The vault + enclave Settings surface (jao1.5, bd17634f): every one of these
     // calls requireSettingsSender, or checks principal === "owner-options" itself
     // (enclave.status). chrome-agent-platform-s7wl added them to the population.
-    "vault.status", "vault.set", "vault.configureProxy", "vault.rotate", "vault.delete",
+    "vault.status", "vault.set", "vault.configureProxy", "vault.rotate", "vault.delete", "vault.lock",
     "vault.ledger.clear", "vault.ledger.resetQuotas", "vault.ledger.usage", "vault.ledger.setQuotas", "vault.test", "enclave.status",
   ]),
   OWNER_APPROVAL_DIRECT: new Set([
@@ -465,43 +465,43 @@ Deno.test("census: companion-doc total and route-name falsifications RED by docu
   const arch = await Deno.readTextFile(`${ROOT}docs/ARCHITECTURE.md`);
   const plan = await Deno.readTextFile(`${ROOT}docs/NATIVE-AGENT-POSITION-PLAN.md`);
 
-  assertThrows(() => assertRouteMap(map.replace("**299**", "**298**")), Error, "ROUTE_MAP total");
+  assertThrows(() => assertRouteMap(map.replace("**300**", "**299**")), Error, "ROUTE_MAP total");
   assertThrows(() => assertRouteMap(map.replace("`enclave.proxy`", "`enclave.proxy-renamed`")), Error, "enclave.proxy-renamed");
   assertThrows(() => assertRiskAndThreatPopulation(risks.replace("38 unclassified mutation routes", "31 unclassified mutation routes"), threat), Error, "RISK-REGISTER R11 risk");
   assertThrows(() => assertRiskAndThreatPopulation(risks.replace("`asset.export-to-folder` writes", "`asset.export-to-folder-renamed` writes"), threat), Error, "asset.export-to-folder-renamed");
   assertThrows(() => assertRiskAndThreatPopulation(risks,
-    threat.replace("` assert 299 registered routes", "` assert 298 registered routes")),
+    threat.replace("` assert 300 registered routes", "` assert 299 registered routes")),
     Error, "THREAT_MODEL component-map evidence pin population");
   assertThrows(() => assertRiskAndThreatPopulation(risks,
-    threat.replace("38 unclassified mutations among 299 registered routes", "38 unclassified mutations among 298 registered routes")),
+    threat.replace("38 unclassified mutations among 300 registered routes", "38 unclassified mutations among 299 registered routes")),
     Error, "THREAT_MODEL T4 evidence pin registered count");
 
   // r073 falsification drills:
   assertThrows(
-    () => assertArchitectureAndStrategyPopulation(arch.replace("299-route population", "298-route population"), plan),
+    () => assertArchitectureAndStrategyPopulation(arch.replace("300-route population", "299-route population"), plan),
     Error,
     "ARCHITECTURE.md route count must equal registered population",
   );
   assertThrows(
-    () => assertArchitectureAndStrategyPopulation(arch.replace("299-route population", "bogus text"), plan),
+    () => assertArchitectureAndStrategyPopulation(arch.replace("300-route population", "bogus text"), plan),
     Error,
     "ARCHITECTURE.md must state the complete route population",
   );
   assertThrows(
-    () => assertArchitectureAndStrategyPopulation(arch, plan.replace("299-route dispatch authority", "298-route dispatch authority")),
+    () => assertArchitectureAndStrategyPopulation(arch, plan.replace("300-route dispatch authority", "299-route dispatch authority")),
     Error,
     "NATIVE-AGENT-POSITION-PLAN.md route count must equal registered population",
   );
   assertThrows(
-    () => assertArchitectureAndStrategyPopulation(arch, plan.replace("299-route dispatch authority", "bogus text")),
+    () => assertArchitectureAndStrategyPopulation(arch, plan.replace("300-route dispatch authority", "bogus text")),
     Error,
     "NATIVE-AGENT-POSITION-PLAN.md must state the dispatch authority route count",
   );
 });
 
-Deno.test("census: all registered routes in handlers are derived via AST and total 299", () => {
+Deno.test("census: all registered routes in handlers are derived via AST and total 300", () => {
   const registered = extractAllRegisteredRoutes();
-  assertEquals(registered.size, 299, `registered routes population must equal 299 (got ${registered.size})`);
+  assertEquals(registered.size, 300, `registered routes population must equal 300 (got ${registered.size})`);
 });
 
 export function assertSettingsSessionRoutesInCensus(

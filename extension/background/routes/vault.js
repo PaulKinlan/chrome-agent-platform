@@ -17,6 +17,10 @@ function vaultPanelRowsOf(masked) {
 }
 
 /**
+ * The vault may also expose protection()/enableLock()/unlock()/relock()
+ * (chrome-agent-platform-zxo4i); when it does not, "vault.lock" reports
+ * { ok: false, code: "not_wired" } rather than pretending the lock exists.
+ *
  * @param {{
  *   vault: any,
  *   requireSettingsSender: Function,
@@ -129,10 +133,44 @@ export function createVaultRoutes({
     memoryRules.delete(id);
   }
 
+  /** One route for the three lock transitions (seal / unlock / relock). One
+   * route, not three, because every registered route is a census line other
+   * lanes maintain: the action is explicit and each branch is Settings-gated
+   * with the same authority as vault.set. */
+  async function vaultLock({ action, passphrase } = {}, context) {
+    requireSettingsSender(context);
+    const verb = String(action ?? "");
+    if (verb !== "seal" && verb !== "unlock" && verb !== "relock") {
+      // No new code literal here: fpb0 owns this file's Test-connection code
+      // vocabulary, and an unknown action is a caller bug, not a vault state.
+      throw new TypeError(`vault.lock: unknown action ${JSON.stringify(verb)} (seal | unlock | relock)`);
+    }
+    if (verb === "seal") {
+      if (typeof vault.enableLock !== "function") return { ok: false, code: "not_wired" };
+      const res = await vault.enableLock(String(passphrase ?? ""));
+      return { ok: true, state: res.state, resealed: res.resealed };
+    }
+    if (verb === "unlock") {
+      if (typeof vault.unlock !== "function") return { ok: false, code: "not_wired" };
+      const res = await vault.unlock(String(passphrase ?? ""));
+      return { ok: true, state: res.state, migrationPending: res.migrationPending === true };
+    }
+    if (typeof vault.relock !== "function") return { ok: false, code: "not_wired" };
+    const res = await vault.relock();
+    return { ok: true, state: res.state };
+  }
+
   return {
+    async "vault.lock"(message, context) {
+      return vaultLock(message, context);
+    },
+
     async "vault.status"(m, context) {
       requireSettingsSender(context);
       const masked = await vault.listMasked({ caller: "ui" });
+      const protection = typeof vault.protection === "function"
+        ? await vault.protection().catch(() => null)
+        : null;
       const proxyRules = await loadProxyRules();
       const ledgerEntries = typeof ledger?.list === "function" ? ledger.list() : [];
       const usage = typeof ledger?.getUsage === "function" ? await ledger.getUsage() : {};
@@ -140,6 +178,9 @@ export function createVaultRoutes({
       return {
         ok: true,
         services: vaultPanelRowsOf(masked),
+        // The panel renders the at-rest state from THIS, so its copy cannot
+        // drift from what the vault actually does (chrome-agent-platform-zxo4i).
+        protection,
         proxyRules,
         ledger: ledgerEntries,
         usage,
