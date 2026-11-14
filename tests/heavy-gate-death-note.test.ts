@@ -18,7 +18,7 @@
 
 import { assert, assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
   checkHeavyReceipt,
@@ -269,4 +269,93 @@ Deno.test("qg9xa: the source pins the wiring — the bound path and the signal h
   const receipt = readFileSync(`${ROOT}scripts/gate-receipt.mjs`, "utf8");
   assertStringIncludes(receipt, "readDeathNote(tree)");
   assertStringIncludes(receipt, "death.headline");
+});
+
+Deno.test("o43z7: a note that PARSES but lacks the narrated fields is refused, not crashed on", () => {
+  // The reviewer's repro (o43z7): {version:1, kind:'heavy-gate-death-note', verdict:'unknown',
+  // outcome:'killed-external'} — valid JSON, no `at`/`headline`. readDeathNote used to return it and
+  // the READER then threw RangeError from new Date(undefined).toISOString(), so a diagnostics stage
+  // exited 1 with a stack instead of its documented 2. A malformed note is reported, never guessed at.
+  const tree = SYNTHETIC_TREE;
+  try {
+    rmSync(deathNotePath(tree), { force: true });
+    writeFileSync(deathNotePath(tree), JSON.stringify({
+      version: 1,
+      kind: "heavy-gate-death-note",
+      verdict: "unknown",
+      outcome: "killed-external",
+    }));
+    assert(existsSync(deathNotePath(tree)), "the incomplete note is on disk");
+    assertEquals(readDeathNote(tree), null, "an incomplete note answers no question");
+
+    // Each required field is load-bearing on its own: dropping any one refuses the note.
+    const complete = {
+      version: 1,
+      kind: "heavy-gate-death-note",
+      verdict: "unknown",
+      outcome: "killed-external",
+      headline: "heavy-gate was killed by an EXTERNAL signal (SIGTERM) after 135s (not a pass or fail)",
+      at: 1_700_000_000_000,
+      producer: "impl-c",
+    };
+    assertEquals(readDeathNote(tree), null, "still the incomplete note");
+    writeFileSync(deathNotePath(tree), JSON.stringify(complete));
+    assertEquals(readDeathNote(tree)?.headline, complete.headline, "a complete note is read as before");
+    for (const field of ["headline", "at", "kind", "outcome"] as const) {
+      const missing = { ...complete };
+      delete (missing as Record<string, unknown>)[field];
+      writeFileSync(deathNotePath(tree), JSON.stringify(missing));
+      assertEquals(readDeathNote(tree), null, `a note without ${field} is refused`);
+    }
+    // A timestamp that is not an instant is refused too, and an ISO string is honoured.
+    writeFileSync(deathNotePath(tree), JSON.stringify({ ...complete, at: "not-a-date" }));
+    assertEquals(readDeathNote(tree), null, "an unparseable `at` is refused, not passed to toISOString");
+    writeFileSync(deathNotePath(tree), JSON.stringify({ ...complete, at: "2026-11-14T06:00:00.000Z" }));
+    assertEquals(readDeathNote(tree)?.headline, complete.headline, "an ISO timestamp is a valid instant");
+  } finally {
+    clearDeathNote(tree);
+  }
+});
+
+Deno.test("o43z7: the gate-receipt stage keeps its exit-2 vocabulary on an incomplete death note", async () => {
+  const dir = await Deno.makeTempDir({ dir: durableDir("scratch"), prefix: "cap-o43z7-" });
+  const git = (...args: string[]) =>
+    new Deno.Command("git", { args: ["-c", "user.email=t@example.test", "-c", "user.name=t", ...args], cwd: dir, stdout: "piped", stderr: "piped" }).output();
+  let tree = "";
+  try {
+    await git("init", "-q");
+    await Deno.writeTextFile(`${dir}/x.txt`, "x\n");
+    await git("add", "-A");
+    await git("commit", "-q", "-m", "base");
+    tree = new TextDecoder().decode((await git("rev-parse", "HEAD^{tree}")).stdout).trim();
+    rmSync(receiptPath(tree), { force: true });
+    // The reviewer's exact note: parses, omits `at` and `headline`.
+    writeFileSync(deathNotePath(tree), JSON.stringify({
+      version: 1,
+      kind: "heavy-gate-death-note",
+      verdict: "unknown",
+      outcome: "killed-external",
+    }));
+    const result = await new Deno.Command("node", {
+      args: [`${ROOT}scripts/gate-receipt.mjs`],
+      cwd: dir,
+      stdout: "piped",
+      stderr: "piped",
+    }).output();
+    const stderr = new TextDecoder().decode(result.stderr);
+    assertEquals(result.code, 2, `the structural refusal code survives corrupt input; stderr:\n${stderr}`);
+    assertStringIncludes(stderr, "malformed and is ignored", "the note is reported as malformed");
+    assertStringIncludes(stderr, "is not a timestamp", "the missing timestamp is named, not printed");
+    assertStringIncludes(stderr, "HEAVY RECEIPT MISSING", "the structural refusal sentence still prints");
+    assert(!stderr.includes("gate-receipt: undefined") && !stderr.includes("recorded "),
+      `an ignored note narrates nothing (that "undefined" line was the crash's first symptom):\n${stderr}`);
+    assert(!stderr.includes("RangeError"), `no crash from a corrupt note:\n${stderr}`);
+    assert(!/\n\s+at .*gate-receipt/.test(stderr), `no stack trace:\n${stderr}`);
+  } finally {
+    if (tree) {
+      clearDeathNote(tree);
+      rmSync(receiptPath(tree), { force: true });
+    }
+    await Deno.remove(dir, { recursive: true }).catch(() => {});
+  }
 });

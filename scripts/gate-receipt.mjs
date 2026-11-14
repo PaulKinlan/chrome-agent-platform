@@ -89,9 +89,16 @@ if (!verdict.ok) {
   // file that speaks for itself, and guessing a cause there is the same defect qg9xa exists to kill.
   const death = accountingOnly || verdict.reason !== "missing" ? null : readDeathNote(tree);
   if (death) {
+    // o43z7: readDeathNote now refuses an incomplete note, but the stage must keep its exit-code
+    // vocabulary even if a future shape slips past it — a diagnostics stage that throws a
+    // RangeError from `new Date(…).toISOString()` exits 1 with a stack instead of refusing at 2.
+    const recordedAt = (() => {
+      const instant = new Date(death.at);
+      return Number.isNaN(instant.getTime()) ? String(death.at) : instant.toISOString();
+    })();
     console.error(`gate-receipt: ${death.headline}`);
     console.error(
-      `gate-receipt: recorded ${new Date(death.at).toISOString()} by ${death.producer ?? "unknown"}` +
+      `gate-receipt: recorded ${recordedAt} by ${death.producer ?? "unknown"}` +
         `${death.phase ? ` during ${death.phase}` : ""} — the run is UNKNOWN, not a failure of the tree.`,
     );
   }

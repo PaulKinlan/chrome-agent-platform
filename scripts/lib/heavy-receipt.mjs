@@ -176,16 +176,52 @@ export function writeDeathNote({
   }
 }
 
-/** The death note on disk for this tree, or null. A malformed note is reported, never guessed at. */
+/** Why a death note on disk cannot be trusted to narrate a run, or [] when it is well-formed.
+ *
+ *  chrome-agent-platform-o43z7: `readDeathNote` used to check only that the file PARSED, then the
+ *  reader did `new Date(note.at).toISOString()`. A note that parses but omits `at` therefore threw
+ *  `RangeError: Invalid time value` from inside a diagnostics stage and exited 1 with a stack — the
+ *  one vocabulary a stage like this must never lose under corrupt input, because "the note is
+ *  corrupt" and "the tree is bad" are different answers. The in-system writer (writeDeathNote)
+ *  always sets every field, so this shape only appears through external corruption or hand-editing;
+ *  that is exactly the case a fail-closed reader has to survive. */
+export function deathNoteProblems(note) {
+  if (!note || typeof note !== "object" || Array.isArray(note)) return ["not a JSON object"];
+  const problems = [];
+  if (note.kind !== "heavy-gate-death-note") problems.push(`kind is ${JSON.stringify(note.kind ?? null)}, not "heavy-gate-death-note"`);
+  if (!DEATH_NOTE_OUTCOMES.includes(note.outcome)) problems.push(`outcome ${JSON.stringify(note.outcome ?? null)} is not one of ${DEATH_NOTE_OUTCOMES.join("/")}`);
+  if (typeof note.headline !== "string" || note.headline.trim() === "") problems.push("headline is missing");
+  // The writer records `Date.now()`; a hand-written note may carry an ISO string. Anything that does
+  // not resolve to a real instant is refused rather than passed to toISOString().
+  const at = note.at;
+  const instant = typeof at === "number" ? (Number.isFinite(at) ? new Date(at) : null)
+    : typeof at === "string" && at.trim() !== "" ? new Date(at) : null;
+  if (!instant || Number.isNaN(instant.getTime())) problems.push(`at ${JSON.stringify(at ?? null)} is not a timestamp`);
+  return problems;
+}
+
+/** The death note on disk for this tree, or null. A malformed note is reported, never guessed at.
+ *  "Malformed" includes a note that parses but lacks the fields the reader narrates from
+ *  (chrome-agent-platform-o43z7) — see deathNoteProblems. */
 export function readDeathNote(tree) {
   const path = deathNotePath(tree);
   if (!existsSync(path)) return null;
+  let note;
   try {
-    return JSON.parse(readFileSync(path, "utf8"));
+    note = JSON.parse(readFileSync(path, "utf8"));
   } catch (error) {
     console.error(`heavy-receipt: the death note for tree ${String(tree).slice(0, 12)} is unreadable (${error?.message ?? error})`);
     return null;
   }
+  const problems = deathNoteProblems(note);
+  if (problems.length) {
+    console.error(
+      `heavy-receipt: the death note for tree ${String(tree).slice(0, 12)} is malformed and is ignored ` +
+      `(${problems.join("; ")}) — the run stays UNKNOWN, never guessed at`,
+    );
+    return null;
+  }
+  return note;
 }
 
 /** `git rev-parse HEAD^{tree}` — the content identity of the checked-out tree. */
