@@ -125,6 +125,12 @@ export const SERIAL_LANES = Object.freeze({
   "tests/select-tests-residue.test.ts": "build",
   "tests/real-browser-teardown.test.ts": "build",
   "tests/requires-owner-gesture-column-allowlist.test.ts": "build",
+  // chrome-agent-platform-aaakp: writes untracked probe files under the real repo
+  // tree (extension/background/routes, tests/fixtures) for its recursion proofs;
+  // killed-run residue poisons the silent-write sweep and changed-file selection,
+  // so it must not overlap the other repo-tree writers. No wall-clock assertion:
+  // build lane, not strict.
+  "tests/best-effort-write-guard.test.ts": "build",
   "tests/emscripten-abi-loaded-harness.test.ts": "build",
   "tests/chunk-resolution-browser.test.ts": "build",
   // x0vas: reads build.mjs source (a build-artifact mention), never builds.
