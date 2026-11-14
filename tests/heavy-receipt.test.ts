@@ -1334,3 +1334,34 @@ Deno.test("mv1jw: the printed coverage comes from the validated ledger, so it ca
   assertEquals(summary, `${expectedHeavyFiles().length}/${expectedHeavyFiles().length} covered, 0 skips`);
   assertStringIncludes(verdict.line, `${expectedHeavyFiles().length}/${expectedHeavyFiles().length} covered`);
 }));
+
+Deno.test("hjmmf: with the receipt's own covered/quarantined DELETED, every printed number still comes from the validator", withReceipts((nextTree) => {
+  // The reviewer's repro, pinned: a receipt that passes the ledger checks but whose `covered` and
+  // `quarantined` fields have been stripped must not make the acceptance line claim 0/N. The numbers a
+  // person reads before landing come from the RECOMPUTED ledger, so a field the receipt omits cannot
+  // lower them - and, symmetrically, cannot raise them.
+  const TREE = nextTree();
+  const body = certifyingBody(TREE, {
+    conditions: { steal: starvedSteal() },
+    suites: expectedHeavyFiles().map((file) => ({ file, status: "passed" as const })),
+    covered: expectedHeavyFiles(),
+    quarantined: [],
+  });
+  delete (body as any).covered;
+  delete (body as any).quarantined;
+  // written RAW, not through writeHeavyReceipt: that helper normalises the receipt (it puts `covered`
+  // back), which would hide the very field omission this test is about.
+  mkdirSync(dirname(receiptPath(TREE)), { recursive: true });
+  writeFileSync(receiptPath(TREE), JSON.stringify(body));
+
+  const verdict = checkHeavyReceipt(TREE, { now: NOW });
+  assertEquals(verdict.outcome, "accounting-only");
+  const n = expectedHeavyFiles().length;
+  // line 1: the accounting-only diagnostic a lane reads in the gate output
+  assertStringIncludes(verdict.line, `Functional completeness (${n}/${n} covered`);
+  // line 2: the accepted line the gate-receipt CLI prints, built from verdict.coverage
+  const accepted = describeReceiptCoverage((verdict as any).coverage ?? verdict.receipt);
+  assertEquals(accepted, `${n}/${n} covered, 0 skips`);
+  // and the untrusted fields are what would have been printed before the fix
+  assertEquals(describeReceiptCoverage(verdict.receipt), `0/${n} covered, 0 skips`);
+}));

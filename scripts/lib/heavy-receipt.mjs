@@ -1078,13 +1078,17 @@ export function checkHeavyReceipt(tree, { now = Date.now(), maxAgeMs = DEFAULT_R
       line:
         `${headline}\n` +
         `  ${why}: ${numbers}.\n` +
-        `  Functional completeness (${describeReceiptCoverage(receipt)}) is certified; the DURATIONS from ` +
+        `  Functional completeness (${describeReceiptCoverage(coverage)}) is certified; the DURATIONS from ` +
         `this run are not evidence (tu8w9/gezg6).\n` +
         `  Fix the BOX: re-run \`npm run test:heavy\` with no arguments on an idle host for a timing credential.\n` +
         `  Or accept it for ACCOUNTING only: node scripts/gate-receipt.mjs --accept-accounting-only`,
 
       marker: "HEAVY_RECEIPT_ACCOUNTING_ONLY",
       payload: { tree, expectedTree: tree, outcome: "accounting-only", ...steal.payload },
+      // hjmmf: the accepted line the CLI prints is built from `coverage ?? receipt`, so an
+      // accounting-only verdict has to CARRY the validator-computed coverage - otherwise a receipt
+      // that omits `covered` makes the line a person reads before landing say 0/N.
+      coverage,
       receipt,
       path,
     };
