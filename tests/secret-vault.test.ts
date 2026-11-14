@@ -960,6 +960,38 @@ Deno.test("zxo4i: the panel's at-rest copy is derived from the vault's state, an
   assert(pending.some((line) => line.includes("legacy, not sealed")), "legacy records are visible as such");
 });
 
+Deno.test("4w5wm: the static vault surfaces (intro paragraph + save toast) carry the obfuscation limit", async () => {
+  // chrome-agent-platform-4w5wm: the state-DERIVED lines are pinned by the zxo4i test above,
+  // but the two STATIC surfaces a user reads first had no pin: the Web-services intro
+  // paragraph in options.html and the post-save toast in web-services.js. Both once implied
+  // at-rest confidentiality ("stored encrypted") with no statement of the R26 limit (a copied
+  // profile decrypts offline). These reads pin the current honest wording and bar the
+  // retracted claim from returning silently.
+  const html = await Deno.readTextFile(new URL("../extension/options/options.html", import.meta.url));
+  const panel = await Deno.readTextFile(new URL("../extension/options/panels/web-services.js", import.meta.url));
+
+  // The intro paragraph names what the at-rest scheme IS and what it does NOT stop.
+  assert(
+    html.includes("obfuscated, not encrypted"),
+    "the Web-services intro must call the at-rest scheme obfuscation, not encryption",
+  );
+  assert(
+    html.includes("copies this Chrome profile can decrypt"),
+    "the intro must name the copied-profile limit, not hint at it",
+  );
+
+  // The post-save toast repeats the limit at the moment a key is written.
+  assert(
+    panel.includes("obfuscated, not encrypted, until you set a vault passphrase"),
+    "the save toast must carry the obfuscation limit and point at the passphrase fix",
+  );
+
+  // The retracted claim may not return on either surface, in any wording of it.
+  for (const [name, text] of [["options.html", html], ["web-services.js", panel]] as const) {
+    assert(!text.includes("stored encrypted"), `${name} must not re-assert the retracted 'stored encrypted' claim`);
+  }
+});
+
 Deno.test("zxo4i: vault.lock seals/unlocks/relocks through the Settings route, and status reports the state", async () => {
   const storage = fakeStorage();
   const vault = await createSecretVault({
