@@ -12,6 +12,15 @@
 //   node scripts/bump-version.mjs major                   # 0.2.0 -> 1.0.0
 //   node scripts/bump-version.mjs 1.2.3                   # set explicit version
 //   node scripts/bump-version.mjs patch --message "..."   # use the commit message as the changelog entry
+//   node scripts/bump-version.mjs patch --landing --from <base>..<tip>
+//                                                         # stamp ONE release for a whole landing (merger)
+//
+// --from <base>..<tip> (a4o1s): the batch is a RANGE, and every commit in it
+// contributes its own Release-note trailer; a commit that declares `none.`
+// suppresses only its own note, and a range that collects no note is refused
+// instead of stamped "none". A single `--from <sha>` still reads one commit and
+// warns that it does, because that is how main 88b0dc8b6 was stamped "- none."
+// under five commits carrying a security feature.
 //
 // The changelog entry is derived from --message (the commit message). No message
 // → no placeholder entry is written (the version is still bumped).
@@ -98,6 +107,7 @@ if (landingMode && hookMode) {
 const notes = [];
 const candidates = [];
 const internalRefs = [];
+const userNoteGiven = argv.includes("--user-note") || argv.includes("--note");
 function commitSha(value, flag) {
   if (!landingMode || !value || !/^[a-f0-9]{7,64}$/i.test(value)) {
     console.error(`[bump-version] ERROR: ${flag} requires --landing and a commit SHA`);
@@ -112,49 +122,142 @@ function commitSha(value, flag) {
     process.exit(1);
   }
 }
+/**
+ * Resolve ONE --from argument to the commits whose Release-note trailers belong
+ * to this batch (chrome-agent-platform-a4o1s).
+ *
+ * A LANDING IS A RANGE, NOT A TIP. `--from <base>..<tip>` names the whole
+ * batch: every commit in it contributes its own note. A single sha keeps its
+ * old meaning (THAT commit is the candidate) and still works, but says so
+ * loudly, because it is the shape that invited the defect: main 88b0dc8b6 was
+ * stamped "- none." from the tip of a landing whose five commits underneath
+ * carried the vault-encryption feature, and nothing in the interface objected.
+ * Inside a range a `none.` declaration suppresses THAT commit's note and
+ * nothing else, so one internal commit can no longer vote a sibling's copy away.
+ */
+function fromCandidate(value) {
+  if (!landingMode || !value) {
+    console.error("[bump-version] ERROR: --from requires --landing and a commit SHA or <base>..<tip> range");
+    process.exit(1);
+  }
+  if (value.includes("..")) {
+    const parts = value.split("..");
+    if (parts.length !== 2 || !parts[0] || !parts[1]) {
+      console.error(`[bump-version] ERROR: --from range "${value}" must be exactly <base>..<tip>`);
+      process.exit(1);
+    }
+    const from = commitSha(parts[0], "--from");
+    const to = commitSha(parts[1], "--from");
+    let commits;
+    try {
+      commits = execFileSync("git", ["rev-list", "--reverse", `${from}..${to}`], {
+        cwd: ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
+      }).split("\n").map((line) => line.trim()).filter(Boolean);
+    } catch {
+      console.error(`[bump-version] ERROR: cannot list the commits in --from range ${value}`);
+      process.exit(1);
+    }
+    if (!commits.length) {
+      console.error(`[bump-version] ERROR: --from range ${value} contains no commits`);
+      process.exit(1);
+    }
+    return { sha: to, range: value, commits };
+  }
+  const sha = commitSha(value, "--from");
+  console.error(
+    `[bump-version] WARNING: --from ${value} reads ONE commit's Release-note trailers. ` +
+    `A multi-commit landing stamped from its tip writes "- none." when the tip declares none ` +
+    `(main 88b0dc8b6 did — a4o1s). Pass the batch as a range instead: --from <base>..<tip>`,
+  );
+  return { sha, commits: [sha] };
+}
+function commitBody(sha) {
+  return execFileSync("git", ["show", "-s", "--format=%B", sha], { cwd: ROOT, encoding: "utf8" });
+}
 for (let i = 0; i < argv.length; i++) {
   if (argv[i] === "--user-note" || argv[i] === "--note") notes.push(argv[++i]);
   if (argv[i] === "--internal") internalRefs.push(commitSha(argv[++i], "--internal"));
   if (argv[i] === "--from") {
-    const sha = commitSha(argv[++i], "--from");
-    const body = execFileSync("git", ["show", "-s", "--format=%B", sha], { cwd: ROOT, encoding: "utf8" });
-    const trailers = releaseNoteTrailers(body);
-    // g0bfz: the stamp reads a `Release-note:` line ANYWHERE in the message; git
-    // reads only a trailer block at the end. Warn, never refuse — an existing
-    // cleared branch must not become unlandable — but name the disagreement so
-    // the note is never accepted-and-invisible. The lane pre-flight REFUSES this
-    // shape at authoring time; this is the landing-time backstop.
-    if (landingMode) {
-      for (const problem of releaseNoteShapeProblems(body)) console.error(`[bump-version] WARNING: candidate ${sha} — ${problem}`);
+    const candidate = fromCandidate(argv[++i]);
+    const collected = [];
+    const trailed = new Set();
+    for (const sha of candidate.commits) {
+      const body = commitBody(sha);
+      const trailers = releaseNoteTrailers(body);
+      // g0bfz: the stamp reads a `Release-note:` line ANYWHERE in the message; git
+      // reads only a trailer block at the end. Warn, never refuse — an existing
+      // cleared branch must not become unlandable — but name the disagreement so
+      // the note is never accepted-and-invisible. The lane pre-flight REFUSES this
+      // shape at authoring time; this is the landing-time backstop.
+      if (landingMode) {
+        for (const problem of releaseNoteShapeProblems(body)) console.error(`[bump-version] WARNING: candidate ${sha} — ${problem}`);
+      }
+      if (trailers.length) trailed.add(sha);
+      for (const trailer of trailers) {
+        // a4o1s: inside a RANGE, a commit that declares no user-facing change
+        // suppresses ITS OWN note only. The union-level refusal below still
+        // catches a batch that tries to hide an internal note behind a sibling's
+        // real one — this is about not letting one commit's "none." erase the
+        // five commits under it (the 88b0dc8b6 shape).
+        if (candidate.range && declaresNoUserFacingChange(sanitizeEntry(trailer ?? ""))) {
+          console.error(`[bump-version] candidate ${sha}: "${trailer}" declares no user-facing change — dropped for that commit only`);
+          continue;
+        }
+        if (!collected.includes(trailer)) collected.push(trailer);
+      }
     }
-    candidates.push({ sha, trailers });
-    notes.push(...trailers);
+    candidate.trailers = collected;
+    candidate.trailed = trailed;
+    candidates.push(candidate);
+    notes.push(...collected);
   }
 }
+const fromNoteCount = candidates.reduce((total, candidate) => total + candidate.trailers.length, 0);
 if (landingMode) {
   const internal = new Set(internalRefs);
-  const seen = new Set();
-  for (const { sha, trailers } of candidates) {
-    if (seen.has(sha)) {
-      console.error(`[bump-version] ERROR: duplicate landing candidate ${sha}`);
+  const claimed = new Set();
+  const known = new Set();
+  for (const candidate of candidates) {
+    if (claimed.has(candidate.sha)) {
+      console.error(`[bump-version] ERROR: duplicate landing candidate ${candidate.sha}`);
       process.exit(1);
     }
-    seen.add(sha);
-    if (!trailers.length && !internal.has(sha)) {
+    claimed.add(candidate.sha);
+    for (const sha of candidate.commits) known.add(sha);
+  }
+  for (const candidate of candidates) {
+    const { sha, trailers } = candidate;
+    // A range names its batch's history, so a commit inside it with no trailer is
+    // internal by construction and needs no --internal declaration; only an
+    // explicitly NAMED candidate must account for a missing note.
+    if (!candidate.range && !trailers.length && !internal.has(sha)) {
       console.error(`[bump-version] ERROR: candidate ${sha} has no Release-note trailer; pass --internal ${sha} explicitly if it is internal-only`);
       process.exit(1);
     }
-    if (trailers.length && internal.has(sha)) {
-      console.error(`[bump-version] ERROR: candidate ${sha} has a Release-note trailer and cannot be declared --internal`);
-      process.exit(1);
+    for (const member of candidate.commits) {
+      if (internal.has(member) && candidate.trailed.has(member)) {
+        console.error(`[bump-version] ERROR: candidate ${member} has a Release-note trailer and cannot be declared --internal`);
+        process.exit(1);
+      }
     }
-    console.error(`[bump-version] landing candidate ${sha}: ${trailers.length ? `${trailers.length} note(s)` : "explicitly internal (no release note)"}`);
+    console.error(`[bump-version] landing candidate ${candidate.range ? `${candidate.range} (tip ${sha.slice(0, 12)}; ${candidate.commits.length} commits)` : sha}: ${trailers.length ? `${trailers.length} note(s)` : "explicitly internal (no release note)"}`);
   }
   for (const sha of internal) {
-    if (!seen.has(sha)) {
+    if (!known.has(sha)) {
       console.error(`[bump-version] ERROR: --internal ${sha} is not a --from candidate`);
       process.exit(1);
     }
+  }
+  // a4o1s (b): a version with no note is a decision, not a default. A range that
+  // collected nothing must not be stamped "- none." — refuse and make the
+  // merger state the copy (or decide explicitly that the batch is internal).
+  if (candidates.some((candidate) => candidate.range) && fromNoteCount === 0 && !userNoteGiven) {
+    console.error(
+      "[bump-version] ERROR: no --from range collected a Release-note trailer, so this landing would be " +
+      "stamped \"none\". Refusing: say what the user gets with --user-note \"<what the user gets>\", or " +
+      "name the internal commits with --internal <sha> if the batch really has no user surface",
+    );
+    process.exit(1);
   }
 }
 const userNote = notes[0] ?? null;

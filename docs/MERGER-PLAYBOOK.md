@@ -167,11 +167,20 @@ node scripts/check-beads-export-divergence.mjs
 # auditable as one commit, and it keeps every other history tool that is not merge-aware working.
 # A tree-keyed gate verdict is ALSO unsound for this history-dependent suite: the SAME tree passes
 # as "merge + separate stamp commit" and fails as "one merge commit" (p681a).
-# Pass each candidate SHA with a Release-note trailer; the command reads trailers
-# from those commits, deduplicates their user-facing bullets and writes ONE new
-# version/changelog/About/inventory stamp on the union. Do not pass merge commits
-# or arbitrary ancestors: name only the candidate commits landing in this batch.
-node scripts/bump-version.mjs patch --landing --from <candidate-sha> [--from <next-candidate-sha> ...]
+# Pass each candidate as a RANGE: `--from <base>..<tip>` names the whole batch and the
+# command reads the Release-note trailer of EVERY commit in it, deduplicates their
+# user-facing bullets and writes ONE new version/changelog/About/inventory stamp on the
+# union (chrome-agent-platform-a4o1s). A single `--from <sha>` still works but reads ONE
+# commit and now says so loudly: on 2026-11-14 the tip of a landing was passed
+# (6a265b1ef, trailer literally `Release-note: none.`) while five commits underneath
+# carried the vault-encryption feature and the honest-claim correction, so v0.3.753 was
+# stamped `- none.`. Inside a range a commit that declares `none.` suppresses only its
+# OWN note; a range that collects no note at all is REFUSED (exit 1) rather than stamped
+# "none" — state the copy with --user-note, or name the internal commits with --internal.
+node scripts/bump-version.mjs patch --landing --from <base>..<union-tip>
+# (The older form — one --from per candidate sha — still lands a union of named
+# candidates: --from <candidate-sha> [--from <next-candidate-sha> ...]. Do not pass
+# merge commits or arbitrary ancestors.)
 # The stamp is IDEMPOTENT per batch (x0vas): if every note this batch would write
 # already appears verbatim in the NEWEST CHANGELOG section (and the six surfaces
 # agree), the command writes nothing and exits 0 — so a re-run after a gate

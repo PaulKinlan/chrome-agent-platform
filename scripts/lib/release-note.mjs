@@ -87,13 +87,22 @@ export function releaseNoteShapeProblems(body) {
  *  says there is nothing for the reader to see must never mint one, whatever
  *  dash or spacing it used to say so.
  *
- *  Matches `none`, `none: …`, `none — …`, `none – …`, `none - …`. A note that
- *  merely START with the word and then carries on in prose ('none of the
- *  exporters …') is not a declaration and is left to the user-facing filter.
+ *  Matches `none`, `none: …`, `none — …`, `none – …`, `none - …`, and — since
+ *  chrome-agent-platform-a4o1s — `none.` / `none .`, a terminal full stop being
+ *  punctuation like any other. That last spelling is not hypothetical: the
+ *  trailer the merger passed for main 88b0dc8b6 was literally
+ *  `Release-note: none.`, this predicate read the full stop as prose, and the
+ *  landing was stamped `- none.` while five commits underneath carried a
+ *  security feature. A note that merely STARTS with the word and then carries
+ *  on in prose ('none of the exporters …') is still not a declaration and is
+ *  left to the user-facing filter.
  *  Callers pass a SANITISED note (sanitizeEntry), so the leading conventional
  *  prefix and bead ids are already gone. */
 export function declaresNoUserFacingChange(note) {
-  return /^none\b(?:\s*$|\s*[:—–-])/i.test(String(note ?? "").trim());
+  const text = String(note ?? "").trim();
+  // The bare word, optionally followed by nothing but full stops.
+  if (/^none\s*\.*\s*$/i.test(text)) return true;
+  return /^none\b(?:\s*$|\s*[:—–-])/i.test(text);
 }
 
 /** Release notes are for the person using the extension, not the VCS: strip
