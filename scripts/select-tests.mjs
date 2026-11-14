@@ -49,6 +49,7 @@ import { partition } from "./test-partition.mjs";
 import { announce, runSerialFiles } from "./lib/serial-phase.mjs";
 import {
   DEDICATED_FILE_GUARDS,
+  DECLARED_NO_GUARD,
   HTML_EXPORT_ENTRY_GUARDS,
   guardsForChangedFile,
   isRepoMetadata,
@@ -1284,7 +1285,7 @@ export function exitGate(rc, { graph, ran, changed = null, failed = null }, seam
  * The selector's decision, pure of printing and of running (chrome-agent-platform-0eq00 plan mode).
  * `kind: "full"` means the subset cannot validate this change: callers must run the full suite.
  *
- * @param {{ base?: string, changedFiles?: (base: string) => string[], reverseGraph?: () => any, lockfileOptions?: any, dedicatedGuards?: Record<string, readonly string[]>, htmlGuards?: Record<string, readonly string[]> }} [opts]
+ * @param {{ base?: string, changedFiles?: (base: string) => string[], reverseGraph?: () => any, lockfileOptions?: any, dedicatedGuards?: Record<string, readonly string[]>, htmlGuards?: Record<string, readonly string[]>, declaredNoGuard?: Record<string, string> }} [opts]
  * @returns {{
  *   kind: "subset" | "full",
  *   files: string[] | null,
@@ -1313,6 +1314,10 @@ export function planSelection({
   // the tree) is testable without inventing a real broken entry in the shipped table.
   dedicatedGuards = DEDICATED_FILE_GUARDS,
   htmlGuards = HTML_EXPORT_ENTRY_GUARDS,
+  // chrome-agent-platform-wwgnm round 2: the declared-no-guard map is a seam so the
+  // fail-closed leg (an unmapped+undeclared product file) is testable without
+  // inventing real tree state.
+  declaredNoGuard = DECLARED_NO_GUARD,
 } = {}) {
   const changed = changedFilesFn(base);
   const notices = [];
@@ -1413,6 +1418,35 @@ export function planSelection({
   // owns onmessage-sender-guard.test.ts).
   const guardRequirements = changed.flatMap((file) =>
     guardsForChangedFile(file, { dedicated: dedicatedGuards, html: htmlGuards }).map((guard) => ({ file, guard })));
+
+  // chrome-agent-platform-wwgnm round 2 (coord acceptance 1), REFINED by chrome-agent-platform-
+  // 853x8: NO SILENCE without a throughput tax. The r2 refusal fired on REGISTRY STATE (no
+  // entry, no declaration), which escalated 469 import-reachable product files — and mapped-by-
+  // classification files (wasm manifests, SBOMs, licenses) and passive assets — to the FULL
+  // suite: "the fast tier no longer certifies product deltas". It is GONE. Silence has only one
+  // honest shape — a changed file NOTHING runs for — and that is exactly the unmappable refusal
+  // above (no import edge, no classification mapping: named, fail-closed, pre-existing). What r2
+  // actually wanted for the covered class is visibility, not refusal: a covered-but-unpoliced
+  // delta stays a certifiable subset and is NAMED here, at plan time, every time.
+  const uncoveredSet = new Set(uncovered);
+  const mappedFiles = new Set(mapped.map((row) => row.file));
+  for (const file of changed) {
+    if (
+      (file.startsWith("extension/") || file.startsWith("scripts/")) &&
+      !file.endsWith(".md") &&
+      !file.endsWith(".html") &&
+      !isPassiveContentFile(file) &&
+      (dedicatedGuards[file] ?? htmlGuards[file]) === undefined &&
+      declaredNoGuard[file] === undefined &&
+      !isSelectorInfrastructure(file) &&
+      !mappedFiles.has(file) &&
+      !uncoveredSet.has(file)
+    ) {
+      notices.push(
+        `select-tests: ${file} has import-edge coverage but no dedicated guard and no declaration — the registry stays deliberate (entries are claims, not preconditions), so this delta is certified by its reachable suites (chrome-agent-platform-853x8).`,
+      );
+    }
+  }
   const unresolvableGuard = guardRequirements.find(({ guard }) => !existsSync(join(ROOT, guard)));
   if (unresolvableGuard) {
     return {

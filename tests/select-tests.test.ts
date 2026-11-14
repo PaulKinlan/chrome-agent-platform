@@ -291,6 +291,119 @@ Deno.test("h346c: a guard-owning changed file carries its dedicated guard even w
   );
 });
 
+Deno.test("wwgnm: the incidental-instrument surface carries its guard, and removal is a named stop signal", () => {
+  // wwgnm: settings-view.js is registered because its only touching suite reaches it by a
+  // dynamic import specifier (a coincidence edge). (directory.js was the second entry until
+  // r3/1jkwf proved it false — its suite only string-checks the file — and it moved to
+  // DECLARED_NO_GUARD; see the leg below.)
+  const file = "extension/options/settings-view.js";
+  const guard = "tests/settings-client-view.test.ts";
+  {
+    const plan = planSelection({ changedFiles: () => [file] });
+    assertEquals(plan.kind, "subset", `${file}: import-reachable, so still a certifiable subset`);
+    assert(
+      plan.files!.includes(guard),
+      `${file} must carry its dedicated guard (${guard})`,
+    );
+    assertEquals(plan.guardGap, [], `${file}: after enforcement no guard gap remains`);
+    assertEquals(
+      guardGapFor([file], (plan.files ?? []).filter((f) => f !== guard)),
+      [{ file, guard }],
+      `${file}: dropping the guard must be reported, not silent`,
+    );
+  }
+  // wwgnm r3 (1jkwf): directory.js owns NO dedicated guard — no suite imports it (every
+  // reference in tests/ is readTextFile text inspection) — and its answer is the DECLARATION:
+  // the runtime edge is ntp.js's static import, which the graph already counts, so a
+  // directory.js delta stays a certifiable subset with no gap and no invented coverage.
+  const directory = planSelection({ changedFiles: () => ["extension/directory/directory.js"] });
+  assertEquals(directory.kind, "subset", "directory.js stays import-reachable through ntp.js's static import");
+  assertEquals(directory.guardGap, [], "no dedicated guard is claimed for directory.js, so no gap");
+  assert(
+    (directory.files ?? []).includes("tests/ntp-agent-route-execution.test.ts"),
+    `the transitive edge must select ntp.js's policing suite, got: ${(directory.files ?? []).filter((f) => f.includes("ntp")).join(", ")}`,
+  );
+});
+
+// chrome-agent-platform-wwgnm round 2 (coord acceptance 1), REFINED by chrome-agent-platform-
+// 853x8: NO SILENCE means a refusal for a product file NOTHING runs for — no import edge, no
+// classification mapping, no dedicated guard, no declaration. The r2 rule fired on registry
+// state instead and escalated 469 import-reachable files (and passive assets) to the FULL
+// suite; a covered-but-unpoliced delta now stays a certifiable subset and is NAMED in a notice.
+Deno.test("wwgnm r2 + 853x8: an uncovered, unmapped, undeclared product file is refused BY NAME; a covered one is a named subset", () => {
+  // REFUSAL leg: the class is EMPTY on today's tree (every product file is covered, mapped or
+  // declared), so the rule is exercised through the reverseGraph seam the refusal path was built
+  // with: an empty graph makes a real, import-covered file uncovered+unmappable — the
+  // genuinely-blind state the fail-closed refusal exists for (the unmappable leg, generic
+  // "no reachable test" header — the r2 registry-state block is gone; it could never see this
+  // class and refused everything else instead).
+  const refused = planSelection({
+    changedFiles: () => ["extension/lib/attachments.js"],
+    reverseGraph: () => new Map(),
+  });
+  assertEquals(refused.kind, "full", "a product file nothing runs for must refuse, not fall back silently");
+  assertEquals(
+    refused.unmappable.map((row: { file: string }) => row.file),
+    ["extension/lib/attachments.js"],
+    "the refusal must name the file",
+  );
+  assert(
+    (refused.reason ?? "").includes("no reachable test") ||
+      refused.unmappable[0].mechanism.includes("unmappable") ||
+      refused.unmappable[0].mechanism.length > 0,
+    `the refusal must say what is missing: ${JSON.stringify(refused.unmappable[0])}`,
+  );
+
+  // COVERED-BUT-UNPOLICED leg, real tree (the reviewer's own repro file): attachments.js has
+  // import-edge coverage and no registry answer — a certifiable subset, NAMED in a notice.
+  const covered = planSelection({ changedFiles: () => ["extension/lib/attachments.js"] });
+  assertEquals(covered.kind, "subset", "import-reachable coverage certifies the delta (853x8)");
+  assert(
+    covered.notices.some((n) => n.includes("extension/lib/attachments.js") && n.includes("no dedicated guard")),
+    `the covered-but-unpoliced class must stay visible by name: ${covered.notices.join(" | ")}`,
+  );
+  assertEquals(
+    (covered.unmappable ?? []).filter((row: { file: string }) => row.file === "extension/lib/attachments.js"),
+    [],
+    "a covered file must not be reported as an unmapped gap",
+  );
+
+  // The r2 refusal premise is GONE for covered files: schedule-parser.js with an empty
+  // declared-map is still import-covered, so it certifies (with the notice) instead of refusing.
+  const undeclaredCovered = planSelection({
+    changedFiles: () => ["extension/shared/schedule-parser.js"],
+    declaredNoGuard: {},
+  });
+  assertEquals(undeclaredCovered.kind, "subset", "coverage, not registry state, decides certification");
+
+  // The SAME file WITH its declaration is a certifiable subset — declarations answer.
+  const declared = planSelection({ changedFiles: () => ["extension/shared/schedule-parser.js"] });
+  assertEquals(declared.kind, "subset", "a declared file must not be refused");
+  assertEquals(
+    (declared.unmappable ?? []).filter((row: { file: string }) => row.file === "extension/shared/schedule-parser.js"),
+    [],
+  );
+
+  // PASSIVE ASSETS: a stylesheet is content — no unit-tier suite executes CSS, so it is
+  // reported, never refused (the r2 rule red theme.css deltas with no honest answer).
+  const asset = planSelection({ changedFiles: () => ["extension/shared/theme.css"] });
+  assert(asset.kind !== "full", `a passive asset must not refuse: ${asset.failClosedHeader ?? ""}`);
+  assertEquals(
+    (asset.unmappable ?? []).filter((row: { file: string }) => row.file === "extension/shared/theme.css"),
+    [],
+  );
+
+  // THE DEFAULT LOCALE has a REAL policing suite (byte-identical catalogue drift guard) reached
+  // only by a URL path read the import graph cannot count — the deliberate dedicated-guard
+  // entry binds it, so a messages.json delta carries the suite instead of refusing.
+  const locales = planSelection({ changedFiles: () => ["extension/_locales/en/messages.json"] });
+  assertEquals(locales.kind, "subset", "the locale catalogue is policed by its drift guard");
+  assert(
+    locales.files!.includes("tests/i18n-foundation.test.ts"),
+    "the catalogue delta must carry tests/i18n-foundation.test.ts",
+  );
+});
+
 Deno.test("h346c: a registry entry naming a suite the tree does not have FAILS CLOSED and names the guard", () => {
   const plan = planSelection({
     changedFiles: () => ["extension/lib/script-host.js"],
