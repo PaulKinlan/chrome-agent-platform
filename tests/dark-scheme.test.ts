@@ -118,11 +118,75 @@ Deno.test("dark-scheme: no hardcoded ink/canvas left on dynamic surfaces", () =>
   assert(!components.includes("0b57d0"), "no default-blue fallbacks in components");
 });
 
+/** The LAST definition of each custom property in docs/theme.css.
+ *
+ *  theme.css declares every colour token twice by design: a light fallback for
+ *  engines without light-dark(), then the light-dark(<light>, <dark>) pair that
+ *  wins where it is supported. The last one is therefore the effective one, and
+ *  that is what a page using `var(--token)` actually resolves.
+ */
+function themeTokens(css: string): Map<string, string> {
+  const tokens = new Map<string, string>();
+  for (const m of css.matchAll(/(--[A-Za-z0-9-]+)\s*:\s*([^;]+);/g)) tokens.set(m[1], m[2].trim());
+  return tokens;
+}
+
+/** Is this declaration scheme-aware — either a literal light-dark() pair, or a
+ *  var(--token) whose EFFECTIVE definition in docs/theme.css is one?
+ *
+ *  chrome-agent-platform-8mw5l (coord ruling): the assertion this replaces was
+ *  `indexHtml.includes("light-dark(")` — a PRESENCE check on the page's text
+ *  standing in for a property of the page. A page that takes its surfaces from
+ *  theme.css tokens resolves both schemes perfectly and contains no literal, so
+ *  the honest test is derivational: follow each adaptable declaration to the
+ *  token definition. It keeps its teeth — an undefined token, a token that
+ *  resolves to a single colour, or a bare hex/rgb literal are all still RED.
+ */
+function schemeAwareColour(value: string, tokens: Map<string, string>, where: string): void {
+  const trimmed = value.trim();
+  // A light-dark() pair counts wherever it sits in the value: `border: 1px solid
+  // light-dark(#ddd8d2, #6b6355)` is as scheme-aware as `background: light-dark(…)`.
+  if (/light-dark\(/.test(trimmed)) return;
+  const referenced = [...trimmed.matchAll(/var\(\s*(--[A-Za-z0-9-]+)\s*(?:,[^)]*)?\)/g)].map((m) => m[1]);
+  if (referenced.length) {
+    for (const token of referenced) {
+      const definition = tokens.get(token);
+      assert(definition !== undefined, `${where} uses ${token}, which docs/theme.css does not define`);
+      assert(
+        /light-dark\(/.test(definition!),
+        `${where} uses ${token}, which docs/theme.css defines as a SINGLE colour (${definition}) — it cannot adapt to the scheme`,
+      );
+    }
+    // A literal outside the var() (e.g. `border: 1px solid var(--border) #fff`) is
+    // still a theme-blind value, so only the var()s may carry colour.
+    const withoutVars = trimmed.replace(/var\(\s*--[A-Za-z0-9-]+\s*(?:,[^)]*)?\)/g, " ");
+    assert(
+      !/#[0-9a-f]{3,8}\b|\brgba?\(|\bhsla?\(/i.test(withoutVars),
+      `${where} hard-codes a colour literal beside its tokens (${trimmed})`,
+    );
+    return;
+  }
+  assert(
+    false,
+    `${where} must adapt to the scheme, with a light-dark() pair or a var(--token) that resolves to one (got "${trimmed}")`,
+  );
+}
+
 Deno.test("fte5y: docs surfaces resolve light-dark() and contain no stale mock/theme rules", () => {
-  // 1. docs/index.html declares color-scheme: light dark and light-dark() values
+  // 1. docs/index.html declares color-scheme: light dark and its adaptable
+  //    colours reach a light-dark() pair — literally, or through a theme.css
+  //    token that is defined as one (8mw5l/coord: derive it, do not grep the text).
   const indexHtml = read("docs/index.html");
   assert(indexHtml.includes("color-scheme: light dark"), "docs/index.html must declare color-scheme: light dark");
-  assert(indexHtml.includes("light-dark("), "docs/index.html must use light-dark() for adaptable colors");
+  const tokens = themeTokens(read("docs/theme.css"));
+  assert(tokens.size > 20, "docs/theme.css must define the colour tokens");
+  const adaptable = [
+    ...indexHtml.matchAll(/(?:^|[;{\s])(background|background-color|color|border-color|border)\s*:\s*([^;{}]+)/g),
+  ].filter((m) => !/^\s*(?:none|0|inherit|initial|unset|transparent)\b/i.test(m[2]));
+  assert(adaptable.length >= 3, `docs/index.html must declare its adaptable colours (found ${adaptable.length})`);
+  for (const m of adaptable) {
+    schemeAwareColour(m[2], tokens, `docs/index.html ${m[1]}`);
+  }
 
   // 2. docs/showcase.css has no hardcoded html[data-theme='sunlit'] or dead --chrome-accent
   const showcaseCss = read("docs/showcase.css");
