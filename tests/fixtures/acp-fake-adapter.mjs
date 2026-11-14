@@ -32,7 +32,7 @@ if (LOG) {
       // be attributable; PI_ACP_HARNESS is the label the bridge itself sets.
       harness: process.env.PI_ACP_HARNESS ?? null,
     }) + "\n");
-  } catch { /* logging is best-effort */ }
+  } catch (error) { console.error("[fake-acp-adapter] fixture-env log append failed:", error); }
 }
 // Fault injection for the adapter spawn that dies under machine load: with
 // CAP_ACP_FIXTURE_DIE_ON_SPAWN=N the Nth adapter process started for the shared
@@ -47,7 +47,12 @@ if (DIE_ON_SPAWN > 0 && SPAWN_COUNTER) {
   let spawns = 0;
   try { spawns = Number(readFileSync(SPAWN_COUNTER, "utf8")) || 0; } catch { /* first spawn */ }
   spawns += 1;
-  try { writeFileSync(SPAWN_COUNTER, String(spawns)); } catch { /* best effort */ }
+  try { writeFileSync(SPAWN_COUNTER, String(spawns)); } catch (error) {
+    // chrome-agent-platform-aaakp: the spawn counter drives the DIE_ON_SPAWN
+    // choreography — a swallowed write silently breaks the deterministic
+    // die-on-spawn injection, so the fixture must fail loud instead.
+    throw new Error(`[fake-acp-adapter] spawn-counter write failed: ${error.message}`);
+  }
   if (spawns === DIE_ON_SPAWN) {
     console.error(`[fake-acp-adapter] injected spawn death (spawn ${spawns})`);
     process.exit(1);
@@ -81,7 +86,7 @@ const GONE_SESSION = /^ses_gone/;
 let heldPromptId = null;
 function log(dir, msg) {
   if (!LOG) return;
-  try { appendFileSync(LOG, JSON.stringify({ dir, msg }) + "\n"); } catch { /* logging is best-effort */ }
+  try { appendFileSync(LOG, JSON.stringify({ dir, msg }) + "\n"); } catch (error) { console.error("[fake-acp-adapter] log append failed:", error); }
 }
 
 function sendAndLog(msg) {
