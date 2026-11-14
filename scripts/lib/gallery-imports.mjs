@@ -16,6 +16,9 @@
 // is a real broken import, so the walk asserts the source authority instead of the
 // artifact (the same resolution tests/components.test.ts's 2y7qe guard uses, and the
 // same rule scripts/sync-gallery.mjs already applies when a sync source is absent).
+// The source asserted is the GIT module the copy is bundled from, never the built
+// artifact: asserting the artifact would fail on a fresh clone, which is this defect
+// repeated one layer down.
 //
 // The walk is a pure function over three injected oracles so the build-absent case can
 // be asserted without moving any file and without spawning a nested test runner.

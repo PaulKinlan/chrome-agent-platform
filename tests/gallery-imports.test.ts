@@ -105,32 +105,32 @@ Deno.test("gallery/0pjmh: a generated docs file absent on an unbuilt tree is BUI
   const result = syntheticWalk({
     importers: { "components.js": ["./components-artifacts.js"], "components-artifacts.js": ["./diff-core.bundle.js"] },
     present: ["components.js", "components-artifacts.js"],
-    generated: { "diff-core.bundle.js": "extension/dist/shared/diff-core.bundle.js" },
-    sources: ["extension/dist/shared/diff-core.bundle.js"],
+    generated: { "diff-core.bundle.js": "extension/shared/diff-core.js" },
+    sources: ["extension/shared/diff-core.js"],
   });
   assertEquals(result.unresolved, [], "the unbuilt tree must not read as a broken import");
   assertEquals(result.buildPending.length, 1, "the skipped edge is reported, never hidden");
-  assert(result.buildPending[0].includes("source extension/dist/shared/diff-core.bundle.js present"));
+  assert(result.buildPending[0].includes("source extension/shared/diff-core.js present"));
 });
 
 Deno.test("gallery/0pjmh: the exemption is NOT a hole — a generated file whose SOURCE is missing stays unresolved", () => {
   const result = syntheticWalk({
     importers: { "components.js": ["./components-artifacts.js"], "components-artifacts.js": ["./diff-core.bundle.js"] },
     present: ["components.js", "components-artifacts.js"],
-    generated: { "diff-core.bundle.js": "extension/dist/shared/diff-core.bundle.js" },
-    sources: [], // the build never produced it and cannot: the source is gone
+    generated: { "diff-core.bundle.js": "extension/shared/diff-core.js" },
+    sources: [], // the canonical source is gone too: this is a real broken import
   });
   assertEquals(result.buildPending, [], "nothing is excused when the source is absent too");
   assertEquals(result.unresolved.length, 1);
-  assert(result.unresolved[0].includes("AND its source extension/dist/shared/diff-core.bundle.js is missing"));
+  assert(result.unresolved[0].includes("AND its source extension/shared/diff-core.js is missing"));
 });
 
 Deno.test("gallery/0pjmh: a NON-generated missing import is still unresolved — the guard is not blind", () => {
   const result = syntheticWalk({
     importers: { "components.js": ["./nope.js"] },
     present: ["components.js"],
-    generated: { "diff-core.bundle.js": "extension/dist/shared/diff-core.bundle.js" },
-    sources: ["extension/dist/shared/diff-core.bundle.js"],
+    generated: { "diff-core.bundle.js": "extension/shared/diff-core.js" },
+    sources: ["extension/shared/diff-core.js"],
   });
   assertEquals(result.unresolved, ["components.js → ./nope.js (missing)"]);
 });
@@ -153,13 +153,17 @@ Deno.test("gallery/0pjmh: resolveDocsRelative normalises like a browser, never l
   assertEquals(resolveDocsRelative("a.js", "../../x.js"), null);
 });
 
-Deno.test("gallery/0pjmh: the generated-entry list is DERIVED from the sync table, so it cannot rot", () => {
+Deno.test("gallery/0pjmh: the generated-entry list is DERIVED from the sync table and names the GIT source", () => {
   const entries = GENERATED_DOCS_SOURCES as [string, string][];
   assert(entries.length > 0, "the sync table declares at least one build-output entry");
   for (const [dst, src] of entries) {
-    assert(src.startsWith("extension/dist/"), `a generated entry's source must be build output: ${src}`);
     assert(!dst.startsWith("docs/"), `the docs target is stored docs-relative: ${dst}`);
     assert(dst.endsWith(".bundle.js"), `a generated docs copy is a bundle: ${dst}`);
+    // The asserted authority is the hand-written module, never the built artifact: a guard that
+    // needed the artifact would be false on a fresh clone (this bead, one layer down).
+    assert(src.startsWith("extension/"), `a generated entry's source lives under extension/: ${src}`);
+    assert(src.endsWith(".js") && !src.includes("/dist/"), `the source is the git module, not the bundle: ${src}`);
+    assert(sourceExists(src), `the canonical source of ${dst} must exist in git: ${src}`);
   }
 });
 

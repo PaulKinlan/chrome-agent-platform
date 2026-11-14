@@ -104,9 +104,18 @@ const FILES = [
 // against their SOURCE instead. Derived from FILES rather than repeated, so a new generated entry
 // cannot drift out of either list.
 const BUILD_OUTPUT_SOURCE_PREFIX = "extension/dist/";
+/**
+ * The GIT source a synced build-output copy is bundled FROM: the bundle lives in the build's
+ * output tree, but its authority is the hand-written module beside the other shared sources
+ * (shared/diff-core.bundle.js <- shared/diff-core.js). A guard that asserted the ARTIFACT would
+ * be false on a fresh clone, which is precisely the 0pjmh defect one layer down.
+ */
+export function canonicalSourceForBuildOutput(src) {
+  return src.replace(/^extension\/dist\//, "extension/").replace(/\.bundle\.js$/, ".js");
+}
 export const GENERATED_DOCS_SOURCES = Object.freeze(
   FILES.filter(([src]) => src.startsWith(BUILD_OUTPUT_SOURCE_PREFIX))
-    .map(([src, dst]) => Object.freeze([dst.replace(/^docs\//, ""), src])),
+    .map(([src, dst]) => Object.freeze([dst.replace(/^docs\//, ""), canonicalSourceForBuildOutput(src)])),
 );
 
 export function sameBytes(current, expected) {
