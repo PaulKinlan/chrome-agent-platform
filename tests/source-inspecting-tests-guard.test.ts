@@ -155,6 +155,28 @@ const NON_METHOD_KEYWORDS = new Set([
   "function", "class", "const", "let", "var", "export", "import", "with", "super", "this",
 ]);
 
+/** Is `index` a position where a METHOD can be declared? chrome-agent-platform-16o8b/hiv8y/x4ryv.
+ *
+ *  A method declaration sits either as an object-literal member (the match was anchored on `{` or `,`)
+ *  or inside a class body (the nearest enclosing unmatched `{` opens one). A statement is anchored on
+ *  `^` or `;` and its enclosing block is a function/if/loop body, not a class. Deciding this from the
+ *  CAPTURE's own position — never from whether the file mentions `.if(` somewhere — is what keeps an
+ *  unrelated property call from reviving the control-flow false positive (x4ryv). */
+function declarationPosition(code: string, index: number): boolean {
+  const prefix = code[index];
+  if (prefix === "{" || prefix === ",") return true;
+  let depth = 0;
+  for (let i = index - 1; i >= 0; i -= 1) {
+    const ch = code[i];
+    if (ch === "}") depth += 1;
+    else if (ch === "{") {
+      if (depth === 0) return /\bclass\b[^{};]*$/.test(code.slice(Math.max(0, i - 400), i));
+      depth -= 1;
+    }
+  }
+  return false;
+}
+
 export function findUnclassifiedSourceScanners(
   testFiles: { rel: string; code: string }[],
   alwaysOnSet: Set<string>,
@@ -354,20 +376,20 @@ export function findUnclassifiedSourceScanners(
     // method as `obj.name(`, so matching the DECLARATION by name is enough — the verdict still requires a
     // source root at the call site.
     //
-    // chrome-agent-platform-16o8b: this capture is a REGEX, so a control-flow keyword at a statement
-    // boundary looks exactly like a method declaration — `if(ROOT) { fs.readdirSync(FIXTURES); }` was
-    // read as a method named `if`, and the same `if(ROOT)` then matched as that method's call site, so a
-    // fixture-only reader was classified as a source census (the meta-guard conformance leg failed with
-    // a false POSITIVE, the mirror of the hole n2u40 closes). JS does allow a reserved word as a
-    // PROPERTY name, but nobody writes `{ if() { … } }` and everybody writes `if (…) {`, so the keyword
-    // list is the honest discriminator; a method body is still read by `bracedBodyFrom` once the name
-    // survives it.
+    // chrome-agent-platform-16o8b/hiv8y/x4ryv: this capture is a REGEX anchored on `^`/`{`/`,`/`;`, so a
+    // statement head (`if(ROOT) { … }`) matches it exactly like an object-method shorthand does. Three
+    // sightings, each a different mistake, and the rule below is the one that survives all of them:
+    //   16o8b — taking the capture literally classified a fixture-only read as a source census.
+    //   hiv8y — excluding reserved words OUTRIGHT then hid a real census behind a legal property name
+    //           (`{ if(dir) { fs.readdirSync(dir); } }` called as `h.if(ROOT)`).
+    //   x4ryv — keying that exclusion on "does the FILE call `.if(` anywhere" let an UNRELATED `.if()`
+    //           elsewhere revive the false positive: the name was a candidate because of a call that has
+    //           nothing to do with this declaration.
+    // So the decision is POSITIONAL and PER-CAPTURE: a keyword-named capture is a method only where a
+    // method can appear — an object-literal member (`{`/`,` prefix) or a class body (the nearest
+    // enclosing unmatched `{` opens one). A bare `if (…) {` at a statement boundary is control flow.
     for (const m of code.matchAll(/(?:^|[{,;])\s*(?:async\s+)?(?:get\s+|set\s+)?([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*\{/gm)) {
-    // chrome-agent-platform-16o8b/hiv8y: a keyword can be a legal PROPERTY name, so it is kept when the
-    // file calls it as one (`.<name>(`) and skipped otherwise — a bare `if(…) {` is control flow. See
-    // NON_METHOD_KEYWORDS for both sightings (the false positive and the mirror false negative).
-    const keywordCall = new RegExp(`\\.\\s*${m[1]}\\s*\\(`);
-    if (NON_METHOD_KEYWORDS.has(m[1]) && !keywordCall.test(code)) continue;
+      if (NON_METHOD_KEYWORDS.has(m[1]) && !declarationPosition(code, m.index)) continue;
       add(m[1], bracedBodyFrom(code, code.indexOf("{", m.index + m[0].length - 1)));
     }
     return bodies;
@@ -943,6 +965,40 @@ Deno.test("n2u40: a LOCAL dir-reading helper called with a source root is a scan
     findUnclassifiedSourceScanners([{ rel: "tests/zz-hiv8y-probe.test.ts", code: keywordMethod }], new Set()),
     ["tests/zz-hiv8y-probe.test.ts"],
     "a keyword-named METHOD called as a property is still a source census — the exclusion must not blind it",
+  );
+
+  // x4ryv (review of 16o8b round 2): the previous discriminator asked whether the FILE calls `.<name>(`
+  // anywhere, so an UNRELATED `.if()` call revived the false positive while the directory read came from
+  // a control-flow `if(ROOT)` body and the root argument from that same bare `if(ROOT)`. The decision is
+  // positional now, per capture — and this is the shape that proves it.
+  const unrelatedProperty = [
+    'import * as fs from "node:fs";',
+    'const ROOT = new URL("..", import.meta.url);',
+    'if(ROOT) { fs.readdirSync(FIXTURES); }',
+    'const app = { if(kind: string) { void kind; } };',
+    'app.if("unrelated");',
+  ].join("\n");
+  assertEquals(
+    findUnclassifiedSourceScanners([{ rel: "tests/zz-x4ryv-probe.test.ts", code: unrelatedProperty }], new Set()),
+    [],
+    "an unrelated property call must not turn a control-flow fixture read into a census",
+  );
+  // ...and the class-body spelling of a keyword-named method is still a declaration: a class member is
+  // anchored on `^` inside a class body, which the enclosing-brace test has to recognise.
+  const classMethod = [
+    'import * as fs from "node:fs";',
+    'const ROOT = new URL("..", import.meta.url);',
+    'class Scanner {',
+    '  if(dir: URL) {',
+    '    for (const e of fs.readdirSync(dir)) void e;',
+    '  }',
+    '}',
+    'new Scanner().if(ROOT);',
+  ].join("\n");
+  assertEquals(
+    findUnclassifiedSourceScanners([{ rel: "tests/zz-x4ryv-class.test.ts", code: classMethod }], new Set()),
+    ["tests/zz-x4ryv-class.test.ts"],
+    "a keyword-named CLASS method that scans source is a declaration, not control flow",
   );
 
   // OVER-MATCH 1: the same helper reading a FIXTURE directory is not a census of tracked source.
