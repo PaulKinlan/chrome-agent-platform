@@ -98,6 +98,17 @@ const FILES = [
  * and the fleet's gate witness records nsec ctime rather than content ON PURPOSE (so a mutate-then-revert
  * cannot hide) - so rewriting identical bytes makes a gate over an unchanged tree read as STALE.
  */
+// chrome-agent-platform-0pjmh: the entries whose synced copy is BUILD OUTPUT (their source lives
+// under extension/dist/). These are absent by design on an unbuilt tree, and they are the ONLY docs
+// files a guard may not judge as a broken import — tests/gallery-imports.test.ts resolves them
+// against their SOURCE instead. Derived from FILES rather than repeated, so a new generated entry
+// cannot drift out of either list.
+const BUILD_OUTPUT_SOURCE_PREFIX = "extension/dist/";
+export const GENERATED_DOCS_SOURCES = Object.freeze(
+  FILES.filter(([src]) => src.startsWith(BUILD_OUTPUT_SOURCE_PREFIX))
+    .map(([src, dst]) => Object.freeze([dst.replace(/^docs\//, ""), src])),
+);
+
 export function sameBytes(current, expected) {
   return current !== null && current.length === expected.length && Buffer.compare(current, expected) === 0;
 }
@@ -111,7 +122,7 @@ export async function syncGallery({ check = false } = {}) {
     try {
       expected = await readFile(srcUrl);
     } catch (error) {
-      if (error?.code === "ENOENT" && src.startsWith("extension/dist/")) {
+      if (error?.code === "ENOENT" && src.startsWith(BUILD_OUTPUT_SOURCE_PREFIX)) {
         console.warn(`skip ${dst}: ${src} is build output and is not present — run \`npm run build\` first`);
         continue;
       }
@@ -161,7 +172,7 @@ export async function syncGallery({ check = false } = {}) {
         // The bundle is gitignored build output; a source-only checkout that
         // has not built yet has no generated copy to compare against. Report
         // and skip rather than crashing the drift check.
-        if (error?.code === "ENOENT" && src.startsWith("extension/dist/")) {
+        if (error?.code === "ENOENT" && src.startsWith(BUILD_OUTPUT_SOURCE_PREFIX)) {
           console.warn(`skip ${dst}: generated build output not present — run \`npm run build\` first`);
           continue;
         }
