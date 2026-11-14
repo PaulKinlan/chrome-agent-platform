@@ -250,15 +250,21 @@ Deno.test({
       //     reds here deterministically instead of flaking.
       const sentinelFd = openSync(sentinel, "a");
       sentinels.push(sentinelFd);
-      assertEquals(
-        sentinelFd,
-        closedFd,
-        "fixture: the lowest-free allocator must hand the just-closed number to the synchronous sentinel reclaim",
-      );
+      // chrome-agent-platform-pvwq4 (merger-authored, coord-authorised): the OLD
+      // fixture asserted the number was RECLAIMED — assertEquals(sentinelFd,
+      // closedFd) — a claim about the KERNEL's allocator, not about the verifier.
+      // It holds only while nothing else has a lower number free, and Deno's own
+      // machinery closes descriptors; it reddened three unrelated populations in
+      // one night (82/174, 153/159, 31/177), both numbers moving every run. What
+      // is under test is that the VERDICT follows the descriptor, so branch on
+      // the reclaim instead of demanding it.
+      const reclaimed = sentinelFd === closedFd;
       assertEquals(
         await verifyInheritedCanonicalLock(closedFd, real),
-        WRONG_TARGET,
-        "a REUSED descriptor number reads wrong-target — 'closed' and 'reused for something else' are different cases",
+        reclaimed ? WRONG_TARGET : MISSING,
+        reclaimed
+          ? "a REUSED descriptor number reads wrong-target — 'closed' and 'reused for something else' are different cases"
+          : "an UNRECLAIMED number reads missing — the verdict follows the descriptor, not the allocator",
       );
       // (2) The CONTRACT ('not open -> missing') is asserted on a descriptor that
       //     is NEVER OPENED by construction: far beyond every plausible fd
